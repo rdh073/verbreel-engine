@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use verbreel_codec_native::spike_s1::Encoder;
+use verbreel_codec_native::spike_s1::encoder::EncoderPreset;
 use verbreel_render::spike_s1::PipelinedGpu;
 
 use super::timeline::{FPS, FrameSource, HEIGHT, TOTAL_FRAMES, Timeline, WIDTH};
@@ -29,9 +30,15 @@ pub struct E2EResult {
     /// Total time spent in `encoder.push_frame` (libx264 encode + mux
     /// per frame). High here = codec is the bottleneck.
     pub encode_total: Duration,
+    /// Which x264 preset this run used — for downstream reporting.
+    pub preset: EncoderPreset,
 }
 
-pub fn run_once(output_path: &Path, pipeline_depth: usize) -> Result<E2EResult> {
+pub fn run_once(
+    output_path: &Path,
+    pipeline_depth: usize,
+    preset: EncoderPreset,
+) -> Result<E2EResult> {
     let timeline = Timeline::new();
 
     let gpu_init_start = Instant::now();
@@ -39,7 +46,7 @@ pub fn run_once(output_path: &Path, pipeline_depth: usize) -> Result<E2EResult> 
     let gpu_init = gpu_init_start.elapsed();
 
     let enc_init_start = Instant::now();
-    let mut encoder = Encoder::new(output_path, WIDTH, HEIGHT, FPS)?;
+    let mut encoder = Encoder::new(output_path, WIDTH, HEIGHT, FPS, preset)?;
     let encoder_init = enc_init_start.elapsed();
 
     let e2e_start = Instant::now();
@@ -91,5 +98,6 @@ pub fn run_once(output_path: &Path, pipeline_depth: usize) -> Result<E2EResult> 
         submit_total,
         collect_total,
         encode_total,
+        preset,
     })
 }

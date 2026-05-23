@@ -1,10 +1,10 @@
-//! Spike S1 slice C — end-to-end determinism + perf harness.
+//! Spike S1 slice D — dual-preset determinism + perf comparison.
 //!
-//! Wires slice A's rsmpeg encoder/decoder (encoder side only — decode
-//! is bit-exact within slice A and re-tested implicitly via final
-//! decode-back checks if desired) and slice B's wgpu YUV↔RGB pipeline
-//! into a single 3-clip+1-crossfade timeline. Runs 10 sequential
-//! end-to-end passes and reports the §11 S1 pass/fail signal.
+//! Runs the slice-C 3-clip + crossfade timeline twice: once with the §5
+//! canonical deterministic preset (`threads=1`), once with a performance
+//! preset (`threads=auto`, bframes=3, no VBV). Reports SHA-256
+//! uniqueness and warm-avg fps side by side. The harness does NOT
+//! pass/fail — slice D is informational data for the spec architect.
 //!
 //! Run:
 //!   FFMPEG_PKG_CONFIG_PATH=$HOME/playground/verbreel/vendor/rsmpeg/tmp/ffmpeg_build/lib/pkgconfig \
@@ -22,32 +22,68 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 
 use pipeline::run_once;
+use verbreel_codec_native::spike_s1::encoder::EncoderPreset;
 
 const RUNS: u32 = 10;
 const PIPELINE_DEPTH: usize = 3;
-const TOTAL_FRAMES_F64: f64 = 240.0;
+const TOTAL_FRAMES: u32 = 240;
 
 fn sha256_file(p: &std::path::Path) -> anyhow::Result<String> {
     Ok(format!("{:x}", Sha256::digest(std::fs::read(p)?)))
 }
 
-fn main() -> anyhow::Result<()> {
-    std::fs::create_dir_all("tmp/spike_s1_c")?;
-    let mut hashes: Vec<String> = Vec::with_capacity(RUNS as usize);
-    let mut wall_times: Vec<Duration> = Vec::with_capacity(RUNS as usize);
-    let mut init_times: Vec<Duration> = Vec::with_capacity(RUNS as usize);
-    let mut enc_init_times: Vec<Duration> = Vec::with_capacity(RUNS as usize);
-    let mut submit_totals: Vec<Duration> = Vec::with_capacity(RUNS as usize);
-    let mut collect_totals: Vec<Duration> = Vec::with_capacity(RUNS as usize);
-    let mut encode_totals: Vec<Duration> = Vec::with_capacity(RUNS as usize);
+struct PresetReport {
+    preset: EncoderPreset,
+    hashes: Vec<String>,
+    wall_times: Vec<Duration>,
+    init_times: Vec<Duration>,
+    enc_init_times: Vec<Duration>,
+    submit_totals: Vec<Duration>,
+    collect_totals: Vec<Duration>,
+    encode_totals: Vec<Duration>,
+}
 
+impl PresetReport {
+    fn unique_hashes(&self) -> usize {
+        self.hashes.iter().collect::<HashSet<_>>().len()
+    }
+    fn warm_avg(ds: &[Duration]) -> Duration {
+        let warm: Vec<_> = ds.iter().skip(1).copied().collect();
+        warm.iter().sum::<Duration>() / warm.len() as u32
+    }
+    fn warm_avg_wall(&self) -> Duration {
+        Self::warm_avg(&self.wall_times)
+    }
+    fn warm_avg_fps(&self) -> f64 {
+        TOTAL_FRAMES as f64 / self.warm_avg_wall().as_secs_f64()
+    }
+    fn cold_run0_fps(&self) -> f64 {
+        TOTAL_FRAMES as f64 / self.wall_times[0].as_secs_f64()
+    }
+}
+
+fn run_batch(preset: EncoderPreset, label: &str) -> anyhow::Result<PresetReport> {
+    let dir = PathBuf::from(format!("tmp/spike_s1_d/{label}"));
+    std::fs::create_dir_all(&dir)?;
+
+    let mut hashes = Vec::with_capacity(RUNS as usize);
+    let mut wall_times = Vec::with_capacity(RUNS as usize);
+    let mut init_times = Vec::with_capacity(RUNS as usize);
+    let mut enc_init_times = Vec::with_capacity(RUNS as usize);
+    let mut submit_totals = Vec::with_capacity(RUNS as usize);
+    let mut collect_totals = Vec::with_capacity(RUNS as usize);
+    let mut encode_totals = Vec::with_capacity(RUNS as usize);
+
+    println!("\n=== Batch: {label} preset = {preset:?} ===");
     for run in 0..RUNS {
-        let out = PathBuf::from(format!("tmp/spike_s1_c/run_{run}.mp4"));
-        let r = run_once(&out, PIPELINE_DEPTH)?;
+        let out = dir.join(format!("run_{run}.mp4"));
+        let r = run_once(&out, PIPELINE_DEPTH, preset)?;
+        // Integrity check: pipeline echoed back the preset it actually used.
+        debug_assert_eq!(r.preset, preset);
         let h = sha256_file(&out)?;
         let fps = r.processed_frames as f64 / r.e2e_wall.as_secs_f64();
         println!(
-            "run {run}: sha = {}  wall = {:.2?}  fps = {fps:.2}  submit={:.2?}  collect={:.2?}  encode={:.2?}",
+            "  run {run}: sha = {}  wall = {:.2?}  fps = {fps:.2}  submit={:.2?}  collect={:.2?}  encode={:.2?}",
             &h[..16],
             r.e2e_wall,
             r.submit_total,
@@ -63,83 +99,126 @@ fn main() -> anyhow::Result<()> {
         encode_totals.push(r.encode_total);
     }
 
-    std::fs::write("tmp/spike_s1_c/hashes.txt", hashes.join("\n") + "\n")?;
+    std::fs::write(dir.join("hashes.txt"), hashes.join("\n") + "\n")?;
 
-    // Skip run 0 for fps stats (cold GPU + libx264 first-frame setup).
-    fn avg(ds: &[Duration]) -> Duration {
-        let sum: Duration = ds.iter().copied().sum();
-        sum / ds.len() as u32
-    }
-    let warm_wall: Vec<Duration> = wall_times.iter().skip(1).copied().collect();
-    let warm_submit: Vec<Duration> = submit_totals.iter().skip(1).copied().collect();
-    let warm_collect: Vec<Duration> = collect_totals.iter().skip(1).copied().collect();
-    let warm_encode: Vec<Duration> = encode_totals.iter().skip(1).copied().collect();
-    let avg_wall = avg(&warm_wall);
-    let avg_fps = TOTAL_FRAMES_F64 / avg_wall.as_secs_f64();
-    let cold_run0 = wall_times[0];
+    Ok(PresetReport {
+        preset,
+        hashes,
+        wall_times,
+        init_times,
+        enc_init_times,
+        submit_totals,
+        collect_totals,
+        encode_totals,
+    })
+}
 
-    let unique: HashSet<&String> = hashes.iter().collect();
-    println!();
-    println!("=== Spike S1 — END-TO-END RESULTS ===");
-    println!("Unique SHA-256 across {RUNS} runs: {}", unique.len());
-    println!("Cold run 0 wall:                   {cold_run0:.2?}");
+fn print_stage_breakdown(label: &str, r: &PresetReport) {
+    debug_assert!(!r.hashes.is_empty(), "report contains no runs");
+    let _ = r.preset; // populated for downstream tooling; assertion above is the live check
+    let aw = r.warm_avg_wall().as_secs_f64();
+    let as_ = PresetReport::warm_avg(&r.submit_totals).as_secs_f64();
+    let ac = PresetReport::warm_avg(&r.collect_totals).as_secs_f64();
+    let ae = PresetReport::warm_avg(&r.encode_totals).as_secs_f64();
     println!(
-        "Warm avg wall (runs 1-{}):          {avg_wall:.2?}",
-        RUNS - 1
+        "\n--- {label} per-stage warm avg (of {:.2?} per run) ---",
+        r.warm_avg_wall()
     );
-    println!("Warm avg end-to-end fps:           {avg_fps:.2}");
-    println!("GPU init cost (run 0):             {:.2?}", init_times[0]);
-    println!(
-        "Encoder init cost (run 0):         {:.2?}",
-        enc_init_times[0]
-    );
-    println!();
-    println!("Per-stage warm avg (out of {:.2?} per run):", avg_wall);
-    let aw = avg_wall.as_secs_f64();
-    let as_ = avg(&warm_submit).as_secs_f64();
-    let ac = avg(&warm_collect).as_secs_f64();
-    let ae = avg(&warm_encode).as_secs_f64();
     println!(
         "  submit  total:  {:.2?}   ({:5.1}%)",
-        avg(&warm_submit),
+        PresetReport::warm_avg(&r.submit_totals),
         100.0 * as_ / aw
     );
     println!(
         "  collect total:  {:.2?}   ({:5.1}%)   <- GPU sync + readback",
-        avg(&warm_collect),
+        PresetReport::warm_avg(&r.collect_totals),
         100.0 * ac / aw
     );
     println!(
         "  encode  total:  {:.2?}   ({:5.1}%)   <- libx264 push_frame + finish",
-        avg(&warm_encode),
+        PresetReport::warm_avg(&r.encode_totals),
         100.0 * ae / aw
     );
+}
+
+fn main() -> anyhow::Result<()> {
+    let det = run_batch(EncoderPreset::Deterministic, "deterministic")?;
+    let perf = run_batch(EncoderPreset::Performance, "performance")?;
+
+    print_stage_breakdown("Deterministic", &det);
+    print_stage_breakdown("Performance", &perf);
+
+    println!("\n=== SPIKE S1 SLICE D — DUAL-PRESET COMPARISON ===");
     println!(
-        "Per-frame avg: submit={:.2?}  collect={:.2?}  encode={:.2?}",
-        avg(&warm_submit) / 240,
-        avg(&warm_collect) / 240,
-        avg(&warm_encode) / 240
+        "{:<20} {:<15} {:<15}",
+        "Metric", "Deterministic", "Performance"
     );
+    println!("{:-<20} {:-<15} {:-<15}", "", "", "");
+    println!(
+        "{:<20} {:<15} {:<15}",
+        "Unique SHA-256",
+        det.unique_hashes(),
+        perf.unique_hashes()
+    );
+    println!(
+        "{:<20} {:<15.2?} {:<15.2?}",
+        "Warm avg wall",
+        det.warm_avg_wall(),
+        perf.warm_avg_wall()
+    );
+    println!(
+        "{:<20} {:<15.2} {:<15.2}",
+        "Warm avg fps",
+        det.warm_avg_fps(),
+        perf.warm_avg_fps()
+    );
+    println!(
+        "{:<20} {:<15.2} {:<15.2}",
+        "Cold run 0 fps",
+        det.cold_run0_fps(),
+        perf.cold_run0_fps()
+    );
+    println!(
+        "{:<20} {:<15} {:<15}",
+        "60 fps bar",
+        if det.warm_avg_fps() >= 60.0 {
+            "MET"
+        } else {
+            "MISS"
+        },
+        if perf.warm_avg_fps() >= 60.0 {
+            "MET"
+        } else {
+            "MISS"
+        }
+    );
+    println!(
+        "{:<20} {:<15} {:<15}",
+        "Determinism",
+        if det.unique_hashes() == 1 {
+            "PASS"
+        } else {
+            "FAIL"
+        },
+        if perf.unique_hashes() == 1 {
+            "PASS"
+        } else {
+            "FAIL"
+        }
+    );
+    println!(
+        "{:<20} {:<15.2?} {:<15.2?}",
+        "GPU init (run 0)", det.init_times[0], perf.init_times[0]
+    );
+    println!(
+        "{:<20} {:<15.2?} {:<15.2?}",
+        "Encoder init (run 0)", det.enc_init_times[0], perf.enc_init_times[0]
+    );
+    let speedup = det.warm_avg_wall().as_secs_f64() / perf.warm_avg_wall().as_secs_f64();
+    println!("\nSpeedup (det → perf): {speedup:.3}x");
 
-    let det_pass = unique.len() == 1;
-    let perf_pass = avg_fps >= 60.0;
-
-    if det_pass && perf_pass {
-        println!("\n\u{2713}\u{2713} SPIKE S1 PASS: determinism + perf \u{2265} 60 fps");
-        Ok(())
-    } else if det_pass {
-        anyhow::bail!(
-            "\u{2713} determinism PASS, \u{2717} perf FAIL: {avg_fps:.2} fps < 60.00 fps"
-        );
-    } else if perf_pass {
-        anyhow::bail!(
-            "\u{2717} determinism FAIL: {} unique hashes, \u{2713} perf PASS",
-            unique.len()
-        );
-    } else {
-        anyhow::bail!(
-            "\u{2717}\u{2717} both FAIL: det={} unique, perf={avg_fps:.2} fps",
-            unique.len()
-        );
-    }
+    // The slice D verdict is informational. Do NOT exit non-zero on
+    // any combination — the spec architect classifies the outcome from
+    // SPIKE_S1D_RESULTS.md.
+    Ok(())
 }
