@@ -9,8 +9,60 @@ authors.workspace = true
 
 [lib]
 name = "verbreel_render"
+# wasm-bindgen-generated JS shim requires cdylib for `wasm-pack build --target web`.
+# `rlib` is kept so the rest of the workspace can depend on this crate normally.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Slice S2 of Phase 1: cross-target WGSL pixel-diff harness (issue #7).
+# Native runs the same multiply-blend shader through wgpu/Vulkan; wasm32
+# runs the identical WGSL bytes through Chrome WebGPU. Diff harness
+# reports per-pixel ΔRGB statistics. Additive — green-main builds
+# without this feature continue to ignore the spike_s2 module entirely.
+spike-s2 = [
+    "dep:anyhow",
+    "dep:png",
+    "dep:pollster",
+    "dep:bytemuck",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:web-sys",
+    "dep:js-sys",
+    "dep:console_error_panic_hook",
+]
 
 [dependencies]
 verbreel-ir = { path = "../verbreel-ir" }
 wgpu.workspace = true
 tracing.workspace = true
+# spike-s2 deps (all optional, gated)
+anyhow = { workspace = true, optional = true }
+png = { version = "0.18", optional = true }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "Blob",
+    "BlobPropertyBag",
+    "Document",
+    "Element",
+    "HtmlAnchorElement",
+    "HtmlElement",
+    "Url",
+    "Window",
+    "console",
+] }
+js-sys = { version = "0.3", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+
+# Gated behind `spike-s2` so default `cargo check --workspace --all-targets`
+# skips it cleanly.
+[[example]]
+name = "spike_s2_native"
+required-features = ["spike-s2"]
+
+[[example]]
+name = "spike_s2_diff"
+required-features = ["spike-s2"]

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html><head>
+  <meta charset="utf-8">
+  <title>Spike S2 — Chrome WebGPU multiply-blend</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2em auto; padding: 0 1em; }
+    pre { background: #111; color: #eee; padding: 1em; overflow-x: auto; }
+    button { font-size: 1.1em; padding: 0.5em 1em; }
+  </style>
+</head><body>
+  <h1>Spike S2: multiply blend, Chrome WebGPU</h1>
+  <p>This page renders one 1920×1080 multiply-blend frame in Chrome's
+  WebGPU and downloads it as <code>wasm_frame.png</code>.</p>
+  <p>After download, move the file to
+  <code>~/playground/verbreel/tmp/spike_s2/wasm_frame.png</code> and run
+  the diff command from the spike branch root.</p>
+  <button id="run">Run</button>
+  <pre id="log"></pre>
+  <script type="module">
+    import init, { run_wasm } from "./pkg/verbreel_render.js";
+    const log = (m) => {
+      const el = document.getElementById("log");
+      el.textContent += m + "\n";
+      console.log(m);
+    };
+    async function go() {
+      try {
+        log("init wasm...");
+        await init();
+        log("wasm init done");
+        if (!navigator.gpu) {
+          log("ERROR: navigator.gpu not available — use Chrome 113+ with WebGPU enabled");
+          return;
+        }
+        log("running shader...");
+        await run_wasm();
+        log("done — check downloads for wasm_frame.png");
+      } catch (e) {
+        log("ERROR: " + (e && e.message ? e.message : e));
+      }
+    }
+    document.getElementById("run").addEventListener("click", go);
+  </script>
+</body></html>
