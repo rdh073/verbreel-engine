@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
 
+use verbreel_codec_native::spike_s1::encoder::EncoderPreset;
 use verbreel_codec_native::spike_s1::{Decoder, Encoder, generate_raw_yuv420p};
 
 const WIDTH: u32 = 1920;
@@ -40,7 +41,7 @@ fn main() -> anyhow::Result<()> {
     for run in 0..RUNS {
         // Pass 1: encode synthetic → run_N_pass1.mp4
         let pass1 = PathBuf::from(format!("tmp/spike_s1/run_{run}_pass1.mp4"));
-        let mut enc = Encoder::new(&pass1, WIDTH, HEIGHT, FPS)?;
+        let mut enc = Encoder::new(&pass1, WIDTH, HEIGHT, FPS, EncoderPreset::Deterministic)?;
         for (i, chunk) in synth_yuv.chunks_exact(frame_bytes).enumerate() {
             enc.push_frame(chunk, i as i64)?;
         }
@@ -51,7 +52,7 @@ fn main() -> anyhow::Result<()> {
         // just the encoder against synthetic raw input.
         let pass2 = PathBuf::from(format!("tmp/spike_s1/run_{run}_pass2.mp4"));
         let mut dec = Decoder::new(&pass1)?;
-        let mut enc2 = Encoder::new(&pass2, WIDTH, HEIGHT, FPS)?;
+        let mut enc2 = Encoder::new(&pass2, WIDTH, HEIGHT, FPS, EncoderPreset::Deterministic)?;
         let mut pts = 0i64;
         while let Some(yuv) = dec.next_frame()? {
             enc2.push_frame(&yuv, pts)?;

@@ -31,6 +31,43 @@ use rsmpeg::{
 
 const PIX_FMT: ffi::AVPixelFormat = ffi::AV_PIX_FMT_YUV420P;
 
+/// Spike-only knob: which x264 preset string to use.
+///
+/// `Deterministic` is §5's canonical preset (slice A/B/C baseline).
+/// `Performance` lets x264 use default frame-threading (`threads=auto`)
+/// to test the determinism-preserving multi-thread hypothesis (Bouvigne
+/// 2007 / Netflix 2015: no VBV → frame-threads stay deterministic).
+///
+/// PRODUCTION CODE MUST PASS `Deterministic`. This enum exists only
+/// so the spike harness can collect comparison data without forking
+/// the encoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncoderPreset {
+    /// §5 canonical: threads=1, no lookahead, no bframes, byte-identical.
+    Deterministic,
+    /// `threads=auto` + drop the explicit serialization params.
+    /// CRF (no VBV) is preserved so threading SHOULD stay deterministic
+    /// per the literature — slice D verifies empirically.
+    Performance,
+}
+
+impl EncoderPreset {
+    /// The x264-params string for this preset.
+    fn x264_params(self) -> &'static std::ffi::CStr {
+        match self {
+            Self::Deterministic => {
+                c"threads=1:sliced-threads=0:sync-lookahead=0:rc-lookahead=0:bframes=0"
+            }
+            Self::Performance => {
+                // threads=auto is the libx264 default; lookahead + bframes
+                // re-enabled to let the encoder do its normal work. No VBV
+                // params are added — CRF stays the rate-control mode.
+                c"threads=auto:sliced-threads=0:bframes=3"
+            }
+        }
+    }
+}
+
 /// Hardcoded libx264 encoder producing deterministic MP4 output.
 pub struct Encoder {
     enc_ctx: AVCodecContext,
@@ -48,7 +85,13 @@ pub struct Encoder {
 impl Encoder {
     /// Build an MP4 file at `output_path` configured for byte-identical
     /// output across runs given identical input frames.
-    pub fn new(output_path: &Path, width: u32, height: u32, fps: u32) -> Result<Self> {
+    pub fn new(
+        output_path: &Path,
+        width: u32,
+        height: u32,
+        fps: u32,
+        preset: EncoderPreset,
+    ) -> Result<Self> {
         assert!(
             width.is_multiple_of(2) && height.is_multiple_of(2),
             "YUV420P needs even dims"
@@ -86,15 +129,12 @@ impl Encoder {
             enc_ctx.set_flags(enc_ctx.flags | ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32);
         }
 
-        // §5 canonical x264 preset.
+        // §5 canonical x264 preset (default) — Performance variant exists
+        // for the spike harness only (see [`EncoderPreset`] docs).
         let opts = Some(
             AVDictionary::new(c"preset", c"medium", 0)
                 .set(c"tune", c"zerolatency", 0)
-                .set(
-                    c"x264-params",
-                    c"threads=1:sliced-threads=0:sync-lookahead=0:rc-lookahead=0:bframes=0",
-                    0,
-                ),
+                .set(c"x264-params", preset.x264_params(), 0),
         );
 
         enc_ctx
