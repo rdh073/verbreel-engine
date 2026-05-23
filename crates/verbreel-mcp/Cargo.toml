@@ -1,0 +1,21 @@
+[package]
+name = "verbreel-mcp"
+description = "MCP stdio server — rmcp ServerHandler."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "verbreel_mcp"
+path = "src/main.rs"
+
+[dependencies]
+verbreel-state = { path = "../verbreel-state" }
+verbreel-storage = { path = "../verbreel-storage" }
+tokio.workspace = true
+rmcp.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true

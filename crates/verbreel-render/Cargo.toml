@@ -1,0 +1,16 @@
+[package]
+name = "verbreel-render"
+description = "wgpu pipelines, WGSL shaders, blend/mask/keyframe ops."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "verbreel_render"
+
+[dependencies]
+verbreel-ir = { path = "../verbreel-ir" }
+wgpu.workspace = true
+tracing.workspace = true

@@ -1,0 +1,81 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/verbreel-types",
+    "crates/verbreel-args",
+    "crates/verbreel-canon",
+    "crates/verbreel-events",
+    "crates/verbreel-state",
+    "crates/verbreel-ir",
+    "crates/verbreel-render",
+    "crates/verbreel-codec-native",
+    "crates/verbreel-codec-web",
+    "crates/verbreel-storage",
+    "crates/verbreel-ai",
+    "crates/verbreel-cli",
+    "crates/verbreel-mcp",
+    "crates/verbreel-http",
+    "crates/verbreel-wasm",
+]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2024"
+rust-version = "1.85"
+license      = "MIT OR Apache-2.0"
+authors      = ["rdh073"]
+repository   = "https://github.com/rdh073/verbreel-engine"
+
+[workspace.dependencies]
+# Async runtime
+tokio         = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "sync", "process", "signal", "fs"] }
+tokio-util    = { version = "0.7", features = ["codec"] }
+tokio-stream  = { version = "0.1" }
+futures       = { version = "0.3" }
+
+# Serde + canonical JSON
+serde         = { version = "1", features = ["derive"] }
+serde_json    = { version = "1" }
+vr-jcs        = { version = "0.4" }
+
+# UUID + hashing
+uuid          = { version = "1", features = ["v7", "serde"] }
+sha2          = { version = "0.10" }
+
+# Errors + observability
+thiserror     = { version = "2" }
+anyhow        = { version = "1" }
+tracing       = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Storage / locking
+fs4           = { version = "1" }
+tempfile      = { version = "3" }
+parking_lot   = { version = "0.12" }
+
+# JSON patch/pointer
+jsonptr       = { version = "0.7" }
+json-patch    = { version = "4" }
+
+# HTTP server
+axum          = { version = "0.8", features = ["ws", "macros"] }
+tower         = { version = "0.5" }
+tower-http    = { version = "0.6", features = ["trace", "cors"] }
+hyper         = { version = "1", features = ["server", "http2"] }
+
+# CLI
+clap          = { version = "4", features = ["derive", "env", "cargo"] }
+
+# MCP
+rmcp          = { version = "0.16", features = ["server", "transport-io", "transport-streamable-http-server"] }
+
+# Render (Research 01)
+wgpu          = { version = "29" }
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+
+[profile.dev]
+opt-level     = 1

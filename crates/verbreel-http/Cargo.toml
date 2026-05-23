@@ -1,0 +1,23 @@
+[package]
+name = "verbreel-http"
+description = "HTTP server — axum 0.8."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "verbreel_http"
+path = "src/main.rs"
+
+[dependencies]
+verbreel-state = { path = "../verbreel-state" }
+verbreel-storage = { path = "../verbreel-storage" }
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true

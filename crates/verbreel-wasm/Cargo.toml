@@ -1,0 +1,17 @@
+[package]
+name = "verbreel-wasm"
+description = "wasm-bindgen crate for browser preview."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "verbreel_wasm"
+
+[dependencies]
+verbreel-state = { path = "../verbreel-state" }
+verbreel-ir = { path = "../verbreel-ir" }
+wgpu.workspace = true
+tracing.workspace = true

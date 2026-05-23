@@ -1,0 +1,23 @@
+[package]
+name = "verbreel-state"
+description = "Project graph, §0.13 invariants, apply()/reconstructor — the engine kernel."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "verbreel_state"
+
+[dependencies]
+verbreel-types = { path = "../verbreel-types" }
+verbreel-args = { path = "../verbreel-args" }
+verbreel-events = { path = "../verbreel-events" }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+json-patch.workspace = true
+jsonptr.workspace = true

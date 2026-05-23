@@ -1,0 +1,15 @@
+[package]
+name = "verbreel-types"
+description = "Shared serde types — no logic, no IO. Used by every other crate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "verbreel_types"
+
+[dependencies]
+serde.workspace = true
+uuid.workspace = true

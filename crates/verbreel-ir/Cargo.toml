@@ -1,0 +1,16 @@
+[package]
+name = "verbreel-ir"
+description = "Composition IR, tick-rate math, cache_hash derivation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "verbreel_ir"
+
+[dependencies]
+verbreel-types = { path = "../verbreel-types" }
+serde.workspace = true
+uuid.workspace = true

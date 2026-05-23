@@ -1,0 +1,15 @@
+[package]
+name = "verbreel-codec-native"
+description = "rsmpeg native decode/encode, hwaccel detection."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "verbreel_codec_native"
+
+[dependencies]
+verbreel-ir = { path = "../verbreel-ir" }
+tracing.workspace = true

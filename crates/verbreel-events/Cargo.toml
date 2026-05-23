@@ -1,0 +1,21 @@
+[package]
+name = "verbreel-events"
+description = "events.jsonl writer/reader, idempotency index."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "verbreel_events"
+
+[dependencies]
+verbreel-types = { path = "../verbreel-types" }
+verbreel-canon = { path = "../verbreel-canon" }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+fs4.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true

@@ -1,0 +1,2 @@
+# WGSL shaders live here — shared source for native (Vulkan/Metal/DX12) and web (WebGPU)
+# Per Research 01: same WGSL, same Naga translation, ≤1/255 RGB tolerance across GPU vendors

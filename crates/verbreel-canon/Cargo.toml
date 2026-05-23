@@ -1,0 +1,17 @@
+[package]
+name = "verbreel-canon"
+description = "RFC 8785 JCS canonicalization + project_hash projection."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "verbreel_canon"
+
+[dependencies]
+verbreel-types = { path = "../verbreel-types" }
+serde_json.workspace = true
+vr-jcs.workspace = true
+sha2.workspace = true
