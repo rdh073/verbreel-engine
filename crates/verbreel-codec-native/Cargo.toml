@@ -10,6 +10,30 @@ authors.workspace = true
 [lib]
 name = "verbreel_codec_native"
 
+[features]
+default = []
+# Spike S3 of issue #8. Compares rsmpeg CPU H.264 decode against gpu-video
+# Vulkan Video hardware decode. Default CI (`cargo check --workspace`) must
+# NOT enable this feature so main-branch builds stay installable on systems
+# without FFmpeg 8 + Vulkan Video drivers. See `src/spike_s3/`.
+spike-s3 = ["dep:gpu-video", "dep:wgpu", "dep:rsmpeg", "dep:anyhow", "dep:sha2"]
+
 [dependencies]
 verbreel-ir = { path = "../verbreel-ir" }
 tracing.workspace = true
+# Spike S3 deps — all gated behind the `spike-s3` feature so the default
+# build graph stays minimal. `gpu-video` requires wgpu 29 (matches workspace);
+# `rsmpeg` links system FFmpeg 8 via pkg-config (FFMPEG_PKG_CONFIG_PATH points
+# at the vendored build under `vendor/rsmpeg/tmp/ffmpeg_build`).
+gpu-video = { workspace = true, optional = true }
+wgpu      = { workspace = true, optional = true }
+rsmpeg    = { workspace = true, optional = true }
+anyhow    = { workspace = true, optional = true }
+sha2      = { workspace = true, optional = true }
+
+# Spike S3 decode-throughput bench. Gated behind `spike-s3` so default
+# `cargo check --workspace --all-targets` on a fresh clone (no FFmpeg
+# vendor build, no Vulkan Video drivers) skips it and main stays installable.
+[[example]]
+name = "spike_s3_decode_bench"
+required-features = ["spike-s3"]

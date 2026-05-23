@@ -82,6 +82,19 @@ rmcp          = { version = "0.16", features = ["server", "transport-io", "trans
 # Render (Research 01)
 wgpu          = { version = "29" }
 
+# Spike S1: native FFmpeg bindings. ffmpeg8 feature is rsmpeg's default.
+# `default-features = false` + explicit features so a future workspace-wide
+# `cargo update` doesn't silently change FFmpeg lineage. Pulled in only behind
+# per-crate spike-s1/spike-s3 features; not in default dep graph.
+# Last-checked: rsmpeg 0.18.0+ffmpeg.8.0 published 2025-08-24, MSRV 1.81.
+rsmpeg        = { version = "0.18", default-features = false, features = ["ffmpeg8", "link_system_ffmpeg"] }
+
+# Spike S3: zero-copy GPU decode via Vulkan Video (spec §11 S3).
+# Opt-in via `spike-s3` feature on `verbreel-codec-native`; NOT in production
+# dep graph. See `crates/verbreel-codec-native/src/spike_s3/`.
+# gpu-video 0.4.0 requires wgpu 29.0.0 — matches workspace wgpu = "29".
+gpu-video     = { version = "0.4" }
+
 [profile.release]
 opt-level     = 3
 lto           = "thin"
