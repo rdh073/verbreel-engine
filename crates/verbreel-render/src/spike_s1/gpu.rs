@@ -18,6 +18,23 @@ use super::shaders::{RGB_TO_YUV, YUV_TO_RGB};
 
 const COPY_ALIGN: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
+/// Spike-only knob: which adapter to pick for the GPU pipeline.
+///
+/// `HighPerformance` is slice D's behavior (picks dGPU on dual-GPU laptops).
+/// `Integrated` enumerates adapters and selects the first `DeviceType::IntegratedGpu`.
+/// `LowPower` is `wgpu`'s built-in hint (UNRELIABLE on Linux NVIDIA hybrid per
+/// wgpu#3464 — provided only for completeness; do NOT use for sign-off).
+///
+/// PRODUCTION CODE MUST PASS `HighPerformance` to preserve slice D's invariants.
+/// This enum exists only so the iGPU sign-off harness (spike S1.5) can collect
+/// comparison data without forking the GPU module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdapterMode {
+    HighPerformance,
+    Integrated,
+    LowPower,
+}
+
 /// All GPU state for the spike-B roundtrip pipeline.
 pub struct GpuRoundtrip {
     device: wgpu::Device,
@@ -717,7 +734,12 @@ pub struct PipelinedGpu {
 }
 
 impl PipelinedGpu {
-    pub fn new(width: u32, height: u32, pipeline_depth: usize) -> Result<Self> {
+    pub fn new(
+        width: u32,
+        height: u32,
+        pipeline_depth: usize,
+        adapter_mode: AdapterMode,
+    ) -> Result<Self> {
         assert!(
             width.is_multiple_of(8) && height.is_multiple_of(8),
             "spike-C dispatches in 8×8 workgroups; width/height must be multiples of 8"
@@ -731,12 +753,32 @@ impl PipelinedGpu {
             backend_options: wgpu::BackendOptions::default(),
             display: None,
         });
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }))
-        .context("request_adapter (Vulkan HighPerformance)")?;
+        let adapter = match adapter_mode {
+            AdapterMode::HighPerformance => {
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: None,
+                    force_fallback_adapter: false,
+                }))
+                .context("request_adapter (Vulkan HighPerformance)")?
+            }
+            AdapterMode::LowPower => {
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    compatible_surface: None,
+                    force_fallback_adapter: false,
+                }))
+                .context("request_adapter (Vulkan LowPower)")?
+            }
+            AdapterMode::Integrated => {
+                let adapters =
+                    pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN));
+                adapters
+                    .into_iter()
+                    .find(|a| a.get_info().device_type == wgpu::DeviceType::IntegratedGpu)
+                    .context("no integrated GPU adapter found (check vulkaninfo --summary)")?
+            }
+        };
         let adapter_info = adapter.get_info();
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("spike-s1-c device"),

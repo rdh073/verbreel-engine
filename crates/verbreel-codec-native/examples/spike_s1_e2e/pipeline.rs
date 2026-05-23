@@ -12,6 +12,7 @@ use anyhow::Result;
 use verbreel_codec_native::spike_s1::Encoder;
 use verbreel_codec_native::spike_s1::encoder::EncoderPreset;
 use verbreel_render::spike_s1::PipelinedGpu;
+use verbreel_render::spike_s1::gpu::AdapterMode;
 
 use super::timeline::{FPS, FrameSource, HEIGHT, TOTAL_FRAMES, Timeline, WIDTH};
 
@@ -32,18 +33,23 @@ pub struct E2EResult {
     pub encode_total: Duration,
     /// Which x264 preset this run used — for downstream reporting.
     pub preset: EncoderPreset,
+    /// Adapter info string from the GPU actually selected (e.g. "Intel(R) Graphics (RPL-P)").
+    /// Sourced once per run from `PipelinedGpu::adapter_info()`.
+    pub adapter_info: String,
 }
 
 pub fn run_once(
     output_path: &Path,
     pipeline_depth: usize,
     preset: EncoderPreset,
+    adapter_mode: AdapterMode,
 ) -> Result<E2EResult> {
     let timeline = Timeline::new();
 
     let gpu_init_start = Instant::now();
-    let mut gpu = PipelinedGpu::new(WIDTH, HEIGHT, pipeline_depth)?;
+    let mut gpu = PipelinedGpu::new(WIDTH, HEIGHT, pipeline_depth, adapter_mode)?;
     let gpu_init = gpu_init_start.elapsed();
+    let adapter_info = gpu.adapter_info();
 
     let enc_init_start = Instant::now();
     let mut encoder = Encoder::new(output_path, WIDTH, HEIGHT, FPS, preset)?;
@@ -99,5 +105,6 @@ pub fn run_once(
         collect_total,
         encode_total,
         preset,
+        adapter_info,
     })
 }

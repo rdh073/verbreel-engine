@@ -1,10 +1,11 @@
-//! Spike S1 slice D — dual-preset determinism + perf comparison.
+//! Spike S1.5 — iGPU sign-off harness (re-run of slice D's dual-preset
+//! comparison forced onto an integrated GPU).
 //!
-//! Runs the slice-C 3-clip + crossfade timeline twice: once with the §5
-//! canonical deterministic preset (`threads=1`), once with a performance
-//! preset (`threads=auto`, bframes=3, no VBV). Reports SHA-256
-//! uniqueness and warm-avg fps side by side. The harness does NOT
-//! pass/fail — slice D is informational data for the spec architect.
+//! Same harness shape as slice D: 240-frame 1920×1080 @ 24 fps 3-clip +
+//! crossfade timeline, 10 runs per preset, side-by-side stats. The only
+//! difference is `AdapterMode::Integrated` — wgpu enumerates Vulkan
+//! adapters and picks the first `DeviceType::IntegratedGpu`. Slice D
+//! used `HighPerformance` which picked the discrete GPU.
 //!
 //! Run:
 //!   FFMPEG_PKG_CONFIG_PATH=$HOME/playground/verbreel/vendor/rsmpeg/tmp/ffmpeg_build/lib/pkgconfig \
@@ -23,6 +24,7 @@ use sha2::{Digest, Sha256};
 
 use pipeline::run_once;
 use verbreel_codec_native::spike_s1::encoder::EncoderPreset;
+use verbreel_render::spike_s1::gpu::AdapterMode;
 
 const RUNS: u32 = 10;
 const PIPELINE_DEPTH: usize = 3;
@@ -34,6 +36,7 @@ fn sha256_file(p: &std::path::Path) -> anyhow::Result<String> {
 
 struct PresetReport {
     preset: EncoderPreset,
+    adapter_info: String,
     hashes: Vec<String>,
     wall_times: Vec<Duration>,
     init_times: Vec<Duration>,
@@ -62,8 +65,12 @@ impl PresetReport {
     }
 }
 
-fn run_batch(preset: EncoderPreset, label: &str) -> anyhow::Result<PresetReport> {
-    let dir = PathBuf::from(format!("tmp/spike_s1_d/{label}"));
+fn run_batch(
+    preset: EncoderPreset,
+    adapter_mode: AdapterMode,
+    label: &str,
+) -> anyhow::Result<PresetReport> {
+    let dir = PathBuf::from(format!("tmp/spike_s1_igpu_signoff/{label}"));
     std::fs::create_dir_all(&dir)?;
 
     let mut hashes = Vec::with_capacity(RUNS as usize);
@@ -73,13 +80,17 @@ fn run_batch(preset: EncoderPreset, label: &str) -> anyhow::Result<PresetReport>
     let mut submit_totals = Vec::with_capacity(RUNS as usize);
     let mut collect_totals = Vec::with_capacity(RUNS as usize);
     let mut encode_totals = Vec::with_capacity(RUNS as usize);
+    let mut adapter_info = String::new();
 
-    println!("\n=== Batch: {label} preset = {preset:?} ===");
+    println!("\n=== Batch: {label} preset = {preset:?} adapter_mode = {adapter_mode:?} ===");
     for run in 0..RUNS {
         let out = dir.join(format!("run_{run}.mp4"));
-        let r = run_once(&out, PIPELINE_DEPTH, preset)?;
-        // Integrity check: pipeline echoed back the preset it actually used.
+        let r = run_once(&out, PIPELINE_DEPTH, preset, adapter_mode)?;
         debug_assert_eq!(r.preset, preset);
+        if adapter_info.is_empty() {
+            adapter_info = r.adapter_info.clone();
+            println!("  Adapter: {adapter_info}");
+        }
         let h = sha256_file(&out)?;
         let fps = r.processed_frames as f64 / r.e2e_wall.as_secs_f64();
         println!(
@@ -103,6 +114,7 @@ fn run_batch(preset: EncoderPreset, label: &str) -> anyhow::Result<PresetReport>
 
     Ok(PresetReport {
         preset,
+        adapter_info,
         hashes,
         wall_times,
         init_times,
@@ -115,7 +127,7 @@ fn run_batch(preset: EncoderPreset, label: &str) -> anyhow::Result<PresetReport>
 
 fn print_stage_breakdown(label: &str, r: &PresetReport) {
     debug_assert!(!r.hashes.is_empty(), "report contains no runs");
-    let _ = r.preset; // populated for downstream tooling; assertion above is the live check
+    let _ = r.preset;
     let aw = r.warm_avg_wall().as_secs_f64();
     let as_ = PresetReport::warm_avg(&r.submit_totals).as_secs_f64();
     let ac = PresetReport::warm_avg(&r.collect_totals).as_secs_f64();
@@ -142,13 +154,26 @@ fn print_stage_breakdown(label: &str, r: &PresetReport) {
 }
 
 fn main() -> anyhow::Result<()> {
-    let det = run_batch(EncoderPreset::Deterministic, "deterministic")?;
-    let perf = run_batch(EncoderPreset::Performance, "performance")?;
+    let adapter_mode = AdapterMode::Integrated;
+    let det = run_batch(
+        EncoderPreset::Deterministic,
+        adapter_mode,
+        "deterministic-igpu",
+    )?;
+    let perf = run_batch(EncoderPreset::Performance, adapter_mode, "performance-igpu")?;
 
-    print_stage_breakdown("Deterministic", &det);
-    print_stage_breakdown("Performance", &perf);
+    print_stage_breakdown("Deterministic (iGPU)", &det);
+    print_stage_breakdown("Performance (iGPU)", &perf);
 
-    println!("\n=== SPIKE S1 SLICE D — DUAL-PRESET COMPARISON ===");
+    println!("\n=== SPIKE S1.5 — iGPU SIGN-OFF (dual-preset on iGPU) ===");
+    println!(
+        "Adapter:             {}",
+        if det.adapter_info == perf.adapter_info {
+            det.adapter_info.as_str()
+        } else {
+            "MISMATCH ACROSS BATCHES"
+        }
+    );
     println!(
         "{:<20} {:<15} {:<15}",
         "Metric", "Deterministic", "Performance"
@@ -217,8 +242,7 @@ fn main() -> anyhow::Result<()> {
     let speedup = det.warm_avg_wall().as_secs_f64() / perf.warm_avg_wall().as_secs_f64();
     println!("\nSpeedup (det → perf): {speedup:.3}x");
 
-    // The slice D verdict is informational. Do NOT exit non-zero on
-    // any combination — the spec architect classifies the outcome from
-    // SPIKE_S1D_RESULTS.md.
+    // The verdict is informational; SPIKE_S1_IGPU_SIGNOFF.md captures the
+    // pass/fail classification. Do NOT exit non-zero here.
     Ok(())
 }
