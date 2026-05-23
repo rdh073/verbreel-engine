@@ -1,0 +1,28 @@
+# Default owner — gets review request on every PR
+*                                       @rdh073
+
+# Crate-level (when more contributors join)
+/crates/verbreel-types/                 @rdh073
+/crates/verbreel-args/                  @rdh073
+/crates/verbreel-canon/                 @rdh073
+/crates/verbreel-events/                @rdh073
+/crates/verbreel-state/                 @rdh073
+/crates/verbreel-ir/                    @rdh073
+/crates/verbreel-render/                @rdh073
+/crates/verbreel-codec-native/          @rdh073
+/crates/verbreel-codec-web/             @rdh073
+/crates/verbreel-storage/               @rdh073
+/crates/verbreel-ai/                    @rdh073
+/crates/verbreel-cli/                   @rdh073
+/crates/verbreel-mcp/                   @rdh073
+/crates/verbreel-http/                  @rdh073
+/crates/verbreel-wasm/                  @rdh073
+
+# Infrastructure
+/.github/                               @rdh073
+/shaders/                               @rdh073
+
+# Security / licensing
+SECURITY.md                             @rdh073
+LICENSE-MIT                             @rdh073
+LICENSE-APACHE                          @rdh073
