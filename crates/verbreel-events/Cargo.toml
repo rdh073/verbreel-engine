@@ -1,21 +1,38 @@
 [package]
-name = "verbreel-events"
-description = "events.jsonl writer/reader, idempotency index."
-version.workspace = true
-edition.workspace = true
+name        = "verbreel-events"
+description = "events.jsonl writer/reader + idempotency index, with backend trait (spec §0.8, App. C)."
+version.workspace      = true
+edition.workspace      = true
 rust-version.workspace = true
-license.workspace = true
-authors.workspace = true
+license.workspace      = true
+authors.workspace      = true
 
 [lib]
 name = "verbreel_events"
 
+[features]
+default = ["native"]
+# Native backend: filesystem + flock via fs4. NOT compatible with wasm32 —
+# the wasm CI matrix runs this crate with `--no-default-features`.
+native = ["dep:fs4", "dep:parking_lot"]
+
 [dependencies]
-verbreel-types = { path = "../verbreel-types" }
-verbreel-canon = { path = "../verbreel-canon" }
-serde.workspace = true
+verbreel-types       = { path = "../verbreel-types" }
+verbreel-canon       = { path = "../verbreel-canon" }
+serde.workspace      = true
 serde_json.workspace = true
-uuid.workspace = true
-fs4.workspace = true
-parking_lot.workspace = true
-tracing.workspace = true
+uuid.workspace       = true
+thiserror.workspace  = true
+tracing.workspace    = true
+
+# Native-backend deps — gated by `native` feature.
+fs4         = { workspace = true, optional = true }
+parking_lot = { workspace = true, optional = true }
+
+# wasm32-unknown-unknown: forward `wasm_js` to getrandom so uuid works.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { workspace = true, features = ["wasm_js"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace   = true

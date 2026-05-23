@@ -24,3 +24,8 @@ unicode-normalization  = { version = "0.1" }
 
 [dev-dependencies]
 serde_json.workspace = true
+
+# wasm32-unknown-unknown: forward `wasm_js` to getrandom (uuid pulls it via
+# verbreel-types). See workspace Cargo.toml + spec/research/02 §7.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { workspace = true, features = ["wasm_js"] }

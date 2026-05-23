@@ -39,7 +39,17 @@ serde_json    = { version = "1" }
 vr-jcs        = { version = "0.4" }
 
 # UUID + hashing
-uuid          = { version = "1", features = ["v7", "serde"] }
+# `rng-getrandom` is the explicit-forward randomness backend added in uuid 1.23,
+# replacing the implicit `js` feature behavior. Pairs with the target-cfg
+# `getrandom = { features = ["wasm_js"] }` block in every leaf crate that needs
+# UUID generation on wasm32-unknown-unknown. Pin minor 1.23 so a future
+# `cargo update` doesn't silently revert.
+uuid          = { version = "1.23", features = ["v7", "serde", "rng-getrandom"] }
+# wasm32-only: forward `wasm_js` to getrandom so uuid's RNG compiles in the
+# browser. Workspace inheritance doesn't support `target.'cfg(...)'` blocks, so
+# each leaf crate that depends on uuid repeats the target-cfg dependency. See
+# spec/research/02-engine-language.md §7.
+getrandom     = { version = "0.4", default-features = false }
 sha2          = { version = "0.10" }
 
 # Errors + observability

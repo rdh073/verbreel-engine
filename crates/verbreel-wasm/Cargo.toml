@@ -11,7 +11,11 @@ authors.workspace = true
 name = "verbreel_wasm"
 
 [dependencies]
-verbreel-state = { path = "../verbreel-state" }
+# verbreel-state's `native` feature gates the fs4-backed event backend, which
+# is incompatible with wasm32. We pull state without defaults; native callers
+# in the workspace (verbreel-cli/mcp/http) still pull `native` so the unified
+# `cargo check --workspace` build keeps the native backend included.
+verbreel-state = { path = "../verbreel-state", default-features = false }
 verbreel-ir = { path = "../verbreel-ir" }
 wgpu.workspace = true
 tracing.workspace = true

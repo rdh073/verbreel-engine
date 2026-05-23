@@ -10,10 +10,18 @@ authors.workspace = true
 [lib]
 name = "verbreel_state"
 
+[features]
+default = ["native"]
+# Forward the `native` feature to verbreel-events so the kernel pulls the
+# filesystem + flock backend by default. wasm32 builds opt out via
+# `default-features = false`; Phase 2 will add a `wasm` feature for the OPFS
+# backend symmetrically.
+native = ["verbreel-events/native"]
+
 [dependencies]
 verbreel-types = { path = "../verbreel-types" }
 verbreel-args = { path = "../verbreel-args" }
-verbreel-events = { path = "../verbreel-events" }
+verbreel-events = { path = "../verbreel-events", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
