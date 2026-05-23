@@ -1,17 +1,26 @@
 [package]
-name = "verbreel-canon"
-description = "RFC 8785 JCS canonicalization + project_hash projection."
-version.workspace = true
-edition.workspace = true
+name        = "verbreel-canon"
+description = "RFC 8785 JSON Canonicalization Scheme + project_hash projection (spec §0.5.2)."
+version.workspace      = true
+edition.workspace      = true
 rust-version.workspace = true
-license.workspace = true
-authors.workspace = true
+license.workspace      = true
+authors.workspace      = true
 
 [lib]
 name = "verbreel_canon"
 
 [dependencies]
-verbreel-types = { path = "../verbreel-types" }
+verbreel-types         = { path = "../verbreel-types" }
+serde.workspace        = true
+serde_json.workspace   = true
+sha2.workspace         = true
+vr-jcs.workspace       = true
+thiserror.workspace    = true
+# RFC 8785 §3.2.2.2 / spec §0.5.2 require NFC normalization of strings; vr-jcs
+# 0.4.1 does I-JSON noncharacter validation but does NOT NFC-normalize, so this
+# wrapper pre-walks strings through unicode-normalization. See task-08 caveat B.
+unicode-normalization  = { version = "0.1" }
+
+[dev-dependencies]
 serde_json.workspace = true
-vr-jcs.workspace = true
-sha2.workspace = true
