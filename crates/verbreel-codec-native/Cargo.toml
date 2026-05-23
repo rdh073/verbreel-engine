@@ -10,6 +10,23 @@ authors.workspace = true
 [lib]
 name = "verbreel_codec_native"
 
+[features]
+default = []
+# Slice A of Spike S1 (issue #6). Pulls rsmpeg + FFmpeg 8.
+# Default CI (cargo check --workspace) must NOT enable this feature so the
+# main-branch build stays installable on systems without FFmpeg 8.
+spike-s1 = ["dep:rsmpeg", "dep:anyhow", "dep:sha2"]
+
 [dependencies]
 verbreel-ir = { path = "../verbreel-ir" }
 tracing.workspace = true
+rsmpeg   = { workspace = true, optional = true }
+anyhow   = { workspace = true, optional = true }
+sha2     = { workspace = true, optional = true }
+
+# Spike S1 slice A determinism harness. Gated behind `spike-s1` so default
+# `cargo check --workspace --all-targets` on a fresh clone (no FFmpeg
+# vendor build, no env) skips it and main stays installable.
+[[example]]
+name = "spike_s1_roundtrip"
+required-features = ["spike-s1"]
