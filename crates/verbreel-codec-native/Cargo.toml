@@ -24,9 +24,33 @@ rsmpeg   = { workspace = true, optional = true }
 anyhow   = { workspace = true, optional = true }
 sha2     = { workspace = true, optional = true }
 
+# Slice C end-to-end harness pulls in the GPU pipeline from verbreel-render
+# behind the same spike-s1 feature. dev-dependencies only — production
+# `verbreel-codec-native` does NOT depend on verbreel-render, the workspace
+# dep graph rule is preserved.
+#
+# `anyhow` + `sha2` are also re-declared here so the example file (which
+# does not enable the host crate's spike-s1 feature in its own build graph)
+# can resolve them deterministically.
+[dev-dependencies]
+verbreel-render = { path = "../verbreel-render", features = ["spike-s1"] }
+anyhow   = { workspace = true }
+sha2     = { workspace = true }
+
 # Spike S1 slice A determinism harness. Gated behind `spike-s1` so default
 # `cargo check --workspace --all-targets` on a fresh clone (no FFmpeg
 # vendor build, no env) skips it and main stays installable.
 [[example]]
 name = "spike_s1_roundtrip"
+required-features = ["spike-s1"]
+
+# Spike S1 slice C end-to-end harness. Multi-file example: main + timeline +
+# pipeline live as siblings under `examples/spike_s1_e2e/`. The timeline +
+# pipeline modules can't live in `src/spike_s1/e2e/` because they import
+# verbreel-render, which is a dev-dependency (invisible to lib code).
+# Putting them in the example directory keeps the production dep graph
+# clean while preserving the prompt's structural intent.
+[[example]]
+name = "spike_s1_e2e"
+path = "examples/spike_s1_e2e/main.rs"
 required-features = ["spike-s1"]
