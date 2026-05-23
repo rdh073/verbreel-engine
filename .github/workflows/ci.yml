@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, macos-14]
-        rust: [stable, "1.85"]
+        rust: [stable, "1.92"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
