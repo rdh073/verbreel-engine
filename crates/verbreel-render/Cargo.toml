@@ -10,7 +10,27 @@ authors.workspace = true
 [lib]
 name = "verbreel_render"
 
+[features]
+default = []
+# Slice B of Spike S1 (issue #6). Adds GPU determinism harness behind a
+# feature gate so default `cargo check --workspace --all-targets` stays
+# green-main without compiling the GPU pipeline (wgpu itself stays in
+# the dep graph because the lib depends on it unconditionally, but the
+# spike-s1 module + pollster + bytemuck only build with the feature on).
+spike-s1 = ["dep:pollster", "dep:bytemuck", "dep:anyhow", "dep:sha2"]
+
 [dependencies]
 verbreel-ir = { path = "../verbreel-ir" }
 wgpu.workspace = true
 tracing.workspace = true
+pollster = { workspace = true, optional = true }
+bytemuck = { workspace = true, optional = true }
+anyhow   = { workspace = true, optional = true }
+sha2     = { workspace = true, optional = true }
+
+# Gated behind `spike-s1` so default `cargo check --workspace --all-targets`
+# skips it cleanly (the verbreel_render::spike_s1 module itself doesn't
+# exist without the feature).
+[[example]]
+name = "spike_s1_gpu_roundtrip"
+required-features = ["spike-s1"]
