@@ -2390,6 +2390,7 @@ dependencies = [
  "sha2",
  "tracing",
  "verbreel-ir",
+ "verbreel-render",
 ]
 
 [[package]]

@@ -7,5 +7,5 @@ pub mod gpu;
 pub mod shaders;
 pub mod synth;
 
-pub use gpu::GpuRoundtrip;
+pub use gpu::{FrameOp, GpuRoundtrip, PipelinedGpu};
 pub use synth::generate_raw_yuv420p;
