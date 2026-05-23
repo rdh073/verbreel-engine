@@ -67,6 +67,15 @@ parking_lot   = { version = "0.12" }
 jsonptr       = { version = "0.7" }
 json-patch    = { version = "4" }
 
+# JSON Schema validation. Dev-dep only on `verbreel-state` (and any future
+# crate that wants schema-as-trust-but-verify in its tests). Production
+# validation goes through the typed `verbreel-state` shape + §0.13 invariant
+# checks, NOT the schema crate. `default-features = false` drops the
+# `resolve-http`/`resolve-file` net+fs resolvers — tests load the schema from
+# the workspace explicitly via `VERBREEL_SPEC_DIR`.
+# Last-checked: jsonschema 0.46.5 published 2026-05-13.
+jsonschema    = { version = "0.46", default-features = false }
+
 # HTTP server
 axum          = { version = "0.8", features = ["ws", "macros"] }
 tower         = { version = "0.5" }

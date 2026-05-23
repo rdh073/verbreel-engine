@@ -29,3 +29,18 @@ thiserror.workspace = true
 tracing.workspace = true
 json-patch.workspace = true
 jsonptr.workspace = true
+
+# Dev-dependencies:
+#   - `jsonschema` is used by `tests/schema_validation.rs` to lock the
+#     contract that this crate's typed shape round-trips through the
+#     canonical `spec/project-schema.json`. NOT a runtime dep — production
+#     validation goes through serde struct decoding + §0.13 invariant
+#     checks at the `project.open` boundary later.
+#   - `verbreel-canon` is used by `tests/project_hash.rs` to lock the
+#     `project_hash` field-projection contract through the typed shape.
+#     NOT a runtime dep of state — only `project.open` / `project.save`
+#     verbs use canon, and those land in follow-up slices.
+[dev-dependencies]
+jsonschema     = { workspace = true }
+serde_json.workspace = true
+verbreel-canon = { path = "../verbreel-canon" }
