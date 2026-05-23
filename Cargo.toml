@@ -88,6 +88,12 @@ wgpu          = { version = "29" }
 # Last-checked: rsmpeg 0.18.0+ffmpeg.8.0 published 2025-08-24, MSRV 1.81.
 rsmpeg        = { version = "0.18", default-features = false, features = ["ffmpeg8", "link_system_ffmpeg"] }
 
+# Spike S1 slice B: wgpu sync driver + GPU buffer interop. Both pulled in
+# only behind the per-crate `spike-s1` feature, so default workspace check
+# doesn't compile them.
+pollster      = { version = "0.4" }
+bytemuck      = { version = "1", features = ["derive"] }
+
 [profile.release]
 opt-level     = 3
 lto           = "thin"
