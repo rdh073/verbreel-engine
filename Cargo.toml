@@ -82,6 +82,12 @@ rmcp          = { version = "0.16", features = ["server", "transport-io", "trans
 # Render (Research 01)
 wgpu          = { version = "29" }
 
+# Spike S1: native FFmpeg bindings. ffmpeg8 feature is rsmpeg's default.
+# Add `default-features = false` + explicit features so a future workspace-wide
+# `cargo update` doesn't silently change FFmpeg lineage.
+# Last-checked: rsmpeg 0.18.0+ffmpeg.8.0 published 2025-08-24, MSRV 1.81.
+rsmpeg        = { version = "0.18", default-features = false, features = ["ffmpeg8", "link_system_ffmpeg"] }
+
 [profile.release]
 opt-level     = 3
 lto           = "thin"
