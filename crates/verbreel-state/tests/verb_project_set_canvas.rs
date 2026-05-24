@@ -12,15 +12,37 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use verbreel_state::{
-    CANVAS_MAX_DIM, CANVAS_MIN_DIM, Canvas, MutateOutcome, PIXEL_ASPECT_MIN, Project,
+    Asset, CANVAS_MAX_DIM, CANVAS_MIN_DIM, Canvas, Clip, MutateOutcome, PIXEL_ASPECT_MIN, Project,
     ProjectSetCanvasArgs, ProjectSetCanvasError, ProjectSetCanvasVerb, ProjectStore, RecordedEvent,
-    VerbRegistry, default_fixtures, default_registry, validate_reconstructors,
-    verbs::project_set_canvas::{compute_patch, data_envelope},
+    Track, TrackKind, Transform, VerbRegistry, default_fixtures, default_registry,
+    validate_reconstructors,
+    verbs::project_set_canvas::{W_CANVAS_CLIPS_OUT_OF_FRAME, compute_patch, data_envelope},
 };
-use verbreel_types::ProjectId;
+use verbreel_types::{ProjectId, Tick};
 
 const EMPTY_FIXTURE: &str = include_str!("fixtures/empty_project_create.json");
 const FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-000000000001";
+const SAMPLE_VIDEO_ASSET_ID: &str = "0190b8d3-15e3-7000-bd00-00000000a101";
+const SAMPLE_IMAGE_ASSET_ID: &str = "0190b8d3-15e3-7000-bd00-00000000a102";
+const SAMPLE_MISSING_ASSET_ID: &str = "0190b8d3-15e3-7000-bd00-00000000a199";
+const NIL_ASSET_ID: &str = "00000000-0000-0000-0000-000000000000";
+const SAMPLE_VIDEO_TRACK_ID: &str = "0190b8d3-15e3-7000-bd00-00000000b101";
+const SAMPLE_TEXT_TRACK_ID: &str = "0190b8d3-15e3-7000-bd00-00000000b102";
+const SAMPLE_AUDIO_TRACK_ID: &str = "0190b8d3-15e3-7000-bd00-00000000b103";
+const SAMPLE_VIDEO_TRACK_ID_2: &str = "0190b8d3-15e3-7000-bd00-00000000b104";
+const CLIP_ID_A: &str = "0190b8d3-15e3-7000-bd00-00000000c201";
+const CLIP_ID_B: &str = "0190b8d3-15e3-7000-bd00-00000000c202";
+const CLIP_ID_C: &str = "0190b8d3-15e3-7000-bd00-00000000c203";
+const CLIP_ID_AUDIO: &str = "0190b8d3-15e3-7000-bd00-00000000c204";
+const CLIP_ID_TEXT: &str = "0190b8d3-15e3-7000-bd00-00000000c205";
+const CLIP_ID_MISSING: &str = "0190b8d3-15e3-7000-bd00-00000000c206";
+const CLIP_ID_NIL: &str = "0190b8d3-15e3-7000-bd00-00000000c207";
+const CLIP_ID_ROTATE: &str = "0190b8d3-15e3-7000-bd00-00000000c208";
+const DUMMY_HASH: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+const DUMMY_VIDEO_PATH: &str =
+    "assets/11/1111111111111111111111111111111111111111111111111111111111111111.mp4";
+const DUMMY_IMAGE_PATH: &str =
+    "assets/11/1111111111111111111111111111111111111111111111111111111111111111.png";
 
 /// Load the canonical empty-project fixture as the prior state.
 fn empty_project() -> Project {
@@ -56,6 +78,89 @@ fn minimal_args(canvas: &str) -> ProjectSetCanvasArgs {
     }
 }
 
+fn make_video_asset(id: &str, width: u32, height: u32) -> Asset {
+    serde_json::from_value(json!({
+        "kind": "video",
+        "id": id,
+        "hash": DUMMY_HASH,
+        "path": DUMMY_VIDEO_PATH,
+        "original_filename": "sample.mp4",
+        "imported_at": "2024-01-01T00:00:00Z",
+        "metadata": {
+            "duration_tk": 240000,
+            "width": width,
+            "height": height,
+            "fps_num": 30,
+            "fps_den": 1,
+            "video_codec": "h264",
+            "container": "mp4",
+            "fingerprint": {
+                "mtime_ms": 0,
+                "size_bytes": 1234
+            }
+        }
+    }))
+    .expect("video asset JSON → Asset")
+}
+
+fn make_image_asset(id: &str, width: u32, height: u32) -> Asset {
+    serde_json::from_value(json!({
+        "kind": "image",
+        "id": id,
+        "hash": DUMMY_HASH,
+        "path": DUMMY_IMAGE_PATH,
+        "original_filename": "sample.png",
+        "imported_at": "2024-01-01T00:00:00Z",
+        "metadata": {
+            "width": width,
+            "height": height,
+            "container": "png",
+            "fingerprint": {
+                "mtime_ms": 0,
+                "size_bytes": 1234
+            }
+        }
+    }))
+    .expect("image asset JSON → Asset")
+}
+
+fn make_clip(id: &str, asset_id: &str, transform: Transform) -> Clip {
+    serde_json::from_value(json!({
+        "id": id,
+        "name": "warn-clip",
+        "asset_id": asset_id,
+        "track_position_tk": 0,
+        "source_in_tk": 0,
+        "source_out_tk": 240000,
+        "transform": transform,
+    }))
+    .expect("clip JSON → Clip")
+}
+
+fn make_track(kind: TrackKind, id: &str, clips: Vec<Clip>) -> Track {
+    let kind = match kind {
+        TrackKind::Video => "video",
+        TrackKind::Audio => "audio",
+        TrackKind::Text => "text",
+        TrackKind::Effect => "effect",
+    };
+    let clip_values = serde_json::to_value(clips).expect("track clips → JSON");
+    serde_json::from_value(json!({
+        "id": id,
+        "kind": kind,
+        "name": "warn-track",
+        "clips": clip_values,
+    }))
+    .expect("track JSON → Track")
+}
+
+fn make_project_with_assets_and_tracks(assets: Vec<Asset>, tracks: Vec<Track>) -> Project {
+    let mut project = empty_project();
+    project.assets = assets;
+    project.tracks = tracks;
+    project
+}
+
 /// Convenience: extract the `replace`-op value off the patch. Panics
 /// (test-only) if the patch shape isn't the wholesale-replace form.
 fn patch_canvas_value(patch: &Value) -> Value {
@@ -79,7 +184,7 @@ fn compute_patch_minimal_canvas_succeeds() {
     // pixel-aspect stay at the prior values (default `#000000ff` / 1/1).
     let prior = empty_project();
     let args = minimal_args("1920x1080");
-    let (patch, new_canvas) =
+    let (patch, new_canvas, _warnings) =
         compute_patch(&prior, &args).expect("happy-path minimal compute_patch");
 
     assert_eq!(new_canvas.width, 1920);
@@ -104,7 +209,7 @@ fn compute_patch_with_all_optionals_succeeds() {
         pixel_aspect_num: Some(4),
         pixel_aspect_den: Some(3),
     };
-    let (_, new_canvas) =
+    let (_, new_canvas, _warnings) =
         compute_patch(&prior, &args).expect("happy-path all-optionals compute_patch");
 
     assert_eq!(new_canvas.width, 1280);
@@ -126,7 +231,8 @@ fn compute_patch_partial_update_preserves_existing() {
         pixel_aspect_den: 1,
     });
     let args = minimal_args("640x480");
-    let (_, new_canvas) = compute_patch(&prior, &args).expect("partial-update compute_patch ok");
+    let (_, new_canvas, _warnings) =
+        compute_patch(&prior, &args).expect("partial-update compute_patch ok");
 
     assert_eq!(new_canvas.width, 640);
     assert_eq!(new_canvas.height, 480);
@@ -153,7 +259,7 @@ fn compute_patch_background_uppercase_normalized_to_lowercase() {
         pixel_aspect_num: None,
         pixel_aspect_den: None,
     };
-    let (_, new_canvas) =
+    let (_, new_canvas, _warnings) =
         compute_patch(&prior, &args).expect("uppercase background normalizes, not rejects");
     assert_eq!(new_canvas.background, "#ffffffff");
 }
@@ -357,7 +463,7 @@ fn compute_patch_pixel_aspect_den_zero() {
 fn boundary_dimensions_16x16_accepted() {
     let prior = empty_project();
     let args = minimal_args("16x16");
-    let (_, new_canvas) = compute_patch(&prior, &args).expect("16x16 must be accepted");
+    let (_, new_canvas, _warnings) = compute_patch(&prior, &args).expect("16x16 must be accepted");
     assert_eq!(new_canvas.width, CANVAS_MIN_DIM);
     assert_eq!(new_canvas.height, CANVAS_MIN_DIM);
 }
@@ -366,7 +472,8 @@ fn boundary_dimensions_16x16_accepted() {
 fn boundary_dimensions_8192x8192_accepted() {
     let prior = empty_project();
     let args = minimal_args("8192x8192");
-    let (_, new_canvas) = compute_patch(&prior, &args).expect("8192x8192 must be accepted");
+    let (_, new_canvas, _warnings) =
+        compute_patch(&prior, &args).expect("8192x8192 must be accepted");
     assert_eq!(new_canvas.width, CANVAS_MAX_DIM);
     assert_eq!(new_canvas.height, CANVAS_MAX_DIM);
 }
@@ -390,6 +497,371 @@ fn data_envelope_returns_post_state_canvas() {
     assert_eq!(env.canvas, post_state.canvas);
 }
 
+#[test]
+fn compute_patch_no_clips_emits_no_warnings() {
+    let prior = empty_project();
+    let args = minimal_args("1920x1080");
+    let (_, _, warnings) = compute_patch(&prior, &args).expect("no clips => no warnings");
+
+    assert!(warnings.is_empty(), "empty project has no clips to test");
+}
+
+#[test]
+fn compute_patch_clip_fully_inside_emits_no_warnings() {
+    let prior = {
+        let assets = vec![make_video_asset(SAMPLE_VIDEO_ASSET_ID, 1920, 1080)];
+        let clips = vec![make_clip(
+            CLIP_ID_AUDIO,
+            SAMPLE_VIDEO_ASSET_ID,
+            Transform::default(),
+        )];
+        let tracks = vec![make_track(TrackKind::Video, SAMPLE_VIDEO_TRACK_ID, clips)];
+        make_project_with_assets_and_tracks(assets, tracks)
+    };
+    let args = minimal_args("1280x720");
+    let (_, _, warnings) = compute_patch(&prior, &args).expect("clip still partially overlaps");
+
+    assert!(
+        warnings.is_empty(),
+        "clip is partly in-frame on resized canvas => no warning"
+    );
+}
+
+#[test]
+fn compute_patch_clip_translated_off_canvas_emits_warning() {
+    let prior = {
+        let assets = vec![make_video_asset(SAMPLE_VIDEO_ASSET_ID, 1920, 1080)];
+        let transform = Transform {
+            x: 10000.0,
+            ..Transform::default()
+        };
+        let clips = vec![make_clip(CLIP_ID_A, SAMPLE_VIDEO_ASSET_ID, transform)];
+        let tracks = vec![make_track(TrackKind::Video, SAMPLE_VIDEO_TRACK_ID, clips)];
+        make_project_with_assets_and_tracks(assets, tracks)
+    };
+    let args = minimal_args("1920x1080");
+    let (_, _, warnings) = compute_patch(&prior, &args).expect("off-canvas clip emits warning");
+
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0]["code"], W_CANVAS_CLIPS_OUT_OF_FRAME);
+    assert_eq!(
+        warnings[0]["details"]["affected_clip_ids"]
+            .as_array()
+            .expect("id list exists"),
+        &vec![CLIP_ID_A.to_string()]
+    );
+}
+
+#[test]
+fn compute_patch_clip_negative_x_off_canvas_emits_warning() {
+    let prior = {
+        let assets = vec![make_video_asset(SAMPLE_VIDEO_ASSET_ID, 1920, 1080)];
+        let transform = Transform {
+            x: -5000.0,
+            ..Transform::default()
+        };
+        let clips = vec![make_clip(CLIP_ID_B, SAMPLE_VIDEO_ASSET_ID, transform)];
+        let tracks = vec![make_track(TrackKind::Video, SAMPLE_VIDEO_TRACK_ID, clips)];
+        make_project_with_assets_and_tracks(assets, tracks)
+    };
+    let args = minimal_args("1920x1080");
+    let (_, _, warnings) = compute_patch(&prior, &args).expect("off-canvas clip emits warning");
+
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0]["code"], W_CANVAS_CLIPS_OUT_OF_FRAME);
+}
+
+#[test]
+fn compute_patch_clip_off_canvas_below_emits_warning() {
+    let prior = {
+        let assets = vec![make_video_asset(SAMPLE_VIDEO_ASSET_ID, 1920, 1080)];
+        let transform = Transform {
+            y: 5000.0,
+            ..Transform::default()
+        };
+        let clips = vec![make_clip(CLIP_ID_C, SAMPLE_VIDEO_ASSET_ID, transform)];
+        let tracks = vec![make_track(TrackKind::Video, SAMPLE_VIDEO_TRACK_ID, clips)];
+        make_project_with_assets_and_tracks(assets, tracks)
+    };
+    let args = minimal_args("1920x1080");
+    let (_, _, warnings) = compute_patch(&prior, &args).expect("off-canvas clip emits warning");
+
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0]["code"], W_CANVAS_CLIPS_OUT_OF_FRAME);
+}
+
+#[test]
+fn compute_patch_clip_partial_overlap_no_warning() {
+    let prior = {
+        let assets = vec![make_video_asset(SAMPLE_VIDEO_ASSET_ID, 1920, 1080)];
+        let transform = Transform {
+            x: 640.0,
+            ..Transform::default()
+        };
+        let clips = vec![make_clip(CLIP_ID_B, SAMPLE_VIDEO_ASSET_ID, transform)];
+        let tracks = vec![make_track(TrackKind::Video, SAMPLE_VIDEO_TRACK_ID, clips)];
+        make_project_with_assets_and_tracks(assets, tracks)
+    };
+    let args = minimal_args("1280x720");
+    let (_, _, warnings) = compute_patch(&prior, &args).expect("partial overlap => no warning");
+
+    assert!(
+        warnings.is_empty(),
+        "half in / half out is not fully outside"
+    );
+}
+
+#[test]
+fn compute_patch_multiple_off_canvas_clips_all_listed() {
+    let prior = {
+        let assets = vec![make_video_asset(SAMPLE_VIDEO_ASSET_ID, 1920, 1080)];
+        let right = Transform {
+            x: 10000.0,
+            ..Transform::default()
+        };
+        let left = Transform {
+            x: -5000.0,
+            ..Transform::default()
+        };
+        let below = Transform {
+            y: 5000.0,
+            ..Transform::default()
+        };
+        let clips = vec![
+            make_clip(CLIP_ID_B, SAMPLE_VIDEO_ASSET_ID, right),
+            make_clip(CLIP_ID_A, SAMPLE_VIDEO_ASSET_ID, left),
+            make_clip(CLIP_ID_C, SAMPLE_VIDEO_ASSET_ID, below),
+        ];
+        let tracks = vec![make_track(TrackKind::Video, SAMPLE_VIDEO_TRACK_ID, clips)];
+        make_project_with_assets_and_tracks(assets, tracks)
+    };
+    let args = minimal_args("1920x1080");
+    let (_, _, warnings) = compute_patch(&prior, &args).expect("three off-canvas clips");
+
+    let ids = warnings[0]["details"]["affected_clip_ids"]
+        .as_array()
+        .expect("id list exists")
+        .iter()
+        .map(|v| v.as_str().expect("id string"))
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec![CLIP_ID_A, CLIP_ID_B, CLIP_ID_C]);
+}
+
+#[test]
+fn compute_patch_warning_skips_audio_track() {
+    let prior = {
+        let assets = vec![make_video_asset(SAMPLE_VIDEO_ASSET_ID, 1920, 1080)];
+        let transform = Transform {
+            x: 10000.0,
+            ..Transform::default()
+        };
+        let clips = vec![make_clip(CLIP_ID_AUDIO, SAMPLE_VIDEO_ASSET_ID, transform)];
+        let tracks = vec![make_track(TrackKind::Audio, SAMPLE_AUDIO_TRACK_ID, clips)];
+        make_project_with_assets_and_tracks(assets, tracks)
+    };
+    let args = minimal_args("1920x1080");
+    let (_, _, warnings) = compute_patch(&prior, &args).expect("audio track is ignored");
+
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn compute_patch_warning_skips_text_track() {
+    let prior = {
+        let assets = vec![make_image_asset(SAMPLE_IMAGE_ASSET_ID, 1920, 1080)];
+        let transform = Transform {
+            x: 10000.0,
+            ..Transform::default()
+        };
+        let clips = vec![make_clip(CLIP_ID_TEXT, SAMPLE_IMAGE_ASSET_ID, transform)];
+        let tracks = vec![make_track(TrackKind::Text, SAMPLE_TEXT_TRACK_ID, clips)];
+        make_project_with_assets_and_tracks(assets, tracks)
+    };
+    let args = minimal_args("1920x1080");
+    let (_, _, warnings) = compute_patch(&prior, &args).expect("text track is ignored");
+
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn compute_patch_warning_skips_unresolved_asset_id() {
+    let prior = {
+        let assets = vec![make_video_asset(SAMPLE_VIDEO_ASSET_ID, 1920, 1080)];
+        let nil_transform = Transform::default();
+        let clips = vec![
+            make_clip(CLIP_ID_NIL, NIL_ASSET_ID, nil_transform),
+            make_clip(
+                CLIP_ID_MISSING,
+                SAMPLE_MISSING_ASSET_ID,
+                Transform::default(),
+            ),
+        ];
+        let tracks = vec![make_track(TrackKind::Video, SAMPLE_VIDEO_TRACK_ID, clips)];
+        make_project_with_assets_and_tracks(assets, tracks)
+    };
+    let args = minimal_args("1920x1080");
+    let (_, _, warnings) = compute_patch(&prior, &args).expect("unresolved asset ids are skipped");
+
+    assert!(warnings.is_empty());
+}
+
+#[test]
+fn compute_patch_warning_message_format() {
+    let prior = {
+        let assets = vec![make_video_asset(SAMPLE_VIDEO_ASSET_ID, 1920, 1080)];
+        let transform = Transform {
+            x: 10000.0,
+            ..Transform::default()
+        };
+        let clips = vec![make_clip(CLIP_ID_A, SAMPLE_VIDEO_ASSET_ID, transform)];
+        let tracks = vec![make_track(TrackKind::Video, SAMPLE_VIDEO_TRACK_ID, clips)];
+        make_project_with_assets_and_tracks(assets, tracks)
+    };
+    let args = minimal_args("1920x1080");
+    let (_, _, warnings) = compute_patch(&prior, &args).expect("warning includes message + ids");
+
+    let warning = warnings
+        .into_iter()
+        .next()
+        .expect("one warning must be emitted");
+    assert_eq!(warning["code"], W_CANVAS_CLIPS_OUT_OF_FRAME);
+    let msg = warning["message"].as_str().expect("message exists");
+    assert!(!msg.is_empty(), "message is non-empty");
+
+    let ids = warning["details"]["affected_clip_ids"]
+        .as_array()
+        .expect("affected_clip_ids exists");
+    assert!(!ids.is_empty(), "affected_clip_ids is non-empty");
+    for id in ids {
+        assert!(id.as_str().is_some(), "ids are strings");
+    }
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn compute_patch_warning_persists_through_mutate_via_verb() {
+    use tempfile::TempDir;
+
+    let project = {
+        let assets = vec![make_video_asset(SAMPLE_VIDEO_ASSET_ID, 1920, 1080)];
+        let transform = Transform {
+            x: 10000.0,
+            ..Transform::default()
+        };
+        let clips = vec![make_clip(CLIP_ID_A, SAMPLE_VIDEO_ASSET_ID, transform)];
+        let tracks = vec![make_track(TrackKind::Video, SAMPLE_VIDEO_TRACK_ID, clips)];
+        let mut project = make_project_with_assets_and_tracks(assets, tracks);
+        project.duration_tk = Tick::new(240000);
+        project
+    };
+
+    let dir = TempDir::new().expect("tempdir");
+    let mut store = ProjectStore::create_with_registry(
+        dir.path(),
+        project,
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .expect("create_with_registry clears the gate and writes project.json");
+
+    let args = json!({
+        "project_id": FIXTURE_PROJECT_ID,
+        "canvas": "1920x1080",
+    });
+
+    let outcome = store
+        .mutate_via_verb("project.set_canvas", args, None)
+        .expect("mutate_via_verb happy path");
+
+    let MutateOutcome::Applied { warnings, .. } = outcome else {
+        panic!("expected Applied, got {outcome:?}");
+    };
+
+    assert_eq!(warnings.len(), 1, "warning is persisted by verb output");
+    assert_eq!(warnings[0]["code"], W_CANVAS_CLIPS_OUT_OF_FRAME);
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn compute_patch_warning_persists_on_replay() {
+    use tempfile::TempDir;
+
+    let project = {
+        let assets = vec![make_video_asset(SAMPLE_VIDEO_ASSET_ID, 1920, 1080)];
+        let transform = Transform {
+            x: 10000.0,
+            ..Transform::default()
+        };
+        let clips = vec![make_clip(CLIP_ID_A, SAMPLE_VIDEO_ASSET_ID, transform)];
+        let tracks = vec![make_track(TrackKind::Video, SAMPLE_VIDEO_TRACK_ID, clips)];
+        let mut project = make_project_with_assets_and_tracks(assets, tracks);
+        project.duration_tk = Tick::new(240000);
+        project
+    };
+
+    let dir = TempDir::new().expect("tempdir");
+    let mut store = ProjectStore::create_with_registry(
+        dir.path(),
+        project,
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .expect("create_with_registry clears the gate and writes project.json");
+
+    let args = json!({
+        "project_id": FIXTURE_PROJECT_ID,
+        "canvas": "1920x1080",
+    });
+
+    let first = store
+        .mutate_via_verb("project.set_canvas", args.clone(), Some("k1".into()))
+        .expect("first keyed mutate");
+    let first_warnings = if let MutateOutcome::Applied { warnings, .. } = first {
+        warnings
+    } else {
+        panic!("expected Applied, got {first:?}");
+    };
+
+    assert_eq!(first_warnings.len(), 1, "first call emits one warning");
+    assert_eq!(first_warnings[0]["code"], W_CANVAS_CLIPS_OUT_OF_FRAME);
+
+    let replay = store
+        .mutate_via_verb("project.set_canvas", args, Some("k1".into()))
+        .expect("replay keyed mutate");
+    let replay_warnings = if let MutateOutcome::Replayed { warnings, .. } = replay {
+        warnings
+    } else {
+        panic!("expected Replayed, got {replay:?}");
+    };
+
+    assert_eq!(replay_warnings.len(), 2, "replay appends W_REPLAY");
+    assert_eq!(replay_warnings[0]["code"], W_CANVAS_CLIPS_OUT_OF_FRAME);
+    assert_eq!(replay_warnings[1]["code"], "W_REPLAY");
+}
+
+#[test]
+fn compute_patch_rotation_keeps_partial_overlap() {
+    let prior = {
+        let assets = vec![make_video_asset(SAMPLE_VIDEO_ASSET_ID, 100, 100)];
+        let transform = Transform {
+            rotation_deg: 45.0,
+            x: 250.0,
+            y: 250.0,
+            ..Transform::default()
+        };
+        let clips = vec![make_clip(CLIP_ID_ROTATE, SAMPLE_VIDEO_ASSET_ID, transform)];
+        let tracks = vec![make_track(TrackKind::Video, SAMPLE_VIDEO_TRACK_ID_2, clips)];
+        make_project_with_assets_and_tracks(assets, tracks)
+    };
+    let args = minimal_args("300x300");
+    let (_, _, warnings) = compute_patch(&prior, &args).expect("45° overlap remains partial");
+
+    assert!(
+        warnings.is_empty(),
+        "45° clip with one corner inside is not fully outside"
+    );
+}
+
 // ---------------------------------------------------------------------
 // Reconstructor round-trip — the §0.8 startup-gate exercise
 // ---------------------------------------------------------------------
@@ -405,7 +877,7 @@ fn reconstructor_round_trip() {
         pixel_aspect_den: Some(1),
     };
 
-    let (patch, new_canvas) = compute_patch(&prior, &args).expect("compute_patch ok");
+    let (patch, new_canvas, _warnings) = compute_patch(&prior, &args).expect("compute_patch ok");
 
     let mut post_state = prior.clone();
     post_state.canvas = new_canvas;
