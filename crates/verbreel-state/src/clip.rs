@@ -1,16 +1,17 @@
 //! [`Clip`] + supporting enums and substructs. Mirrors
 //! `spec/project-schema.json` `$defs/Clip`.
 //!
-//! `Clip.effects` and `Clip.keyframes` remain
-//! `Vec<serde_json::Value>` placeholders this slice — those types
-//! land in the next two slices per the topology-dictated dependency
-//! order (Effect → Keyframe → `apply()`).
+//! As of the Keyframe slice both `Clip.effects` and `Clip.keyframes`
+//! are typed (`Vec<Effect>` and `Vec<Keyframe>` respectively).
+//! `Clip` itself is now serialization-complete; the remaining
+//! Phase 2 work is `apply()`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use verbreel_types::{ClipId, LinkGroupId, Tick};
 
 use crate::effect::Effect;
+use crate::keyframe::Keyframe;
 use crate::newtypes::AssetRef;
 use crate::text_element::TextElement;
 use crate::transform::Transform;
@@ -204,13 +205,10 @@ pub struct Clip {
     /// [`Effect`].
     #[serde(default)]
     pub effects: Vec<Effect>,
-    /// Clip-level keyframes. **Placeholder** — typing lands in the
-    /// Keyframe slice.
-    ///
-    // TODO(slice-5 follow-up): replace `Vec<serde_json::Value>` with
-    // `Vec<Keyframe>` once `Keyframe` is typed.
+    /// Clip-level keyframes (Phase 2 fifth slice — typed). See
+    /// [`Keyframe`].
     #[serde(default)]
-    pub keyframes: Vec<Value>,
+    pub keyframes: Vec<Keyframe>,
     /// Text-element parameters (present on text-track clips).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<TextElement>,
