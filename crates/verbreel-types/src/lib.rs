@@ -7,7 +7,7 @@
 //!
 //! Spec references:
 //! - §0.2 time and ticks → [`Tick`], [`TickRate`], [`TICK_RATE_HZ`]
-//! - §0.3 IDs → [`UuidV7`], [`ProjectId`], [`ClipId`], [`TrackId`], [`AssetId`], [`EventId`]
+//! - §0.3 IDs → [`UuidV7`], [`ProjectId`], [`ClipId`], [`TrackId`], [`AssetId`], [`EventId`], [`MarkerId`], [`TrackerId`]
 //! - §3.1 asset content addressing → [`AssetHash`]
 
 #![deny(missing_docs)]
@@ -20,5 +20,7 @@ pub mod id;
 pub mod tick;
 
 pub use hash::AssetHash;
-pub use id::{AssetId, ClipId, EventId, ProjectId, TextTrackId, TrackId, UuidV7};
+pub use id::{
+    AssetId, ClipId, EventId, MarkerId, ProjectId, TextTrackId, TrackId, TrackerId, UuidV7,
+};
 pub use tick::{TICK_RATE_HZ, Tick, TickRate};

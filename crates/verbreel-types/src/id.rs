@@ -181,6 +181,14 @@ define_id! {
     /// Event ID — `UUIDv7` of an events.jsonl line (§0.3, App. C).
     pub EventId
 }
+define_id! {
+    /// Marker ID — `UUIDv7` of a project-level marker (§0.3, schema `$defs/Marker`).
+    pub MarkerId
+}
+define_id! {
+    /// Tracker ID — `UUIDv7` of a tracker record (§0.3, §18, schema `$defs/Tracker`).
+    pub TrackerId
+}
 
 #[cfg(test)]
 mod tests {
