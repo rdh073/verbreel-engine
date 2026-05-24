@@ -189,6 +189,11 @@ define_id! {
     /// Tracker ID — `UUIDv7` of a tracker record (§0.3, §18, schema `$defs/Tracker`).
     pub TrackerId
 }
+define_id! {
+    /// Link-group ID — `UUIDv7` tagging clips that move and trim as a unit
+    /// (§0.3, schema `Clip.link_group`).
+    pub LinkGroupId
+}
 
 #[cfg(test)]
 mod tests {
