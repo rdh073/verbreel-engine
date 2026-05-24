@@ -10,10 +10,22 @@
 //!
 //! - [`check_fade_clamp`] — `clip.fade_in_tk + clip.fade_out_tk ≤
 //!   timeline_duration_tk` on every clip.
+//! - [`check_track_contiguity`] — tracks of the same `TrackKind` are
+//!   grouped together in `Project.tracks[]` (no interleaving).
+//!   Specifically does NOT enforce a block ORDER across kinds —
+//!   that's `project.open` reconciliation territory.
+//!
+//! ## `apply()` check order
+//!
+//! The chain in [`crate::project::Project::apply`] runs invariant
+//! checks in a deterministic order so agents debugging which
+//! invariant fires can rely on the same answer across runs:
+//!
+//! 1. [`check_fade_clamp`] — per-clip.
+//! 2. [`check_track_contiguity`] — per-project structure.
+//! 3. (future slices append here)
 //!
 //! Planned (each its own slice + variant):
-//! - `check_track_contiguity` — same-kind tracks grouped, kind-block
-//!   order enforced.
 //! - `check_no_overlap` — clips on the same track don't overlap.
 //! - `check_duration_tk_maintenance` —
 //!   `Project.duration_tk == max(end_of_last_clip per track)`.
@@ -37,6 +49,7 @@ use thiserror::Error;
 use verbreel_types::{ClipId, Tick};
 
 use crate::project::Project;
+use crate::track::TrackKind;
 
 // ---------------------------------------------------------------------
 // InvariantViolation
@@ -74,6 +87,38 @@ pub enum InvariantViolation {
         /// Computed `timeline_duration_tk = ceil((source_out_tk -
         /// source_in_tk) / speed)`.
         timeline_duration_tk: Tick,
+    },
+
+    /// Tracks of the same [`TrackKind`] are not contiguous in
+    /// `Project.tracks[]`. Spec §0.13 — interleaved tracks (e.g. a
+    /// video track between two audio tracks) are forbidden by the
+    /// invariant; `project.open` reconciliation stable-sorts them
+    /// back into contiguous blocks and emits `W_TRACKS_REORDERED`,
+    /// but mutating verbs (`track.add`, `track.move`) must never
+    /// write that state — this variant is the rejection path when
+    /// a patch tries to bypass that maintenance.
+    ///
+    /// Specifically does NOT enforce the canonical block ORDER
+    /// (`video → audio → text → effect`); only same-kind contiguity.
+    /// That stronger check is `project.open` reconciliation
+    /// territory.
+    #[error(
+        "§0.13 track contiguity invariant: track at index {first_violation_index} has kind \
+         {actual_kind:?}, breaking the contiguity of an earlier {prior_kind_block:?} block \
+         (expected continuation of {expected_kind_block:?} block)"
+    )]
+    InterleavedTracks {
+        /// Index in `tracks[]` where the violation appears.
+        first_violation_index: usize,
+        /// The kind of the previously-completed block whose contiguity
+        /// is broken (same value as `actual_kind` — surfaced for caller
+        /// convenience).
+        prior_kind_block: TrackKind,
+        /// The kind found at `first_violation_index`.
+        actual_kind: TrackKind,
+        /// The kind the in-progress block was extending before this
+        /// violation.
+        expected_kind_block: TrackKind,
     },
 }
 
@@ -148,6 +193,58 @@ pub fn check_fade_clamp(project: &Project) -> Result<(), InvariantViolation> {
                 });
             }
         }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_track_contiguity
+// ---------------------------------------------------------------------
+
+/// Walk `project.tracks` linearly; return the first
+/// [`InvariantViolation::InterleavedTracks`] found, or [`Ok`].
+///
+/// A "kind boundary" is a position `i` where `tracks[i].kind !=
+/// tracks[i-1].kind`. At every such boundary, the new kind must not
+/// have been seen earlier — if it has, the kind block was previously
+/// completed and is being broken by this re-appearance.
+///
+/// Backing storage is a `Vec<TrackKind>` of length ≤ 4 (one per
+/// enum variant); `Vec::contains` is O(N) but N ≤ 4 = effectively
+/// constant. No `HashSet` / `Hash` derive needed on [`TrackKind`].
+///
+/// Does NOT enforce the canonical block ORDER
+/// (`video → audio → text → effect`) — that's `project.open`
+/// reconciliation territory. Only same-kind contiguity.
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::InterleavedTracks`] for the first
+/// position where contiguity breaks.
+pub fn check_track_contiguity(project: &Project) -> Result<(), InvariantViolation> {
+    let mut seen_kinds: Vec<TrackKind> = Vec::with_capacity(4);
+    let mut last_kind: Option<TrackKind> = None;
+
+    for (i, track) in project.tracks.iter().enumerate() {
+        let kind = track.kind;
+        // Same kind as previous → still inside the in-progress block; skip.
+        if last_kind == Some(kind) {
+            continue;
+        }
+        // Crossing a kind boundary. If we've seen this kind in a
+        // previously-closed block, the contiguity is broken.
+        if seen_kinds.contains(&kind) {
+            let prev = last_kind.unwrap_or(kind); // `seen_kinds` non-empty ⇒ last_kind Some
+            return Err(InvariantViolation::InterleavedTracks {
+                first_violation_index: i,
+                prior_kind_block: kind,
+                actual_kind: kind,
+                expected_kind_block: prev,
+            });
+        }
+        // Brand-new kind block starts here.
+        seen_kinds.push(kind);
+        last_kind = Some(kind);
     }
     Ok(())
 }
