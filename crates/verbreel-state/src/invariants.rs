@@ -36,6 +36,11 @@
 //! - [`check_speed_curve_on_image_text`] — `Clip.speed_curve == None`
 //!   on text / image clips. Same source-time-semantics rationale as
 //!   the scalar `speed` invariant (v1.1-additive companion).
+//! - [`check_asset_id_biconditional`] — `Clip.asset_id == nil-UUID ⇔
+//!   Track.kind == Text`. A non-nil `asset_id` on a text-track clip
+//!   or a nil `asset_id` on a non-text-track clip is rejected.
+//! - [`check_asset_existence`] — every non-nil `Clip.asset_id`
+//!   resolves to an [`Asset`] in `Project.assets[]`.
 //!
 //! ## `apply()` check order
 //!
@@ -53,20 +58,30 @@
 //! 7. [`check_speed_on_image_text`] — text/image clip `speed == 1.0`.
 //! 8. [`check_speed_curve_on_image_text`] — text/image clip
 //!    `speed_curve == None`.
-//! 9. (future slices append here)
+//! 9. [`check_asset_id_biconditional`] — text-track ⇔ nil
+//!    `asset_id`.
+//! 10. [`check_asset_existence`] — non-nil `asset_id` resolves into
+//!     `Project.assets[]`.
+//! 11. (future slices append here)
+//!
+//! Biconditional runs before existence intentionally: a nil
+//! `asset_id` on a non-text track is a kind-mismatch (structurally
+//! clearer error), while running existence first would surface a
+//! misleading "asset not found" for a value the spec mandates be
+//! nil in the first place.
 //!
 //! ## Planned future invariant slices
 //!
 //! - `check_mask_per_kind_params` — `mask.params.<leaf>` matches the
 //!   `mask.kind`'s expected leaf set.
-//! - `check_asset_id_text_track_biconditional` —
-//!   `Clip.asset_id == nil-UUID ⇔ Track.kind == "text"`.
 //! - `check_metadata_size_caps` — `Project.metadata` ≤ 256 keys / 64 KiB.
 //! - `check_effect_params_size_caps` — `Effect.params` ≤ 64 keys / 16 KiB.
 //! - `check_effect_track_empty_clips` — `Track.kind == "effect"`
 //!   ⇒ `Track.clips.is_empty()`.
 //! - `check_speed_curve_internal_validity` — `speed_curve` bounds
 //!   (`2 ≤ len ≤ 256`, monotonic `time_tk`, factor `[0.001, 100]`).
+//! - `check_mask_asset_id_resolution` — `Clip.mask.params.asset_id`
+//!   (for `kind: "asset"` masks) resolves to an image asset.
 //!
 //! ## Spec references
 //!
@@ -77,7 +92,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 use thiserror::Error;
-use verbreel_types::{ClipId, KeyframeId, Tick};
+use verbreel_types::{AssetId, ClipId, KeyframeId, Tick};
 
 use crate::asset::Asset;
 use crate::newtypes::AssetRef;
@@ -122,6 +137,37 @@ impl std::fmt::Display for SourceInTkKind {
         match self {
             SourceInTkKind::Text => f.write_str("text"),
             SourceInTkKind::Image => f.write_str("image"),
+        }
+    }
+}
+
+/// `asset_id` shape discriminator carried by
+/// [`InvariantViolation::AssetIdBiconditionalViolation`]. Tells the
+/// caller which side of the biconditional was broken — `Nil`
+/// (text-track-required value found on a non-text track) or `NonNil`
+/// (asset-required value found on a text track).
+///
+/// Lives alongside [`SourceInTkKind`] in the same conceptual slot —
+/// a tiny shape-of-the-mismatch hint for diagnostic surfacing. We
+/// keep it as a bare enum (not `Option`) because the field's
+/// presence on the violation variant *is* the violation; the variant
+/// is never constructed when the biconditional holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetIdState {
+    /// `Clip.asset_id == nil-UUID`. Valid only on text-track clips.
+    Nil,
+    /// `Clip.asset_id` is a real `UUIDv7`. Valid only on non-text-
+    /// track clips. The referenced id itself lives on the variant
+    /// (when the existence check is the one that fired); here it
+    /// just discriminates which side of the biconditional broke.
+    NonNil,
+}
+
+impl std::fmt::Display for AssetIdState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AssetIdState::Nil => f.write_str("nil"),
+            AssetIdState::NonNil => f.write_str("non-nil"),
         }
     }
 }
@@ -415,6 +461,60 @@ pub enum InvariantViolation {
         /// Diagnostic only — even `0` points is a violation
         /// (the field is `Some(Vec<...>)`, not `None`).
         point_count: usize,
+    },
+
+    /// `Clip.asset_id` and the parent `Track.kind` disagree about
+    /// the text-track / nil-UUID biconditional. Spec §0.13 —
+    /// *"`Clip.asset_id == nil-UUID ⇔ Track.kind == "text"`."*
+    ///
+    /// Two failure shapes share this variant:
+    /// - text-track clip with a non-nil `asset_id` (text clips must
+    ///   not reference an asset; their content lives in the
+    ///   `text` field), or
+    /// - non-text-track clip (video/audio/effect) with `asset_id ==
+    ///   nil-UUID` (real clips must reference a real asset).
+    ///
+    /// `project.open` surfaces this with `E_SCHEMA_VIOLATION`;
+    /// `apply()` hard-rejects.
+    #[error(
+        "§0.13 asset_id biconditional invariant: clip {clip_id} on {track_kind:?} track has \
+         {asset_id_state} asset_id, violating the text-track ⇔ nil-UUID biconditional"
+    )]
+    AssetIdBiconditionalViolation {
+        /// Offending clip id.
+        clip_id: ClipId,
+        /// Parent `Track.kind` — pairs with `asset_id_state` to
+        /// disambiguate which side of the biconditional broke.
+        track_kind: TrackKind,
+        /// Which side of the biconditional the offending value
+        /// landed on — `Nil` on a non-text track, or `NonNil` on a
+        /// text track.
+        asset_id_state: AssetIdState,
+    },
+
+    /// `Clip.asset_id` is a non-nil `UUIDv7` that doesn't resolve to
+    /// any `Asset.id` in `Project.assets[]`. Spec §0.13 — *"For
+    /// every non-text clip, `asset_id` MUST resolve to an existing
+    /// `Asset.id`."*
+    ///
+    /// Layer note: the biconditional check runs first; this variant
+    /// fires only when a clip's `asset_id` shape is consistent
+    /// (non-nil on a non-text track) but the referenced id is
+    /// dangling.
+    ///
+    /// `project.open` surfaces this with `E_SCHEMA_VIOLATION`;
+    /// `apply()` hard-rejects.
+    #[error(
+        "§0.13 asset-existence invariant: clip {clip_id} references asset_id \
+         {referenced_asset_id} which does not exist in Project.assets[]"
+    )]
+    AssetIdUnresolved {
+        /// Offending clip id.
+        clip_id: ClipId,
+        /// The dangling `AssetId` — surfaced so callers can locate
+        /// the missing entry (typically a verb-layer write that
+        /// forgot to add the asset, or a hand-edited project.json).
+        referenced_asset_id: AssetId,
     },
 }
 
@@ -845,6 +945,96 @@ pub fn check_speed_curve_on_image_text(project: &Project) -> Result<(), Invarian
                     clip_id: clip.id,
                     clip_kind_indicator: kind,
                     point_count: curve.len(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_asset_id_biconditional
+// ---------------------------------------------------------------------
+
+/// Verify the spec §0.13 `Clip.asset_id ↔ Track.kind` biconditional:
+/// `Clip.asset_id == nil-UUID` iff the parent `Track.kind` is
+/// [`TrackKind::Text`]. Two failure shapes share the variant:
+///
+/// - text-track clip with a non-nil `asset_id` — text clips carry
+///   their content in `Clip.text`, never via `asset_id`.
+/// - non-text-track clip with `asset_id == nil-UUID` — real clips
+///   (video / audio / effect track) must reference a real asset.
+///
+/// **Layer note**: `project.open` surfaces this with
+/// `E_SCHEMA_VIOLATION`; mutating verbs that would write either
+/// shape fail with `E_SCHEMA_VIOLATION` before patch computation.
+/// `apply()` hard-rejects.
+///
+/// **Check order**: runs *before* [`check_asset_existence`] so that
+/// a non-text-track clip with `asset_id == nil-UUID` surfaces as a
+/// biconditional violation (structurally clearer) rather than a
+/// confusing "nil-UUID not found in `Project.assets[]`" miss.
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::AssetIdBiconditionalViolation`] for
+/// the first clip where the biconditional breaks.
+pub fn check_asset_id_biconditional(project: &Project) -> Result<(), InvariantViolation> {
+    for track in &project.tracks {
+        let is_text_track = track.kind == TrackKind::Text;
+        for clip in &track.clips {
+            let is_nil = clip.asset_id.is_nil();
+            // Biconditional: is_text_track ⇔ is_nil.
+            // Violation when exactly one side is true.
+            if is_text_track != is_nil {
+                return Err(InvariantViolation::AssetIdBiconditionalViolation {
+                    clip_id: clip.id,
+                    track_kind: track.kind,
+                    asset_id_state: if is_nil {
+                        AssetIdState::Nil
+                    } else {
+                        AssetIdState::NonNil
+                    },
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_asset_existence
+// ---------------------------------------------------------------------
+
+/// Verify every non-nil [`Clip.asset_id`](crate::clip::Clip) resolves
+/// to an [`Asset`] in `Project.assets[]`. Spec §0.13.
+///
+/// Allocates one `HashSet<&AssetId>` over `project.assets[]` for
+/// O(1)-amortized lookup, then walks clips in declared order. Nil
+/// `asset_id` values are skipped (the biconditional check — which
+/// runs first in `apply()` — handles the "nil where non-nil
+/// required" case; here we only care about non-nil refs that
+/// dangle).
+///
+/// **Layer note**: `project.open` surfaces this with
+/// `E_SCHEMA_VIOLATION`; `apply()` hard-rejects.
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::AssetIdUnresolved`] for the first
+/// clip whose non-nil `asset_id` doesn't resolve.
+pub fn check_asset_existence(project: &Project) -> Result<(), InvariantViolation> {
+    // Index the project's assets once. `Asset::id` returns `&AssetId`
+    // (Copy), so the set can borrow into `project.assets`.
+    let asset_ids: HashSet<&AssetId> = project.assets.iter().map(Asset::id).collect();
+    for track in &project.tracks {
+        for clip in &track.clips {
+            if let Some(id) = clip.asset_id.id()
+                && !asset_ids.contains(id)
+            {
+                return Err(InvariantViolation::AssetIdUnresolved {
+                    clip_id: clip.id,
+                    referenced_asset_id: *id,
                 });
             }
         }

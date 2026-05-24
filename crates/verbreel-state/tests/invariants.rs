@@ -6,9 +6,10 @@
 
 use serde_json::json;
 use verbreel_state::{
-    ApplyError, AssetRef, BlendMode, Clip, Effect, EffectKind, FadeCurve, InvariantViolation,
-    Keyframe, KeyframeProperty, Project, SourceInTkKind, SpeedCurvePoint, Track, TrackKind,
-    Transform, check_dangling_keyframes, check_duration_tk, check_fade_clamp, check_no_overlap,
+    ApplyError, AssetIdState, AssetRef, BlendMode, Clip, Effect, EffectKind, FadeCurve,
+    InvariantViolation, Keyframe, KeyframeProperty, Project, SourceInTkKind, SpeedCurvePoint,
+    Track, TrackKind, Transform, check_asset_existence, check_asset_id_biconditional,
+    check_dangling_keyframes, check_duration_tk, check_fade_clamp, check_no_overlap,
     check_source_in_tk, check_speed_curve_on_image_text, check_speed_on_image_text,
     check_track_contiguity, extract_effect_id_from_property, timeline_duration_tk,
 };
@@ -702,8 +703,14 @@ fn apply_accepts_adjacent_non_overlapping_patch() {
     // not overlapping. Also includes the /duration_tk replace op
     // the spec §0.13 maintenance rule requires for duration-
     // extending mutations (post-state max becomes 2_880_000).
+    //
+    // Per the asset_id ↔ Track.kind biconditional, the appended
+    // video-track clip MUST reference a real asset (not nil) — reuse
+    // the keyframes fixture's video asset id.
     let p = load_three_track();
-    let new_clip = clip_at(2_400_000, 480_000, 1.0);
+    let real_video_asset_id = *p.assets[0].id();
+    let mut new_clip = clip_at(2_400_000, 480_000, 1.0);
+    new_clip.asset_id = AssetRef::from_id(real_video_asset_id);
     let new_clip_json = serde_json::to_value(&new_clip).unwrap();
     let patch: json_patch::Patch = serde_json::from_value(json!([
         {"op":"add","path":"/tracks/0/clips/-","value": new_clip_json},
@@ -1916,6 +1923,316 @@ fn fixtures_satisfy_speed_and_speed_curve_invariants() {
         });
         check_speed_curve_on_image_text(&p).unwrap_or_else(|e| {
             panic!("fixture {name:?} must satisfy speed_curve-on-image-text: {e}");
+        });
+    }
+}
+
+// ---------------------------------------------------------------------
+// check_asset_id_biconditional — direct walks
+// ---------------------------------------------------------------------
+
+/// Helper — borrow a known-valid AssetId from the keyframes fixture
+/// so tests can construct non-nil `AssetRef`s without minting new
+/// UUIDs.
+fn fixture_video_asset_id() -> AssetId {
+    let p = load_three_track();
+    *p.assets[0].id()
+}
+
+#[test]
+fn biconditional_text_clip_with_nil_passes() {
+    // Keyframes fixture text clip has asset_id=nil — the canonical
+    // shape per spec.
+    let p = load_three_track();
+    check_asset_id_biconditional(&p).expect("text clip with nil asset_id passes");
+}
+
+#[test]
+fn biconditional_text_clip_with_non_nil_rejected() {
+    // Mutate the text clip's asset_id to a real UUID. Even though
+    // the UUID resolves to a real (video) asset, the biconditional
+    // is violated — text clips must have nil.
+    let mut p = load_three_track();
+    let real_id = fixture_video_asset_id();
+    p.tracks[2].clips[0].asset_id = AssetRef::from_id(real_id);
+    let err = check_asset_id_biconditional(&p)
+        .expect_err("non-nil asset_id on text-track clip must reject");
+    if let InvariantViolation::AssetIdBiconditionalViolation {
+        track_kind,
+        asset_id_state,
+        ..
+    } = err
+    {
+        assert_eq!(track_kind, TrackKind::Text);
+        assert_eq!(asset_id_state, AssetIdState::NonNil);
+    } else {
+        panic!("expected AssetIdBiconditionalViolation, got {err:?}");
+    }
+}
+
+#[test]
+fn biconditional_video_clip_with_non_nil_passes() {
+    // Video clip on video track with a real asset_id resolving to a
+    // video asset — canonical shape.
+    let p = load_three_track();
+    check_asset_id_biconditional(&p).expect("video clip with non-nil asset_id passes");
+}
+
+#[test]
+fn biconditional_video_clip_with_nil_rejected() {
+    let mut p = load_three_track();
+    p.tracks[0].clips[0].asset_id = AssetRef::nil();
+    let err =
+        check_asset_id_biconditional(&p).expect_err("nil asset_id on video-track clip must reject");
+    if let InvariantViolation::AssetIdBiconditionalViolation {
+        track_kind,
+        asset_id_state,
+        ..
+    } = err
+    {
+        assert_eq!(track_kind, TrackKind::Video);
+        assert_eq!(asset_id_state, AssetIdState::Nil);
+    } else {
+        panic!("expected AssetIdBiconditionalViolation, got {err:?}");
+    }
+}
+
+#[test]
+fn biconditional_audio_clip_with_nil_rejected() {
+    // Append an audio clip with nil asset_id to the (empty) audio
+    // track in the keyframes fixture. Direct walk (not apply) so we
+    // don't need to keep duration_tk / track structure consistent.
+    let mut p = load_three_track();
+    p.tracks[1].clips.push(clip_at(0, 100, 1.0)); // clip_at uses AssetRef::nil()
+    let err =
+        check_asset_id_biconditional(&p).expect_err("nil asset_id on audio-track clip must reject");
+    if let InvariantViolation::AssetIdBiconditionalViolation {
+        track_kind,
+        asset_id_state,
+        ..
+    } = err
+    {
+        assert_eq!(track_kind, TrackKind::Audio);
+        assert_eq!(asset_id_state, AssetIdState::Nil);
+    } else {
+        panic!("expected AssetIdBiconditionalViolation, got {err:?}");
+    }
+}
+
+#[test]
+fn biconditional_effect_track_skipped() {
+    // Effect tracks have empty clips by a (separate) future
+    // invariant. This slice doesn't enforce that — it just iterates
+    // clips; an effect track with no clips is trivially OK for the
+    // biconditional check. Synthesize a project with [V, E] where the
+    // effect track has no clips and verify it passes.
+    let mut p = serde_json::from_str::<Project>(include_str!("fixtures/empty_project_create.json"))
+        .unwrap();
+    p.tracks = vec![
+        track_of(TrackKind::Video, "v0"),
+        track_of(TrackKind::Effect, "e0"),
+    ];
+    check_asset_id_biconditional(&p)
+        .expect("effect track with empty clips is trivially biconditional-OK");
+}
+
+// ---------------------------------------------------------------------
+// check_asset_existence — direct walks
+// ---------------------------------------------------------------------
+
+#[test]
+fn asset_existence_resolvable_passes() {
+    // Keyframes fixture: video clip on video track references the
+    // single video asset in project.assets[]. Resolves cleanly.
+    let p = load_three_track();
+    check_asset_existence(&p).expect("resolvable asset_id passes");
+}
+
+#[test]
+fn asset_existence_unresolvable_rejected() {
+    // Same fixture, but clear project.assets[]. The video clip's
+    // asset_id is now dangling. Direct walk — we don't need to also
+    // run the biconditional first; both checks are independent at the
+    // unit level.
+    let mut p = load_three_track();
+    let original_clip_id = p.tracks[0].clips[0].id;
+    let original_asset_id = *p.tracks[0].clips[0].asset_id.id().unwrap();
+    p.assets.clear();
+    let err = check_asset_existence(&p).expect_err("dangling asset_id must reject");
+    if let InvariantViolation::AssetIdUnresolved {
+        clip_id,
+        referenced_asset_id,
+    } = err
+    {
+        assert_eq!(clip_id, original_clip_id);
+        assert_eq!(referenced_asset_id, original_asset_id);
+    } else {
+        panic!("expected AssetIdUnresolved, got {err:?}");
+    }
+}
+
+#[test]
+fn asset_existence_skips_nil_asset_ref() {
+    // Text clips have nil asset_id. The existence check must skip
+    // them (the biconditional handles the kind-mismatch case in a
+    // different slice of the chain). Even with an empty assets[]
+    // array, a text clip with nil asset_id passes existence.
+    let mut p = load_three_track();
+    // Strip the video track + its clip so we don't get a separate
+    // dangling-asset failure; leave only the text track.
+    p.tracks.retain(|t| t.kind == TrackKind::Text);
+    p.assets.clear();
+    check_asset_existence(&p).expect("nil asset_id on text clip skips existence check");
+}
+
+// ---------------------------------------------------------------------
+// apply() integration — biconditional + existence
+// ---------------------------------------------------------------------
+
+#[test]
+fn apply_rejects_biconditional_violation() {
+    // Patch the keyframes-fixture text clip's asset_id from nil to
+    // a real UUID. apply() must reject with
+    // AssetIdBiconditionalViolation(Text, NonNil).
+    let p = load_three_track();
+    let real_id_string = fixture_video_asset_id().to_string();
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op": "replace", "path": "/tracks/2/clips/0/asset_id", "value": real_id_string},
+    ]))
+    .unwrap();
+    let err = p
+        .apply(&patch)
+        .expect_err("text-track clip with non-nil asset_id must reject");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::AssetIdBiconditionalViolation {
+            track_kind,
+            asset_id_state,
+            ..
+        }) => {
+            assert_eq!(track_kind, TrackKind::Text);
+            assert_eq!(asset_id_state, AssetIdState::NonNil);
+        }
+        other => panic!("expected AssetIdBiconditionalViolation(Text, NonNil), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_rejects_unresolved_asset_id() {
+    // Patch the keyframes-fixture video clip's asset_id to a fresh
+    // UUID that doesn't exist in assets[]. apply() must reject with
+    // AssetIdUnresolved. Biconditional passes (non-nil on non-text
+    // track), so existence is what fires.
+    let p = load_three_track();
+    let dangling = "0190b8d3-15e3-7000-bd00-00000000dead";
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op": "replace", "path": "/tracks/0/clips/0/asset_id", "value": dangling},
+    ]))
+    .unwrap();
+    let err = p.apply(&patch).expect_err("dangling asset_id must reject");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::AssetIdUnresolved {
+            referenced_asset_id,
+            ..
+        }) => {
+            assert_eq!(referenced_asset_id.to_string(), dangling);
+        }
+        other => panic!("expected AssetIdUnresolved, got {other:?}"),
+    }
+}
+
+#[test]
+fn biconditional_error_carries_clip_id_track_kind_asset_id_state() {
+    // Verify clip_id + track_kind + asset_id_state reach the caller
+    // intact, and that the Display impl carries the human-readable
+    // info.
+    let mut p = load_three_track();
+    let expected_clip_id = p.tracks[2].clips[0].id;
+    let real_id = fixture_video_asset_id();
+    p.tracks[2].clips[0].asset_id = AssetRef::from_id(real_id);
+
+    let err = p.apply(&json_patch::Patch(vec![])).unwrap_err();
+    match err {
+        ApplyError::InvariantViolation(
+            v @ InvariantViolation::AssetIdBiconditionalViolation {
+                clip_id,
+                track_kind,
+                asset_id_state,
+            },
+        ) => {
+            assert_eq!(clip_id, expected_clip_id);
+            assert_eq!(track_kind, TrackKind::Text);
+            assert_eq!(asset_id_state, AssetIdState::NonNil);
+            let msg = v.to_string();
+            assert!(msg.contains("non-nil"), "msg must mention state: {msg}");
+            assert!(msg.contains("Text"), "msg must mention track kind: {msg}");
+            assert!(
+                msg.contains("biconditional"),
+                "msg must mention invariant name: {msg}"
+            );
+        }
+        other => panic!("expected AssetIdBiconditionalViolation, got {other:?}"),
+    }
+}
+
+#[test]
+fn asset_id_unresolved_error_carries_clip_and_asset_ids() {
+    // Verify the existence variant surfaces clip_id + the dangling
+    // asset id + a useful Display impl.
+    let mut p = load_three_track();
+    let expected_clip_id = p.tracks[0].clips[0].id;
+    p.assets.clear();
+    let expected_asset_id = *p.tracks[0].clips[0].asset_id.id().unwrap();
+
+    let err = p.apply(&json_patch::Patch(vec![])).unwrap_err();
+    match err {
+        ApplyError::InvariantViolation(
+            v @ InvariantViolation::AssetIdUnresolved {
+                clip_id,
+                referenced_asset_id,
+            },
+        ) => {
+            assert_eq!(clip_id, expected_clip_id);
+            assert_eq!(referenced_asset_id, expected_asset_id);
+            let msg = v.to_string();
+            assert!(
+                msg.contains(&expected_asset_id.to_string()),
+                "msg must mention dangling id: {msg}"
+            );
+            assert!(
+                msg.contains("does not exist"),
+                "msg must explain the failure: {msg}"
+            );
+        }
+        other => panic!("expected AssetIdUnresolved, got {other:?}"),
+    }
+}
+
+#[test]
+fn fixtures_satisfy_asset_id_biconditional_and_existence() {
+    // Regression canary across all 5 fixtures. Text clips → nil
+    // asset_id; non-text clips → non-nil asset_id resolving into
+    // project.assets[].
+    let fixtures: [(&str, &str); 5] = [
+        ("empty", include_str!("fixtures/empty_project_create.json")),
+        ("assets", include_str!("fixtures/project_with_assets.json")),
+        ("clips", include_str!("fixtures/project_with_clips.json")),
+        (
+            "effects",
+            include_str!("fixtures/project_with_effects.json"),
+        ),
+        (
+            "keyframes",
+            include_str!("fixtures/project_with_keyframes.json"),
+        ),
+    ];
+    for (name, src) in fixtures {
+        let p: Project =
+            serde_json::from_str(src).unwrap_or_else(|e| panic!("fixture {name:?} parses: {e}"));
+        check_asset_id_biconditional(&p).unwrap_or_else(|e| {
+            panic!("fixture {name:?} must satisfy asset_id biconditional: {e}");
+        });
+        check_asset_existence(&p).unwrap_or_else(|e| {
+            panic!("fixture {name:?} must satisfy asset-existence: {e}");
         });
     }
 }
