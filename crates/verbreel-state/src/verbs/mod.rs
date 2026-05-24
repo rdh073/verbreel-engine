@@ -3,12 +3,14 @@
 //! - its args / data / error types,
 //! - a `compute_patch()` freestanding helper (pure — no I/O, no clock,
 //!   no RNG),
-//! - a `*Reconstructor` impl of
-//!   [`crate::reconstructor::VerbReconstructor`] (also pure per §0.8).
+//! - a `*Verb` impl of [`crate::reconstructor::Verb`] (also pure per
+//!   §0.8) — owns both the forward path (`compute_patch`) and the
+//!   replay path (`reconstruct`).
 //!
 //! Verbs land one at a time. `project.set_metadata` (§2.12) is the
-//! first — proves the reconstructor-purity contract end-to-end without
-//! touching `ProjectStore::mutate()` or the startup gate.
+//! first — proves the reconstructor-purity contract end-to-end and,
+//! since Slice B3, is also the first verb routed through
+//! `ProjectStore::mutate_via_verb`.
 //!
 //! ## What lives here vs. elsewhere
 //!
@@ -49,7 +51,7 @@ use serde_json::{Map, Value, json};
 use crate::project::Project;
 use crate::reconstructor::{RecordedEvent, VerbRegistry};
 use crate::verbs::project_set_metadata::{
-    ProjectSetMetadataArgs, ProjectSetMetadataReconstructor, compute_patch, data_envelope,
+    ProjectSetMetadataArgs, ProjectSetMetadataVerb, compute_patch, data_envelope,
 };
 
 pub mod project_set_metadata;
@@ -62,14 +64,14 @@ pub mod project_set_metadata;
 /// meaning.
 const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 
-/// The canonical set of verb reconstructors shipped by this engine
-/// build.
+/// The canonical set of verbs shipped by this engine build.
 ///
 /// Currently registers exactly one verb:
-/// [`ProjectSetMetadataReconstructor`] (§2.12). Subsequent verbs land
-/// here so every consumer that wants "the stock kernel verb set"
+/// [`ProjectSetMetadataVerb`] (§2.12). Subsequent verbs land here so
+/// every consumer that wants "the stock kernel verb set"
 /// ([`crate::lifecycle::ProjectStore::create_with_registry`] /
-/// [`crate::lifecycle::ProjectStore::open_with_registry`], the future
+/// [`crate::lifecycle::ProjectStore::open_with_registry`] /
+/// [`crate::lifecycle::ProjectStore::mutate_via_verb`], the future
 /// args-validator, etc.) picks them up automatically.
 ///
 /// Paired with [`default_fixtures`]: the two together clear the §0.8
@@ -84,12 +86,10 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 #[must_use]
 pub fn default_registry() -> VerbRegistry {
     let mut registry = VerbRegistry::new();
-    registry
-        .register(Arc::new(ProjectSetMetadataReconstructor))
-        .expect(
-            "ProjectSetMetadataReconstructor is the first registration in \
+    registry.register(Arc::new(ProjectSetMetadataVerb)).expect(
+        "ProjectSetMetadataVerb is the first registration in \
              default_registry(); cannot collide",
-        );
+    );
     registry
 }
 

@@ -127,7 +127,7 @@ use verbreel_types::ProjectId;
 
 use crate::invariants::{METADATA_MAX_BYTES, METADATA_MAX_KEYS};
 use crate::project::Project;
-use crate::reconstructor::{ReconstructError, VerbReconstructor};
+use crate::reconstructor::{ReconstructError, Verb, VerbError};
 
 /// Maximum entries allowed in `args.unset[]`. Mirrors
 /// `Project.metadata`'s [`METADATA_MAX_KEYS`] cap — the largest legal
@@ -396,21 +396,103 @@ pub fn data_envelope(
     }
 }
 
-/// The §0.8 reconstructor for `project.set_metadata`. Registered in a
-/// [`crate::VerbRegistry`] so the §0.8 startup gate
-/// ([`crate::validate_reconstructors`]) can exercise it against a
-/// recorded fixture and prove the verb is replay-deterministic.
-///
-/// Pure — deserializes `args` into [`ProjectSetMetadataArgs`], runs
-/// [`data_envelope`], serializes the result to `serde_json::Value`.
-/// No I/O, no clock, no RNG, no patch inspection, no warnings
-/// inspection.
-#[derive(Debug, Default)]
-pub struct ProjectSetMetadataReconstructor;
+/// Funnel [`ProjectSetMetadataError`] into the verb-layer
+/// [`VerbError`] taxonomy. Argument-shape errors map to
+/// [`VerbError::BadArgs`]; cap / §0.13-invariant errors map to
+/// [`VerbError::InvariantViolation`]. Used by
+/// [`<ProjectSetMetadataVerb as Verb>::compute_patch`] to propagate
+/// typed verb errors out of the kernel routing layer.
+impl From<ProjectSetMetadataError> for VerbError {
+    fn from(value: ProjectSetMetadataError) -> Self {
+        match value {
+            ProjectSetMetadataError::ArgsIncompatibleReplaceAndUnset
+            | ProjectSetMetadataError::ArgsIncompatibleNeitherMetadataNorUnset
+            | ProjectSetMetadataError::MetadataNotObject => VerbError::BadArgs {
+                detail: value.to_string(),
+            },
+            ProjectSetMetadataError::UnsetTooLong { .. }
+            | ProjectSetMetadataError::KeysOverCap { .. }
+            | ProjectSetMetadataError::BytesOverCap { .. } => VerbError::InvariantViolation {
+                detail: value.to_string(),
+            },
+        }
+    }
+}
 
-impl VerbReconstructor for ProjectSetMetadataReconstructor {
+/// The §0.8 verb for `project.set_metadata`. Registered in a
+/// [`crate::VerbRegistry`] so the §0.8 startup gate
+/// ([`crate::validate_reconstructors`]) can exercise its `reconstruct`
+/// path against a recorded fixture, and so
+/// [`crate::lifecycle::ProjectStore::mutate_via_verb`] can route
+/// forward calls through its `compute_patch` path.
+///
+/// Pure on both legs of the trait — no I/O, no clock, no RNG, no
+/// patch / warnings inspection during reconstruct. The forward leg
+/// (`compute_patch`) deserialises `args` into [`ProjectSetMetadataArgs`],
+/// calls the freestanding [`compute_patch`] helper, and converts the
+/// resulting `Value` patch into a typed [`json_patch::Patch`].
+///
+/// Slice B3 rename: was `ProjectSetMetadataReconstructor` in Slices B1
+/// / B2. The old name is kept as a `#[deprecated]` alias for one slice
+/// cycle to ease downstream migration.
+#[derive(Debug, Default)]
+pub struct ProjectSetMetadataVerb;
+
+/// Deprecated alias for [`ProjectSetMetadataVerb`] — kept for one slice
+/// cycle while downstream callers migrate to the new name.
+#[deprecated(since = "0.0.0", note = "use `ProjectSetMetadataVerb`")]
+pub use ProjectSetMetadataVerb as ProjectSetMetadataReconstructor;
+
+impl Verb for ProjectSetMetadataVerb {
     fn verb(&self) -> &'static str {
         "project.set_metadata"
+    }
+
+    fn compute_patch(
+        &self,
+        prior: &Project,
+        args: &Value,
+    ) -> Result<(json_patch::Patch, Value), VerbError> {
+        // Deserialize the raw JSON args into the typed struct. A serde
+        // failure here is a [`VerbError::BadArgs`] — the args payload
+        // is malformed (wrong shape, missing required fields, wrong
+        // types).
+        let typed: ProjectSetMetadataArgs =
+            serde_json::from_value(args.clone()).map_err(|e| VerbError::BadArgs {
+                detail: format!("project.set_metadata: args deserialize failed: {e}"),
+            })?;
+
+        // Run the freestanding compute_patch helper. Its typed error
+        // funnels through the From impl above.
+        let (patch_value, new_metadata) = compute_patch(prior, &typed)?;
+
+        // Convert the RFC 6902 patch from `serde_json::Value` to the
+        // typed `json_patch::Patch`. A failure here is a verb-author
+        // bug — `compute_patch` produces a well-formed op array by
+        // construction — so it surfaces as [`VerbError::Custom`].
+        let patch: json_patch::Patch = serde_json::from_value(patch_value).map_err(|e| {
+            VerbError::Custom(format!(
+                "project.set_metadata: patch construction failed: {e}"
+            ))
+        })?;
+
+        // Build the data envelope. `data_envelope` reads only
+        // `(args.project_id, post_state.metadata)`; we synthesise the
+        // post-state by cloning `prior` and overwriting `metadata`
+        // with the value the patch will install. This matches what
+        // `Project::apply(&patch)` would produce, but does not run the
+        // §0.13 post-apply checks — that's the kernel's job in
+        // `apply_write_ordering`.
+        let mut post_state = prior.clone();
+        post_state.metadata = new_metadata;
+        let envelope = data_envelope(&typed, &post_state);
+        let data = serde_json::to_value(&envelope).map_err(|e| {
+            VerbError::Custom(format!(
+                "project.set_metadata: data envelope serialize failed: {e}"
+            ))
+        })?;
+
+        Ok((patch, data))
     }
 
     fn reconstruct(

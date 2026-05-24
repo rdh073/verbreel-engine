@@ -74,8 +74,8 @@ use thiserror::Error;
 
 use crate::Project;
 
-/// A per-verb reconstructor: rebuilds the envelope `.data` field from a
-/// recorded event's 5-tuple `(verb, args, patch, warnings, post-state)`.
+/// A per-verb implementation: owns both the §0.8 forward path
+/// (`compute_patch`) and the replay path (`reconstruct`).
 ///
 /// Implementations MUST be **pure functions** of their inputs — no
 /// `randomUUID()`, no wall-clock reads, no filesystem I/O, no
@@ -86,12 +86,49 @@ use crate::Project;
 /// `Send + Sync + 'static` because the [`VerbRegistry`] stores trait
 /// objects behind [`Arc`] and the engine shares the registry across
 /// threads.
-pub trait VerbReconstructor: Send + Sync + 'static {
+///
+/// ## Slice B3 rename
+///
+/// Promoted from the original `VerbReconstructor` (Slice A/B1/B2 name)
+/// to `Verb` in Slice B3 because the trait now carries both legs of the
+/// §0.8 verb contract — `compute_patch` for the forward path and
+/// `reconstruct` for the replay path. The old name is kept as a
+/// `#[deprecated]` alias for one slice cycle to ease downstream
+/// migration.
+pub trait Verb: Send + Sync + 'static {
     /// Stable verb id (e.g. `"project.set_metadata"`).
     ///
     /// Returns `&'static str` so registration is static-string-keyed —
     /// no `String` allocation at lookup time.
     fn verb(&self) -> &'static str;
+
+    /// §0.8 forward path: given a pre-state and args, return the
+    /// RFC 6902 patch + the data envelope value that will become
+    /// the verb's `.data` response field.
+    ///
+    /// MUST be a pure function of `(prior, args)` — no I/O, no clock,
+    /// no RNG. The same `(prior, args)` MUST produce a
+    /// canonically-equal `(patch, data)` across runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VerbError`] when:
+    ///
+    /// - the supplied `args` are malformed for this verb (shape
+    ///   mismatch, mutually-exclusive flags, missing required fields)
+    ///   → [`VerbError::BadArgs`];
+    /// - the verb would violate a §0.13 engine invariant if the patch
+    ///   were applied (cap overflow, structural rule break) →
+    ///   [`VerbError::InvariantViolation`];
+    /// - a verb-specific failure mode that does not fit the structured
+    ///   variants — e.g. patch construction failed at the
+    ///   `Value`-to-`json_patch::Patch` conversion boundary →
+    ///   [`VerbError::Custom`].
+    fn compute_patch(
+        &self,
+        prior: &Project,
+        args: &Value,
+    ) -> Result<(json_patch::Patch, Value), VerbError>;
 
     /// Reconstruct the envelope `.data` field from the recorded 5-tuple.
     ///
@@ -114,7 +151,51 @@ pub trait VerbReconstructor: Send + Sync + 'static {
     ) -> Result<Value, ReconstructError>;
 }
 
-/// Failure modes a [`VerbReconstructor::reconstruct`] may report.
+/// Deprecated alias kept for one slice cycle to ease downstream
+/// migration. New code MUST use [`Verb`].
+#[deprecated(since = "0.0.0", note = "use `Verb` (renamed in Slice B3)")]
+pub use Verb as VerbReconstructor;
+
+/// Errors surfaced by [`Verb::compute_patch`].
+///
+/// Each variant maps onto the verb-layer envelope error taxonomy:
+///
+/// - [`VerbError::BadArgs`] → `E_ARGS_INCOMPATIBLE` / `E_SCHEMA_VIOLATION`
+///   (the args themselves are malformed: mutually-exclusive flags,
+///   missing required fields, wrong shape).
+/// - [`VerbError::InvariantViolation`] → `E_SCHEMA_VIOLATION` (the
+///   args are well-formed but the resulting patch would violate a
+///   §0.13 engine invariant — e.g. cap overflow, structural rule break).
+/// - [`VerbError::Custom`] → escape hatch for verb-specific failures
+///   that don't fit the structured variants (e.g. patch construction
+///   failed at the `Value`-to-`json_patch::Patch` conversion).
+#[derive(Debug, thiserror::Error)]
+pub enum VerbError {
+    /// The supplied args were malformed for this verb. Surfaces as
+    /// `E_ARGS_INCOMPATIBLE` / `E_SCHEMA_VIOLATION` at the verb-layer
+    /// envelope.
+    #[error("verb arguments invalid: {detail}")]
+    BadArgs {
+        /// Human-readable description of what was wrong with the args.
+        detail: String,
+    },
+
+    /// The args are well-formed but the resulting patch would violate
+    /// a §0.13 engine invariant. Surfaces as `E_SCHEMA_VIOLATION`.
+    #[error("§0.13 invariant would be violated: {detail}")]
+    InvariantViolation {
+        /// Human-readable description of which invariant would break.
+        detail: String,
+    },
+
+    /// Verb-specific failure that does not fit the structured variants
+    /// — e.g. patch construction failed at the `Value`-to-
+    /// `json_patch::Patch` conversion boundary.
+    #[error("verb-specific failure: {0}")]
+    Custom(String),
+}
+
+/// Failure modes a [`Verb::reconstruct`] may report.
 ///
 /// Every variant signals a **verb-author bug** discovered at the startup
 /// gate: the recorded event does not carry what the reconstructor needs
@@ -168,15 +249,23 @@ pub enum RegistryError {
     },
 }
 
-/// The registry of per-verb reconstructors.
+/// The registry of per-verb implementations.
 ///
 /// Keyed by `&'static str` verb id so lookups allocate nothing. Stores
 /// trait objects behind [`Arc`] so the engine can share the registry
 /// across threads and hand out cheap clones. Registration rejects
 /// duplicate verb ids ([`RegistryError::DuplicateVerb`]).
-#[derive(Default)]
+///
+/// Slice B3: the registry now stores `Arc<dyn Verb>` (was `Arc<dyn
+/// VerbReconstructor>`). The trait promotion means the same registry
+/// instance powers both the §0.8 startup gate
+/// ([`validate_reconstructors`] still calls `.reconstruct()`) and the
+/// runtime forward router
+/// ([`crate::lifecycle::ProjectStore::mutate_via_verb`] calls
+/// `.compute_patch()`). Single source of truth per verb.
+#[derive(Default, Clone)]
 pub struct VerbRegistry {
-    map: HashMap<&'static str, Arc<dyn VerbReconstructor>>,
+    map: HashMap<&'static str, Arc<dyn Verb>>,
 }
 
 impl VerbRegistry {
@@ -186,13 +275,13 @@ impl VerbRegistry {
         Self::default()
     }
 
-    /// Register a reconstructor under its [`VerbReconstructor::verb`] id.
+    /// Register a verb under its [`Verb::verb`] id.
     ///
     /// # Errors
     ///
-    /// [`RegistryError::DuplicateVerb`] if a reconstructor for the same
-    /// verb id is already registered.
-    pub fn register(&mut self, r: Arc<dyn VerbReconstructor>) -> Result<(), RegistryError> {
+    /// [`RegistryError::DuplicateVerb`] if a verb with the same id is
+    /// already registered.
+    pub fn register(&mut self, r: Arc<dyn Verb>) -> Result<(), RegistryError> {
         let verb = r.verb();
         if self.map.contains_key(verb) {
             return Err(RegistryError::DuplicateVerb { verb });
@@ -201,9 +290,9 @@ impl VerbRegistry {
         Ok(())
     }
 
-    /// Look up the reconstructor for `verb`, if registered.
+    /// Look up the verb for `verb`, if registered.
     #[must_use]
-    pub fn get(&self, verb: &str) -> Option<Arc<dyn VerbReconstructor>> {
+    pub fn get(&self, verb: &str) -> Option<Arc<dyn Verb>> {
         self.map.get(verb).cloned()
     }
 

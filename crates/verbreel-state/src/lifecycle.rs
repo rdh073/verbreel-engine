@@ -50,7 +50,9 @@ use verbreel_types::EventId;
 use crate::apply::ApplyError;
 use crate::idempotency::{IdempotencyIndex, LookupOutcome};
 use crate::project::Project;
-use crate::reconstructor::{RecordedEvent, ValidationError, VerbRegistry, validate_reconstructors};
+use crate::reconstructor::{
+    RecordedEvent, ValidationError, VerbError, VerbRegistry, validate_reconstructors,
+};
 
 // ---------------------------------------------------------------------
 // Errors
@@ -166,6 +168,29 @@ pub enum LifecycleError {
         #[from]
         source: ValidationError,
     },
+
+    /// [`ProjectStore::mutate_via_verb`] was called with a verb id that
+    /// is not registered in the store's [`VerbRegistry`]. Surfaces at
+    /// the kernel routing layer — verbs are looked up by id, and an
+    /// unknown id is a caller bug (or an empty / mis-built registry).
+    #[error("unknown verb: {verb_id}")]
+    UnknownVerb {
+        /// The verb id that failed lookup.
+        verb_id: String,
+    },
+
+    /// [`ProjectStore::mutate_via_verb`] looked the verb up successfully
+    /// but the verb's [`crate::reconstructor::Verb::compute_patch`]
+    /// returned an error (bad args, would-violate-§0.13 invariant, or
+    /// a verb-specific failure).
+    #[error("verb execution failed: verb={verb_id}: {source}")]
+    VerbExecutionFailed {
+        /// The verb id whose `compute_patch` failed.
+        verb_id: String,
+        /// The underlying verb-layer error.
+        #[source]
+        source: VerbError,
+    },
 }
 
 // ---------------------------------------------------------------------
@@ -190,7 +215,8 @@ pub struct SaveInfo {
 // MutateOutcome
 // ---------------------------------------------------------------------
 
-/// Result of a [`ProjectStore::mutate`] call.
+/// Result of a [`ProjectStore::mutate`] / [`ProjectStore::mutate_via_verb`]
+/// call.
 ///
 /// `Applied` is the first-call (or no-key) path — the patch was
 /// validated, written to events.jsonl, and applied to the in-memory
@@ -198,10 +224,26 @@ pub struct SaveInfo {
 /// args was already executed, no new event was written, and the
 /// in-memory project is unchanged from before the call.
 ///
-/// Replay envelope reconstruction (the `data` field of the original
-/// verb response) is deferred to the reconstructor-purity slice; for
-/// now the caller gets the `event_id` and can re-fetch the original
-/// event line from `events.jsonl` if it needs the args / patch.
+/// ## Slice B3: typed `data` envelope
+///
+/// Both variants now carry a `data: Value` field. For callers that
+/// route via [`ProjectStore::mutate_via_verb`], `data` is the verb's
+/// typed envelope — exactly the value the verb-layer wire response
+/// will set on `envelope.data`. For callers that use the raw
+/// [`ProjectStore::mutate`] tuple API, `data` is [`Value::Null`] —
+/// the raw API cannot infer typed data without going through the verb
+/// trait, which is the price of bypassing verb routing.
+///
+/// ## Replay-path caveat
+///
+/// On the [`MutateOutcome::Replayed`] path, the `data` field is
+/// currently the freshly-computed envelope from the duplicate call's
+/// `Verb::compute_patch` rather than a reconstruction of the original
+/// call's `data` from `events.jsonl`. True disk-based reconstruction
+/// requires an `events::read_by_id` API that does not exist yet; that
+/// is a separate slice. For the canonical happy path (same args ⇒ same
+/// patch ⇒ same envelope), this is functionally equivalent to disk
+/// replay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MutateOutcome {
     /// First call (or call without an `idempotency_key`). The patch was
@@ -209,6 +251,10 @@ pub enum MutateOutcome {
     Applied {
         /// Id of the event the call emitted.
         event_id: EventId,
+        /// The verb's typed envelope `.data` value. [`Value::Null`] when
+        /// the call came through the raw [`ProjectStore::mutate`] tuple
+        /// API (which cannot infer typed data).
+        data: Value,
     },
     /// Same-key + same-fingerprint replay. Nothing was written, nothing
     /// was applied. `event_id` is the id of the original first call's
@@ -216,6 +262,9 @@ pub enum MutateOutcome {
     Replayed {
         /// Id of the event the original first call emitted.
         event_id: EventId,
+        /// The verb's typed envelope `.data` value. See the
+        /// `Replayed` caveat on [`MutateOutcome`].
+        data: Value,
     },
 }
 
@@ -242,6 +291,26 @@ pub struct ProjectStore {
     /// the events.jsonl scan; updated in lockstep with each
     /// [`Self::mutate`] call that carries an `idempotency_key`.
     idempotency: IdempotencyIndex,
+    /// §0.8 verb registry — Slice B3.
+    ///
+    /// Same registry instance powers (a) the startup gate
+    /// ([`validate_reconstructors`] over `.reconstruct()`) and (b) the
+    /// runtime forward router ([`Self::mutate_via_verb`] over
+    /// `.compute_patch()`). Single source of truth per verb.
+    ///
+    /// **Frozen for the lifetime of the store**: the registry is
+    /// snapshotted at construction (`create_with_registry` /
+    /// `open_with_registry`) and never mutated afterwards. There is no
+    /// API surface to register a new verb on a live store — this
+    /// matches §0.8's "engine refuses to start with a misconfigured
+    /// registry" contract: the registry is per-engine-build, not
+    /// per-mutation.
+    ///
+    /// Construction via the un-registry-aware [`Self::create`] /
+    /// [`Self::open`] stores an empty registry; [`Self::mutate_via_verb`]
+    /// on an empty registry returns [`LifecycleError::UnknownVerb`] for
+    /// every verb id.
+    verbs: Arc<VerbRegistry>,
 }
 
 impl std::fmt::Debug for ProjectStore {
@@ -255,6 +324,7 @@ impl std::fmt::Debug for ProjectStore {
             .field("project_name", &self.project.name)
             .field("last_applied_event_id", &self.last_applied_event_id)
             .field("idempotency", &self.idempotency)
+            .field("verbs", &self.verbs.verbs())
             .finish_non_exhaustive()
     }
 }
@@ -344,6 +414,7 @@ impl ProjectStore {
             root,
             last_applied_event_id: None,
             idempotency: IdempotencyIndex::new(),
+            verbs: Arc::new(registry.clone()),
         };
         store.save()?;
         Ok(store)
@@ -473,6 +544,7 @@ impl ProjectStore {
             root,
             last_applied_event_id,
             idempotency,
+            verbs: Arc::new(registry.clone()),
         })
     }
 
@@ -533,16 +605,25 @@ impl ProjectStore {
         patch: &json_patch::Patch,
         idempotency_key: Option<String>,
     ) -> Result<MutateOutcome, LifecycleError> {
-        // Un-keyed path — preserves the PR #32 contract.
+        // Un-keyed path — preserves the PR #32 contract. The raw API
+        // cannot infer typed data, so `data` is filled with
+        // [`Value::Null`]; callers that need a typed envelope must
+        // route via [`Self::mutate_via_verb`].
         let Some(key) = idempotency_key else {
             let event_id = self.apply_write_ordering(verb, args, patch, None)?;
-            return Ok(MutateOutcome::Applied { event_id });
+            return Ok(MutateOutcome::Applied {
+                event_id,
+                data: Value::Null,
+            });
         };
 
         // Keyed path — fingerprint then dispatch via the index.
         let fingerprint = verbreel_canon::sha256_hex(&args)?;
         match self.idempotency.lookup(&key, &fingerprint) {
-            LookupOutcome::Completed { event_id } => Ok(MutateOutcome::Replayed { event_id }),
+            LookupOutcome::Completed { event_id } => Ok(MutateOutcome::Replayed {
+                event_id,
+                data: Value::Null,
+            }),
             LookupOutcome::InProgress => Err(LifecycleError::IdempotencyBusy { key }),
             LookupOutcome::ConflictingFingerprint {
                 existing_fingerprint,
@@ -570,7 +651,10 @@ impl ProjectStore {
                             // another caller raced in. Treat as a
                             // successful replay to keep the §0.8
                             // contract consistent.
-                            return Ok(MutateOutcome::Replayed { event_id });
+                            return Ok(MutateOutcome::Replayed {
+                                event_id,
+                                data: Value::Null,
+                            });
                         }
                     }
                 }
@@ -578,13 +662,102 @@ impl ProjectStore {
                 match self.apply_write_ordering(verb, args, patch, Some(key.clone())) {
                     Ok(event_id) => {
                         self.idempotency.complete(&key, event_id);
-                        Ok(MutateOutcome::Applied { event_id })
+                        Ok(MutateOutcome::Applied {
+                            event_id,
+                            data: Value::Null,
+                        })
                     }
                     Err(e) => {
                         self.idempotency.abort(&key);
                         Err(e)
                     }
                 }
+            }
+        }
+    }
+
+    /// Kernel-side verb routing (§0.8 forward path) — Slice B3.
+    ///
+    /// Given a verb id, raw JSON args, and an optional idempotency key,
+    /// this method:
+    ///
+    /// 1. Looks up `verb_id` in the store's [`VerbRegistry`]. Unknown
+    ///    id → [`LifecycleError::UnknownVerb`].
+    /// 2. Calls the verb's [`crate::reconstructor::Verb::compute_patch`]
+    ///    against the in-memory project + args. Failure →
+    ///    [`LifecycleError::VerbExecutionFailed`] with the underlying
+    ///    [`VerbError`] as `#[source]`.
+    /// 3. Delegates to [`Self::mutate`] for the §0.8 write-ordering
+    ///    (validate → fsync event → apply) and idempotency dedup,
+    ///    threading the verb-computed `data` envelope through the
+    ///    returned [`MutateOutcome`].
+    ///
+    /// ## When to use this vs. the raw [`Self::mutate`] API
+    ///
+    /// Prefer `mutate_via_verb` whenever the caller has a verb id —
+    /// the verb-trait routing is the §0.8 canonical forward path and
+    /// the only way to receive a typed `data` envelope on the
+    /// `MutateOutcome`. The raw [`Self::mutate`] tuple API is kept for
+    /// callers that pre-compute their own patch (kernel internals,
+    /// migration tooling); it is **purely additive** to keep
+    /// `mutate_via_verb` slim.
+    ///
+    /// ## Known gap: replay-path `data` reconstruction
+    ///
+    /// When this call hits the §0.8 idempotency replay path
+    /// (`MutateOutcome::Replayed`), the returned `data` is the freshly-
+    /// computed envelope from THIS call's `compute_patch` rather than
+    /// a reconstruction of the original call's `data` from the on-disk
+    /// `events.jsonl` line. For the canonical happy path (same args ⇒
+    /// same patch ⇒ same envelope) this is functionally equivalent,
+    /// but it is NOT the strict §0.8 "envelope reconstructed from the
+    /// recorded 5-tuple" contract. Disk-based reconstruction needs a
+    /// new `events::read_by_id(id)` API (no such API exists yet) and
+    /// is tracked as a follow-up slice.
+    ///
+    /// # Errors
+    ///
+    /// - [`LifecycleError::UnknownVerb`] — verb id not in registry.
+    /// - [`LifecycleError::VerbExecutionFailed`] — verb's
+    ///   `compute_patch` rejected the args (bad shape, cap violation,
+    ///   etc.).
+    /// - Everything [`Self::mutate`] can fail with — apply, IO,
+    ///   backend, idempotency-busy / -conflict / -canonicalize.
+    pub fn mutate_via_verb(
+        &mut self,
+        verb_id: &str,
+        args: Value,
+        idempotency_key: Option<String>,
+    ) -> Result<MutateOutcome, LifecycleError> {
+        // Step A: look up the verb.
+        let verb = self
+            .verbs
+            .get(verb_id)
+            .ok_or_else(|| LifecycleError::UnknownVerb {
+                verb_id: verb_id.to_string(),
+            })?;
+
+        // Step B: compute the patch + data envelope from the verb.
+        let (patch, data) = verb.compute_patch(&self.project, &args).map_err(|source| {
+            LifecycleError::VerbExecutionFailed {
+                verb_id: verb_id.to_string(),
+                source,
+            }
+        })?;
+
+        // Step C: delegate to the existing raw mutate() for §0.8
+        // write-ordering + idempotency. Then thread the typed `data`
+        // through the returned outcome.
+        match self.mutate(verb_id, args, &patch, idempotency_key)? {
+            MutateOutcome::Applied { event_id, data: _ } => {
+                Ok(MutateOutcome::Applied { event_id, data })
+            }
+            MutateOutcome::Replayed { event_id, data: _ } => {
+                // Known-gap: see method-level rustdoc — the `data`
+                // returned here is the duplicate-call's freshly-
+                // computed envelope, not a disk reconstruction of
+                // the original call's envelope.
+                Ok(MutateOutcome::Replayed { event_id, data })
             }
         }
     }
