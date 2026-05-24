@@ -194,6 +194,10 @@ define_id! {
     /// (§0.3, schema `Clip.link_group`).
     pub LinkGroupId
 }
+define_id! {
+    /// Effect ID — `UUIDv7` of an effect record (§0.3, schema `$defs/Effect`).
+    pub EffectId
+}
 
 #[cfg(test)]
 mod tests {
