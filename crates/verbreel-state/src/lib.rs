@@ -136,6 +136,7 @@ pub use verbs::marker_add::{
     DEFAULT_MARKER_COLOR, LABEL_MAX as MARKER_LABEL_MAX, MarkerAddArgs, MarkerAddData,
     MarkerAddError, MarkerAddVerb, NOTE_MAX as MARKER_NOTE_MAX,
 };
+pub use verbs::marker_set::{MarkerSetArgs, MarkerSetData, MarkerSetError, MarkerSetVerb};
 pub use verbs::project_rename::{
     PROJECT_NAME_MAX, PROJECT_NAME_MIN, ProjectRenameArgs, ProjectRenameData, ProjectRenameError,
     ProjectRenameVerb,
