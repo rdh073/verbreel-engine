@@ -11,6 +11,9 @@
 //! trait surface.
 
 use thiserror::Error;
+use verbreel_types::EventId;
+
+use crate::event::Event;
 
 /// Errors returned by backend operations.
 #[derive(Debug, Error)]
@@ -83,4 +86,67 @@ pub trait EventBackend: Send + Sync {
     fn is_empty(&self) -> Result<bool, BackendError> {
         Ok(self.len()? == 0)
     }
+
+    /// Read a single event by id. Walks [`Self::read_all`] and returns the
+    /// first event whose `id` matches. Returns `Ok(None)` if the id is not
+    /// present.
+    ///
+    /// This is a convenience for verb-layer replay where the caller knows the
+    /// event id (from an idempotency-index lookup) and needs the recorded
+    /// 5-tuple `(args, patch, warnings, post_state)` to reconstruct the
+    /// envelope `data` per §0.8.
+    ///
+    /// Default impl walks [`Self::read_all`] + parses lines + returns the
+    /// first match. Concrete backends MAY override with a more efficient
+    /// implementation (e.g. an in-memory index by id) but are not required to.
+    ///
+    /// # Errors
+    /// - [`BackendError::Io`] on read failure.
+    /// - [`BackendError::TornLine`] if a line in the log fails to parse —
+    ///   the caller is expected to run torn-line recovery the same way
+    ///   `project.open` does.
+    fn read_by_id(&self, id: &EventId) -> Result<Option<Event>, BackendError> {
+        let bytes = self.read_all()?;
+        for (offset, line) in line_offsets(&bytes) {
+            if line.is_empty() {
+                continue;
+            }
+            let event: Event =
+                serde_json::from_slice(line).map_err(|e| BackendError::TornLine {
+                    offset,
+                    detail: e.to_string(),
+                })?;
+            if &event.id == id {
+                return Ok(Some(event));
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Yields `(byte_offset, line_without_trailing_newline)` for each `\n`-
+/// terminated line in `bytes`. The final segment is yielded too if it has
+/// no terminator — callers decide whether to treat that as a torn line.
+fn line_offsets(bytes: &[u8]) -> impl Iterator<Item = (u64, &[u8])> {
+    let mut pos: usize = 0;
+    let total = bytes.len();
+    std::iter::from_fn(move || {
+        if pos >= total {
+            return None;
+        }
+        let rest = &bytes[pos..];
+        let line_offset = pos as u64;
+        if let Some(rel) = rest.iter().position(|&b| b == b'\n') {
+            let line = &bytes[pos..pos + rel];
+            pos += rel + 1;
+            Some((line_offset, line))
+        } else {
+            // Untruncated tail (no \n). Hand it to the caller — the
+            // default `read_by_id` body decides what to do with it
+            // (today: attempt parse, surface TornLine on failure).
+            let line = &bytes[pos..];
+            pos = total;
+            Some((line_offset, line))
+        }
+    })
 }

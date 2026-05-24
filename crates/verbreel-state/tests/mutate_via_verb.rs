@@ -10,12 +10,15 @@
 
 #![cfg(feature = "native")]
 
+use std::sync::Arc;
+
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 use verbreel_state::{
-    LifecycleError, MutateOutcome, Project, ProjectStore, VerbError, default_fixtures,
-    default_registry,
+    LifecycleError, MutateOutcome, Project, ProjectStore, ReconstructError, Verb, VerbError,
+    VerbRegistry, default_fixtures, default_registry,
 };
+use verbreel_types::EventId;
 
 const EMPTY_FIXTURE: &str = include_str!("fixtures/empty_project_create.json");
 
@@ -277,12 +280,12 @@ fn mutate_via_verb_idempotency_replays() {
         first_id, replay_id,
         "replay surfaces the original event id, not a fresh one"
     );
-    // The replay envelope (per the Slice B3 known-gap) is the freshly-
-    // computed value from this call's compute_patch — for `same args ⇒
-    // same envelope` it matches the original.
+    // §0.8 replay reconstructs `data` from the on-disk event line
+    // (see `mutate_via_verb`'s "Replay path semantics"). Same args +
+    // same patch + same warnings + same post-state ⇒ same envelope.
     assert_eq!(
         first_data, replay_data,
-        "replay envelope matches original (same args → same compute_patch output)"
+        "replay envelope matches original (reconstructed from disk via Verb::reconstruct)"
     );
 
     // Exactly one event line on disk (lock release on drop is
@@ -352,5 +355,273 @@ fn mutate_via_verb_idempotency_conflict() {
         store.project().metadata.get("author"),
         Some(&Value::String("alice".to_string())),
         "conflict must not mutate the project"
+    );
+}
+
+// ---------------------------------------------------------------------
+// Issue #63 — read_by_id + mutate_via_verb replay wiring
+// ---------------------------------------------------------------------
+
+/// Defensive: an idempotency-index `Completed { event_id }` whose id is
+/// absent from `events.jsonl` must surface as
+/// [`LifecycleError::ReplayEventMissing`] rather than silently
+/// fabricating an envelope.
+///
+/// Setup directly pokes the index via [`ProjectStore::idempotency`] —
+/// the public read-only handle exposes `start` + `complete`, which is
+/// enough to plant a phantom `Completed` entry pointing at a fresh
+/// `EventId::now()` (guaranteed not in the freshly-created log).
+#[test]
+fn replay_event_missing_returns_error() {
+    let dir = TempDir::new().unwrap();
+    let mut store = ProjectStore::create_with_registry(
+        dir.path(),
+        load_empty_project(),
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .unwrap();
+
+    // Args + matching fingerprint. The replay path runs `compute_patch`
+    // BEFORE delegating to `mutate()`, so the args must shape-validate
+    // against the verb — use the same metadata-set shape the other
+    // happy-path tests use.
+    let args = json!({
+        "project_id": FIXTURE_PROJECT_ID,
+        "metadata": { "author": "alice" },
+    });
+    let fingerprint = verbreel_canon::sha256_hex(&args).expect("args canonicalize");
+
+    // Plant a phantom Completed entry pointing at a synthetic event id
+    // that does NOT exist on disk.
+    let phantom_id = EventId::now();
+    store
+        .idempotency()
+        .start("missing-key".into(), fingerprint)
+        .expect("phantom start must succeed on empty index");
+    store.idempotency().complete("missing-key", phantom_id);
+
+    let err = store
+        .mutate_via_verb("project.set_metadata", args, Some("missing-key".into()))
+        .expect_err("replay against missing event must error");
+
+    match err {
+        LifecycleError::ReplayEventMissing { event_id } => {
+            assert_eq!(
+                event_id, phantom_id,
+                "error carries the phantom id we planted, not a fresh one"
+            );
+        }
+        other => panic!("expected ReplayEventMissing, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// Test-only verbs (Issue #63)
+// ---------------------------------------------------------------------
+
+/// `compute_patch` is a no-op (empty patch, null data). `reconstruct`
+/// always returns `Err(ReconstructError::Custom("test"))`.
+///
+/// Register **without** a fixture so the §0.8 startup gate passes
+/// vacuously for this verb — `validate_reconstructors` walks fixtures,
+/// not the registry (see `reconstructor.rs` module docs).
+struct BadReconstructVerb;
+
+impl Verb for BadReconstructVerb {
+    fn verb(&self) -> &'static str {
+        "test.bad_reconstruct"
+    }
+
+    fn compute_patch(
+        &self,
+        _prior: &Project,
+        _args: &Value,
+    ) -> Result<(json_patch::Patch, Value), VerbError> {
+        Ok((json_patch::Patch(Vec::new()), Value::Null))
+    }
+
+    fn reconstruct(
+        &self,
+        _args: &Value,
+        _patch: &Value,
+        _warnings: &[Value],
+        _post_state: &Project,
+    ) -> Result<Value, ReconstructError> {
+        Err(ReconstructError::Custom("test".into()))
+    }
+}
+
+/// `compute_patch` returns `{warnings_count: 0}` (compute time has no
+/// access to warnings). `reconstruct` returns `{warnings_count: N}`
+/// where N is the count of recorded warnings.
+///
+/// The difference between the two return values is the lever used by
+/// `replay_reads_disk_event` to prove the replay path reads the on-disk
+/// warnings vector rather than the duplicate call's freshly-computed
+/// envelope.
+struct WarningsCountVerb;
+
+impl Verb for WarningsCountVerb {
+    fn verb(&self) -> &'static str {
+        "test.warnings_count"
+    }
+
+    fn compute_patch(
+        &self,
+        _prior: &Project,
+        _args: &Value,
+    ) -> Result<(json_patch::Patch, Value), VerbError> {
+        Ok((
+            json_patch::Patch(Vec::new()),
+            json!({ "warnings_count": 0 }),
+        ))
+    }
+
+    fn reconstruct(
+        &self,
+        _args: &Value,
+        _patch: &Value,
+        warnings: &[Value],
+        _post_state: &Project,
+    ) -> Result<Value, ReconstructError> {
+        Ok(json!({ "warnings_count": warnings.len() }))
+    }
+}
+
+/// A reconstructor that errors at replay time must surface as
+/// [`LifecycleError::ReplayReconstructFailed`], with the verb id and
+/// event id threaded through and the underlying [`ReconstructError`]
+/// chained via `#[source]`.
+///
+/// Drives a custom registry with `BadReconstructVerb` registered (no
+/// fixture — gate passes vacuously per the module-doc rule that the
+/// validator walks fixtures, not the registry).
+#[test]
+fn replay_reconstruct_error_propagates() {
+    let dir = TempDir::new().unwrap();
+    let mut registry = VerbRegistry::new();
+    registry
+        .register(Arc::new(BadReconstructVerb))
+        .expect("register BadReconstructVerb");
+
+    let mut store =
+        ProjectStore::create_with_registry(dir.path(), load_empty_project(), &registry, &[])
+            .expect("create_with_registry with custom registry + no fixtures");
+
+    // First call: Applied (compute_patch is a no-op so the empty patch
+    // sails through apply()).
+    let args = json!({ "any": "args" });
+    let first = store
+        .mutate_via_verb("test.bad_reconstruct", args.clone(), Some("k".into()))
+        .expect("first keyed call must succeed");
+    let MutateOutcome::Applied { event_id, .. } = first else {
+        panic!("first call should be Applied, got {first:?}");
+    };
+
+    // Second call: replay path → read_by_id succeeds → reconstruct
+    // returns Err → ReplayReconstructFailed wraps it.
+    let err = store
+        .mutate_via_verb("test.bad_reconstruct", args, Some("k".into()))
+        .expect_err("replay must propagate the reconstruct error");
+
+    match err {
+        LifecycleError::ReplayReconstructFailed {
+            event_id: err_event_id,
+            verb_id,
+            source,
+        } => {
+            assert_eq!(
+                err_event_id, event_id,
+                "error carries the original event id, not a fresh one"
+            );
+            assert_eq!(verb_id, "test.bad_reconstruct");
+            match source {
+                ReconstructError::Custom(msg) => assert_eq!(msg, "test"),
+                other => panic!("expected ReconstructError::Custom, got {other:?}"),
+            }
+        }
+        other => panic!("expected ReplayReconstructFailed, got {other:?}"),
+    }
+}
+
+/// The replay path reconstructs `data` from the **on-disk** event line,
+/// not the duplicate call's freshly-computed `compute_patch` envelope.
+///
+/// Setup pre-seeds `events.jsonl` with a hand-crafted event carrying
+/// `warnings: [{"code":"W_TEST"}]` + `idempotency_key: "k1"` so the
+/// open-time index rebuild populates `Completed { event_id }` for the
+/// pre-seeded id. The store is then opened with `WarningsCountVerb`
+/// registered; calling `mutate_via_verb` with the same args + key fires
+/// the replay path.
+///
+/// Lever: `WarningsCountVerb::compute_patch` always returns
+/// `{warnings_count: 0}` (it never sees warnings), while
+/// `WarningsCountVerb::reconstruct` returns `{warnings_count: N}` based
+/// on the recorded `warnings` slice. Observing `{warnings_count: 1}` in
+/// the replay envelope proves the wiring reads `recorded.warnings`
+/// from disk rather than re-using compute-time data.
+#[test]
+fn replay_reads_disk_event() {
+    let dir = TempDir::new().unwrap();
+
+    // (1) Bootstrap the project root: project.json + .verbreel dir +
+    // hand-crafted events.jsonl line.
+    let project = load_empty_project();
+    let project_json = serde_json::to_vec_pretty(&project).unwrap();
+    std::fs::write(dir.path().join("project.json"), &project_json).unwrap();
+    let verbreel_dir = dir.path().join(".verbreel");
+    std::fs::create_dir_all(&verbreel_dir).unwrap();
+
+    // Hand-build the seeded event. Use Event::new + tweak the fields
+    // so the line shape matches what NativeBackend would have written.
+    let mut seeded = verbreel_events::Event::new(
+        "test.warnings_count",
+        json!({}),
+        json_patch::Patch(Vec::new()),
+    );
+    seeded.idempotency_key = Some("k1".into());
+    seeded.warnings = vec![json!({ "code": "W_TEST" })];
+    let seeded_id = seeded.id;
+    let seeded_line = serde_json::to_string(&seeded).unwrap();
+    std::fs::write(
+        verbreel_dir.join("events.jsonl"),
+        format!("{seeded_line}\n"),
+    )
+    .unwrap();
+
+    // (2) Open the store with WarningsCountVerb registered. The
+    // open-time replay applies the (empty) patch and the index rebuild
+    // populates `k1 → Completed { event_id: seeded_id }`.
+    let mut registry = VerbRegistry::new();
+    registry
+        .register(Arc::new(WarningsCountVerb))
+        .expect("register WarningsCountVerb");
+    let mut store = ProjectStore::open_with_registry(dir.path(), &registry, &[])
+        .expect("open_with_registry must succeed against pre-seeded layout");
+
+    // (3) Replay: same args + same key.
+    let outcome = store
+        .mutate_via_verb("test.warnings_count", json!({}), Some("k1".into()))
+        .expect("replay must succeed");
+
+    let MutateOutcome::Replayed { event_id, data } = outcome else {
+        panic!("expected Replayed (idempotency dedup), got {outcome:?}");
+    };
+
+    assert_eq!(
+        event_id, seeded_id,
+        "replay surfaces the pre-seeded event id"
+    );
+
+    // The lever: reconstruct produced `warnings_count: 1` because it
+    // saw the on-disk `warnings: [W_TEST]`. If the old code path were
+    // still in place, `data` would be the duplicate call's freshly-
+    // computed `{warnings_count: 0}` (compute_patch has no access to
+    // warnings).
+    assert_eq!(
+        data,
+        json!({ "warnings_count": 1 }),
+        "replay data must reflect the on-disk warnings slice, not compute_patch's empty default"
     );
 }
