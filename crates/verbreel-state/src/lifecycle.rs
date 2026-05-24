@@ -50,6 +50,7 @@ use verbreel_types::EventId;
 use crate::apply::ApplyError;
 use crate::idempotency::{IdempotencyIndex, LookupOutcome};
 use crate::project::Project;
+use crate::reconstructor::{RecordedEvent, ValidationError, VerbRegistry, validate_reconstructors};
 
 // ---------------------------------------------------------------------
 // Errors
@@ -152,6 +153,19 @@ pub enum LifecycleError {
     /// event got loaded during rebuild.
     #[error("idempotency fingerprint canonicalization failed: {0}")]
     IdempotencyCanonicalize(#[from] verbreel_canon::CanonError),
+
+    /// §0.8 reconstructor-purity startup gate refused to let the engine
+    /// open the project: a registered verb's reconstructor could not
+    /// round-trip its recorded fixture. Engine-wide config failure —
+    /// fires before any project IO so no project-specific state is
+    /// touched on the failing path.
+    #[error("reconstructor gate failed: {source}")]
+    ReconstructorGateFailed {
+        /// Underlying gate failure (unknown verb, reconstruct error,
+        /// data SHA mismatch, or canonicalization failure).
+        #[from]
+        source: ValidationError,
+    },
 }
 
 // ---------------------------------------------------------------------
@@ -254,6 +268,13 @@ impl ProjectStore {
     /// (acquires the exclusive lock), serializes `project` to
     /// `project.json` atomically.
     ///
+    /// Thin wrapper around [`Self::create_with_registry`] with an empty
+    /// [`VerbRegistry`] and no fixtures — the §0.8 reconstructor gate
+    /// passes vacuously (zero registered verbs → zero obligations).
+    /// Callers that want the gate's protection should construct via
+    /// [`Self::create_with_registry`] using
+    /// [`crate::default_registry`] + [`crate::default_fixtures`].
+    ///
     /// # Errors
     ///
     /// - [`LifecycleError::ProjectAlreadyExists`] — `project.json` exists.
@@ -262,6 +283,50 @@ impl ProjectStore {
     /// - [`LifecycleError::LockHeldByAnotherProcess`] — another process
     ///   holds the events.jsonl lock.
     pub fn create(root: impl AsRef<Path>, project: Project) -> Result<Self, LifecycleError> {
+        Self::create_with_registry(root, project, &VerbRegistry::new(), &[])
+    }
+
+    /// Create a fresh project on disk per §2.1 with the §0.8
+    /// reconstructor-purity startup gate enabled.
+    ///
+    /// **Step 0** (before any IO): runs [`validate_reconstructors`]
+    /// over `registry` + `fixtures`. If a fixture trips its verb's
+    /// reconstructor — unknown verb, reconstruct error, or `data` SHA
+    /// mismatch — returns
+    /// [`LifecycleError::ReconstructorGateFailed`] WITHOUT touching the
+    /// filesystem. This matches §0.8's "engine refuses to start with
+    /// that verb registered" contract: the gate is engine-wide config
+    /// validation, so no project-specific IO should leak through a
+    /// failing gate.
+    ///
+    /// On gate pass, proceeds with the same body as [`Self::create`].
+    ///
+    /// # Errors
+    ///
+    /// - [`LifecycleError::ReconstructorGateFailed`] — gate refused the
+    ///   registry/fixtures.
+    /// - [`LifecycleError::ProjectAlreadyExists`] — `project.json` exists.
+    /// - [`LifecycleError::Io`] — filesystem failure.
+    /// - [`LifecycleError::Backend`] — events.jsonl couldn't be opened.
+    /// - [`LifecycleError::LockHeldByAnotherProcess`] — another process
+    ///   holds the events.jsonl lock.
+    pub fn create_with_registry(
+        root: impl AsRef<Path>,
+        project: Project,
+        registry: &VerbRegistry,
+        fixtures: &[RecordedEvent],
+    ) -> Result<Self, LifecycleError> {
+        // Step 0: §0.8 reconstructor-purity gate. Runs BEFORE any IO so
+        // a misconfigured registry cannot leave half-created state on
+        // disk and so callers see the engine-wide config error before
+        // the project-specific one.
+        let report = validate_reconstructors(registry, fixtures)?;
+        tracing::info!(
+            verbs_checked = ?report.verbs_checked,
+            fixtures_run = report.fixtures_run,
+            "reconstructor gate passed"
+        );
+
         let root = root.as_ref().to_path_buf();
         let project_json = root.join("project.json");
         if project_json.exists() {
@@ -314,6 +379,50 @@ impl ProjectStore {
     /// - [`LifecycleError::Apply`] — a replayed patch failed (either
     ///   RFC 6902 op error or `TypeViolation`).
     pub fn open(root: impl AsRef<Path>) -> Result<Self, LifecycleError> {
+        Self::open_with_registry(root, &VerbRegistry::new(), &[])
+    }
+
+    /// Open a project from `<root>/project.json` per §2.2 with the §0.8
+    /// reconstructor-purity startup gate enabled.
+    ///
+    /// **Step 0** (before any IO): runs [`validate_reconstructors`]
+    /// over `registry` + `fixtures`. Same contract as
+    /// [`Self::create_with_registry`] — gate fires before the
+    /// `project.json` existence check, so a misconfigured registry
+    /// returns [`LifecycleError::ReconstructorGateFailed`] regardless
+    /// of whether the path holds a valid project. This makes the
+    /// engine-wide config error distinguishable from a missing-project
+    /// error.
+    ///
+    /// On gate pass, proceeds with the same body as [`Self::open`].
+    ///
+    /// # Errors
+    ///
+    /// - [`LifecycleError::ReconstructorGateFailed`] — gate refused the
+    ///   registry/fixtures.
+    /// - [`LifecycleError::NoProjectJson`] — no `project.json` at path.
+    /// - [`LifecycleError::SnapshotCorrupt`] — project.json doesn't
+    ///   deserialize.
+    /// - [`LifecycleError::Backend`] — backend open / read failed.
+    /// - [`LifecycleError::LockHeldByAnotherProcess`] — events.jsonl
+    ///   lock contention.
+    /// - [`LifecycleError::Apply`] — a replayed patch failed.
+    pub fn open_with_registry(
+        root: impl AsRef<Path>,
+        registry: &VerbRegistry,
+        fixtures: &[RecordedEvent],
+    ) -> Result<Self, LifecycleError> {
+        // Step 0: §0.8 reconstructor-purity gate. Runs BEFORE the
+        // project.json existence check so the engine-wide config error
+        // ([`LifecycleError::ReconstructorGateFailed`]) is
+        // distinguishable from [`LifecycleError::NoProjectJson`].
+        let report = validate_reconstructors(registry, fixtures)?;
+        tracing::info!(
+            verbs_checked = ?report.verbs_checked,
+            fixtures_run = report.fixtures_run,
+            "reconstructor gate passed"
+        );
+
         let root = root.as_ref().to_path_buf();
         let project_json = root.join("project.json");
         if !project_json.exists() {
