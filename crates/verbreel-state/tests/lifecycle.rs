@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 use verbreel_events::{Event, EventBackend, NativeBackend};
-use verbreel_state::{LifecycleError, Project, ProjectStore};
+use verbreel_state::{LifecycleError, MutateOutcome, Project, ProjectStore};
+use verbreel_types::EventId;
 
 const EMPTY_FIXTURE: &str = include_str!("fixtures/empty_project_create.json");
 
@@ -78,14 +79,19 @@ fn lifecycle_mutate_writes_event_line() {
     let mut store = ProjectStore::create(dir.path(), project).unwrap();
 
     let patch = replace_name_patch("after-mutate");
-    let p = store
+    let outcome = store
         .mutate(
             "project.set_name",
             serde_json::json!({"name":"after-mutate"}),
             &patch,
+            None,
         )
         .expect("mutate must succeed");
-    assert_eq!(p.name, "after-mutate");
+    assert!(
+        matches!(outcome, MutateOutcome::Applied { .. }),
+        "un-keyed mutate returns Applied, got {outcome:?}"
+    );
+    assert_eq!(store.project().name, "after-mutate");
 
     // events.jsonl now has exactly one line — read the file directly.
     drop(store); // release the lock so we can read normally
@@ -121,6 +127,7 @@ fn lifecycle_mutate_then_save_bumps_last_saved_event_id() {
             "project.set_name",
             serde_json::Value::Null,
             &replace_name_patch("after"),
+            None,
         )
         .unwrap();
     let applied = store.last_applied_event_id().expect("event applied");
@@ -149,6 +156,7 @@ fn lifecycle_open_replays_post_save_events() {
                 "project.set_name",
                 serde_json::Value::Null,
                 &replace_name_patch("first"),
+                None,
             )
             .unwrap();
         store.save().unwrap();
@@ -197,6 +205,7 @@ fn lifecycle_open_recovers_torn_last_line() {
                 "project.set_name",
                 serde_json::Value::Null,
                 &replace_name_patch("ok"),
+                None,
             )
             .unwrap();
         store.save().unwrap();
@@ -331,6 +340,212 @@ fn event_line_is_one_line_no_embedded_newlines() {
     // newlines.
     let back: Event = serde_json::from_str(&s).unwrap();
     assert_eq!(back, ev);
+}
+
+#[test]
+fn lifecycle_mutate_with_key_first_call_applied() {
+    // First call with an idempotency_key — runs the full write-ordering
+    // path, returns Applied { event_id }, and the index now has one
+    // Completed entry.
+    let dir = TempDir::new().unwrap();
+    let mut store = ProjectStore::create(dir.path(), load_empty_project()).unwrap();
+
+    let args = serde_json::json!({"name":"renamed-via-idem"});
+    let patch = replace_name_patch("renamed-via-idem");
+    let outcome = store
+        .mutate("project.set_name", args.clone(), &patch, Some("k1".into()))
+        .expect("first keyed call must succeed");
+
+    let event_id = match outcome {
+        MutateOutcome::Applied { event_id } => event_id,
+        other => panic!("first call should be Applied, got {other:?}"),
+    };
+    assert_eq!(store.project().name, "renamed-via-idem");
+    assert_eq!(store.last_applied_event_id(), Some(event_id));
+
+    // Index has the entry under "k1" with the correct fingerprint.
+    let fp = verbreel_canon::sha256_hex(&args).unwrap();
+    assert_eq!(
+        store.idempotency().lookup("k1", &fp),
+        verbreel_state::LookupOutcome::Completed { event_id }
+    );
+}
+
+#[test]
+fn lifecycle_mutate_with_key_replay_returns_replayed_outcome() {
+    // Same key + same args twice → second call returns Replayed without
+    // writing a second event. events.jsonl still has exactly one line.
+    let dir = TempDir::new().unwrap();
+    let mut store = ProjectStore::create(dir.path(), load_empty_project()).unwrap();
+
+    let args = serde_json::json!({"name":"v1"});
+    let patch = replace_name_patch("v1");
+
+    let first = store
+        .mutate("project.set_name", args.clone(), &patch, Some("dup".into()))
+        .expect("first call");
+    let MutateOutcome::Applied { event_id: first_id } = first else {
+        panic!("first call should be Applied, got {first:?}");
+    };
+
+    let second = store
+        .mutate("project.set_name", args, &patch, Some("dup".into()))
+        .expect("second (replay) call");
+    let MutateOutcome::Replayed {
+        event_id: replay_id,
+    } = second
+    else {
+        panic!("second call should be Replayed, got {second:?}");
+    };
+    assert_eq!(
+        first_id, replay_id,
+        "replay returns the original event id, not a fresh one"
+    );
+
+    // Exactly one event line on disk.
+    drop(store);
+    let events_path = dir.path().join(".verbreel").join("events.jsonl");
+    let bytes = fs::read(&events_path).unwrap();
+    let lines: Vec<&[u8]> = bytes
+        .split(|&b| b == b'\n')
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines.len(), 1, "replay must not write a second event line");
+    let ev: Event = serde_json::from_slice(lines[0]).expect("event parses");
+    assert_eq!(ev.idempotency_key.as_deref(), Some("dup"));
+    assert_eq!(ev.id, first_id);
+}
+
+#[test]
+fn lifecycle_mutate_with_key_conflict_returns_error() {
+    // Same key + DIFFERENT args → IdempotencyConflict, no second event
+    // written, in-memory project unchanged.
+    let dir = TempDir::new().unwrap();
+    let mut store = ProjectStore::create(dir.path(), load_empty_project()).unwrap();
+
+    store
+        .mutate(
+            "project.set_name",
+            serde_json::json!({"name":"first"}),
+            &replace_name_patch("first"),
+            Some("conflict-key".into()),
+        )
+        .expect("first call");
+    assert_eq!(store.project().name, "first");
+
+    let err = store
+        .mutate(
+            "project.set_name",
+            serde_json::json!({"name":"second"}),
+            &replace_name_patch("second"),
+            Some("conflict-key".into()),
+        )
+        .expect_err("differing args must conflict");
+
+    match err {
+        LifecycleError::IdempotencyConflict {
+            key,
+            existing_fingerprint,
+        } => {
+            assert_eq!(key, "conflict-key");
+            let fp_first =
+                verbreel_canon::sha256_hex(&serde_json::json!({"name":"first"})).unwrap();
+            assert_eq!(existing_fingerprint, fp_first);
+        }
+        other => panic!("expected IdempotencyConflict, got {other:?}"),
+    }
+
+    // Project was not re-renamed; event log still has exactly one line.
+    assert_eq!(store.project().name, "first");
+    drop(store);
+    let bytes = fs::read(dir.path().join(".verbreel").join("events.jsonl")).unwrap();
+    let lines: Vec<&[u8]> = bytes
+        .split(|&b| b == b'\n')
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines.len(), 1, "conflict must not write a second event");
+}
+
+#[test]
+fn lifecycle_mutate_without_key_skips_dedup() {
+    // Two calls without an idempotency_key — both run the full
+    // write-ordering and emit independent events. The dedup index
+    // stays empty.
+    let dir = TempDir::new().unwrap();
+    let mut store = ProjectStore::create(dir.path(), load_empty_project()).unwrap();
+
+    let outcome_one = store
+        .mutate(
+            "project.set_name",
+            serde_json::Value::Null,
+            &replace_name_patch("one"),
+            None,
+        )
+        .unwrap();
+    sleep(Duration::from_millis(2)); // guarantee distinct EventId v7s
+    let outcome_two = store
+        .mutate(
+            "project.set_name",
+            serde_json::Value::Null,
+            &replace_name_patch("two"),
+            None,
+        )
+        .unwrap();
+    let MutateOutcome::Applied { event_id: id_one } = outcome_one else {
+        panic!("first un-keyed call should be Applied");
+    };
+    let MutateOutcome::Applied { event_id: id_two } = outcome_two else {
+        panic!("second un-keyed call should be Applied");
+    };
+    assert_ne!(id_one, id_two, "two un-keyed calls produce two events");
+
+    assert!(
+        store.idempotency().is_empty(),
+        "un-keyed calls must not touch the dedup index"
+    );
+
+    drop(store);
+    let bytes = fs::read(dir.path().join(".verbreel").join("events.jsonl")).unwrap();
+    let lines: Vec<&[u8]> = bytes
+        .split(|&b| b == b'\n')
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines.len(), 2, "two un-keyed mutations → two event lines");
+}
+
+#[test]
+fn lifecycle_open_rebuilds_index_from_events() {
+    // Round-trip: create + keyed mutate + drop, then re-open and
+    // verify the dedup index sees the prior call.
+    let dir = TempDir::new().unwrap();
+    let args = serde_json::json!({"name":"persisted"});
+    let original_event_id: EventId;
+    {
+        let mut store = ProjectStore::create(dir.path(), load_empty_project()).unwrap();
+        let outcome = store
+            .mutate(
+                "project.set_name",
+                args.clone(),
+                &replace_name_patch("persisted"),
+                Some("persisted-key".into()),
+            )
+            .unwrap();
+        let MutateOutcome::Applied { event_id } = outcome else {
+            panic!("first call should be Applied");
+        };
+        original_event_id = event_id;
+        store.save().unwrap();
+    }
+
+    let reopened = ProjectStore::open(dir.path()).expect("reopen");
+    let fp = verbreel_canon::sha256_hex(&args).unwrap();
+    assert_eq!(
+        reopened.idempotency().lookup("persisted-key", &fp),
+        verbreel_state::LookupOutcome::Completed {
+            event_id: original_event_id
+        },
+        "index rebuild from events.jsonl preserves keyed events across reopen"
+    );
 }
 
 #[test]

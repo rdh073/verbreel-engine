@@ -22,6 +22,12 @@ native = ["verbreel-events/native"]
 verbreel-types = { path = "../verbreel-types" }
 verbreel-args = { path = "../verbreel-args" }
 verbreel-events = { path = "../verbreel-events", default-features = false }
+# Phase 2 idempotency-dedup-index slice (#53): the in-memory dedup
+# index fingerprints verb args via `sha256_hex(canonicalize(args))`.
+# verbreel-canon was previously a dev-dep only (for the project_hash
+# round-trip test); promoting it to a runtime dep so the kernel can
+# compute fingerprints at `ProjectStore::mutate` time.
+verbreel-canon = { path = "../verbreel-canon" }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
@@ -44,11 +50,6 @@ tempfile.workspace = true
 #     canonical `spec/project-schema.json`. NOT a runtime dep — production
 #     validation goes through serde struct decoding + §0.13 invariant
 #     checks at the `project.open` boundary later.
-#   - `verbreel-canon` is used by `tests/project_hash.rs` to lock the
-#     `project_hash` field-projection contract through the typed shape.
-#     NOT a runtime dep of state — only `project.open` / `project.save`
-#     verbs use canon, and those land in follow-up slices.
 [dev-dependencies]
 jsonschema     = { workspace = true }
 serde_json.workspace = true
-verbreel-canon = { path = "../verbreel-canon" }

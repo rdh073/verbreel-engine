@@ -48,6 +48,7 @@ use verbreel_events::{BackendError, Event, EventBackend, NativeBackend};
 use verbreel_types::EventId;
 
 use crate::apply::ApplyError;
+use crate::idempotency::{IdempotencyIndex, LookupOutcome};
 use crate::project::Project;
 
 // ---------------------------------------------------------------------
@@ -117,6 +118,40 @@ pub enum LifecycleError {
     /// — refuse to overwrite per the §2.1 contract.
     #[error("project.json already exists; refusing to overwrite")]
     ProjectAlreadyExists,
+
+    /// Mutating verb called with an `idempotency_key` whose slot is
+    /// currently `in_progress` (a concurrent in-flight call holds it).
+    /// Per §0.8 this maps to the verb-layer `E_BUSY` envelope with
+    /// `details.idempotency_state = "in_progress"`.
+    #[error("idempotency key {key:?} is in_progress; retry after the holder completes")]
+    IdempotencyBusy {
+        /// Key that's currently `in_progress`.
+        key: String,
+    },
+
+    /// Mutating verb called with the same `idempotency_key` as a prior
+    /// completed call but **different** args (different fingerprint).
+    /// Per §0.8 this maps to the verb-layer `E_IDEMPOTENCY_CONFLICT`
+    /// envelope.
+    #[error(
+        "idempotency key {key:?} reused with a different args fingerprint \
+         (existing: {existing_fingerprint})"
+    )]
+    IdempotencyConflict {
+        /// The key whose fingerprint changed between calls.
+        key: String,
+        /// Hex-encoded SHA-256 fingerprint of the *original* call's args.
+        existing_fingerprint: String,
+    },
+
+    /// `verbreel-canon` could not canonicalize the verb args for the
+    /// idempotency fingerprint computation. Surfaced as a typed error
+    /// instead of a panic because well-formed args from the verb-layer
+    /// will always canonicalize — hitting this means either the caller
+    /// snuck a `NaN` / `±Infinity` into `args` or a malformed historical
+    /// event got loaded during rebuild.
+    #[error("idempotency fingerprint canonicalization failed: {0}")]
+    IdempotencyCanonicalize(#[from] verbreel_canon::CanonError),
 }
 
 // ---------------------------------------------------------------------
@@ -138,6 +173,39 @@ pub struct SaveInfo {
 }
 
 // ---------------------------------------------------------------------
+// MutateOutcome
+// ---------------------------------------------------------------------
+
+/// Result of a [`ProjectStore::mutate`] call.
+///
+/// `Applied` is the first-call (or no-key) path — the patch was
+/// validated, written to events.jsonl, and applied to the in-memory
+/// project. `Replayed` is the §0.8 dedup path — the same key + same
+/// args was already executed, no new event was written, and the
+/// in-memory project is unchanged from before the call.
+///
+/// Replay envelope reconstruction (the `data` field of the original
+/// verb response) is deferred to the reconstructor-purity slice; for
+/// now the caller gets the `event_id` and can re-fetch the original
+/// event line from `events.jsonl` if it needs the args / patch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MutateOutcome {
+    /// First call (or call without an `idempotency_key`). The patch was
+    /// written to events.jsonl and applied in memory.
+    Applied {
+        /// Id of the event the call emitted.
+        event_id: EventId,
+    },
+    /// Same-key + same-fingerprint replay. Nothing was written, nothing
+    /// was applied. `event_id` is the id of the original first call's
+    /// event — re-fetch from events.jsonl for the original args / patch.
+    Replayed {
+        /// Id of the event the original first call emitted.
+        event_id: EventId,
+    },
+}
+
+// ---------------------------------------------------------------------
 // ProjectStore
 // ---------------------------------------------------------------------
 
@@ -156,6 +224,10 @@ pub struct ProjectStore {
     /// Id of the most recently applied event. Used by [`Self::save`]
     /// to update `Project.last_saved_event_id`.
     last_applied_event_id: Option<EventId>,
+    /// §0.8 idempotency dedup index. Rebuilt on [`Self::open`] from
+    /// the events.jsonl scan; updated in lockstep with each
+    /// [`Self::mutate`] call that carries an `idempotency_key`.
+    idempotency: IdempotencyIndex,
 }
 
 impl std::fmt::Debug for ProjectStore {
@@ -168,6 +240,7 @@ impl std::fmt::Debug for ProjectStore {
             .field("project_id", &self.project.id)
             .field("project_name", &self.project.name)
             .field("last_applied_event_id", &self.last_applied_event_id)
+            .field("idempotency", &self.idempotency)
             .finish_non_exhaustive()
     }
 }
@@ -205,6 +278,7 @@ impl ProjectStore {
             backend: Arc::new(backend),
             root,
             last_applied_event_id: None,
+            idempotency: IdempotencyIndex::new(),
         };
         store.save()?;
         Ok(store)
@@ -262,7 +336,7 @@ impl ProjectStore {
 
         let last_saved = project.last_saved_event_id;
         let mut last_applied_event_id = last_saved;
-        for ev in events {
+        for ev in &events {
             // §0.3 says UUIDv7 strings are time-sortable byte-wise.
             // Filter events strictly newer than the snapshot's
             // last_saved_event_id.
@@ -277,17 +351,28 @@ impl ProjectStore {
             last_applied_event_id = Some(ev.id);
         }
 
+        // Rebuild the §0.8 idempotency index from the full events
+        // history (not just the post-snapshot tail): same-key retries
+        // that crossed a save still need to dedup. Last write wins —
+        // matches the events.jsonl "source of truth" contract.
+        let idempotency = IdempotencyIndex::new();
+        idempotency.rebuild_from_events(&events);
+
         Ok(ProjectStore {
             project,
             backend: Arc::new(backend),
             root,
             last_applied_event_id,
+            idempotency,
         })
     }
 
     /// §0.8 write-ordering: validate patch → fsync event → apply.
+    /// Optionally routes the call through the in-memory dedup index
+    /// when `idempotency_key` is `Some`.
     ///
-    /// Algorithm:
+    /// Algorithm when `idempotency_key` is `None` (legacy / un-keyed
+    /// path — behaviour unchanged from PR #32):
     /// 1. Validate by `self.project.clone().apply(&patch)` — surfaces
     ///    any [`ApplyError`] without touching the real in-memory state.
     /// 2. Build the [`Event`] (id = `EventId::now()`, ts = now), serialize
@@ -299,23 +384,118 @@ impl ProjectStore {
     ///    it cleanly. This is the §0.8 contract working as designed.
     /// 4. Update `last_applied_event_id` so the next `save()` can
     ///    refresh `Project.last_saved_event_id`.
+    /// 5. Return [`MutateOutcome::Applied`].
+    ///
+    /// Algorithm when `idempotency_key` is `Some`:
+    /// 0a. Compute `fingerprint = sha256_hex(canonicalize(args))` via
+    ///     [`verbreel_canon`].
+    /// 0b. Call [`IdempotencyIndex::lookup`]:
+    ///     - [`LookupOutcome::Absent`] / [`LookupOutcome::Expired`]:
+    ///       reserve the slot with [`IdempotencyIndex::start`] then
+    ///       run the un-keyed algorithm. On success, transition the
+    ///       slot to [`crate::idempotency::EntryState::Completed`] via
+    ///       [`IdempotencyIndex::complete`] and tag the event line with
+    ///       the key. On failure, release the slot with
+    ///       [`IdempotencyIndex::abort`].
+    ///     - [`LookupOutcome::InProgress`]: return
+    ///       [`LifecycleError::IdempotencyBusy`].
+    ///     - [`LookupOutcome::Completed { event_id }`]: return
+    ///       [`MutateOutcome::Replayed { event_id }`] — no event
+    ///       written, no patch applied.
+    ///     - [`LookupOutcome::ConflictingFingerprint`]: return
+    ///       [`LifecycleError::IdempotencyConflict`].
     ///
     /// # Errors
     ///
     /// - [`LifecycleError::Apply`] — patch validation or replay failed.
     /// - [`LifecycleError::Io`] — event serialization or append failed.
     /// - [`LifecycleError::Backend`] — backend fsync failed.
+    /// - [`LifecycleError::IdempotencyBusy`] — keyed call collided with
+    ///   an in-flight first call.
+    /// - [`LifecycleError::IdempotencyConflict`] — keyed call reused a
+    ///   key with a different args fingerprint.
+    /// - [`LifecycleError::IdempotencyCanonicalize`] — fingerprint
+    ///   computation failed (caller-supplied args contained
+    ///   `NaN`/`±Infinity` or otherwise broke canonical JSON rules).
     pub fn mutate(
         &mut self,
         verb: &str,
         args: Value,
         patch: &json_patch::Patch,
-    ) -> Result<&Project, LifecycleError> {
+        idempotency_key: Option<String>,
+    ) -> Result<MutateOutcome, LifecycleError> {
+        // Un-keyed path — preserves the PR #32 contract.
+        let Some(key) = idempotency_key else {
+            let event_id = self.apply_write_ordering(verb, args, patch, None)?;
+            return Ok(MutateOutcome::Applied { event_id });
+        };
+
+        // Keyed path — fingerprint then dispatch via the index.
+        let fingerprint = verbreel_canon::sha256_hex(&args)?;
+        match self.idempotency.lookup(&key, &fingerprint) {
+            LookupOutcome::Completed { event_id } => Ok(MutateOutcome::Replayed { event_id }),
+            LookupOutcome::InProgress => Err(LifecycleError::IdempotencyBusy { key }),
+            LookupOutcome::ConflictingFingerprint {
+                existing_fingerprint,
+            } => Err(LifecycleError::IdempotencyConflict {
+                key,
+                existing_fingerprint,
+            }),
+            LookupOutcome::Absent | LookupOutcome::Expired => {
+                // First-call (or aged-out) path — reserve the slot,
+                // run write-ordering, transition to Completed on
+                // success, abort the reservation on failure.
+                //
+                // start() can still return AlreadyExists if a
+                // concurrent caller raced us between the lookup and
+                // the insert — convert it to the typed error variant
+                // that matches its current state.
+                if let Err(err) = self.idempotency.start(key.clone(), fingerprint) {
+                    match err.existing_state {
+                        crate::idempotency::EntryState::InProgress => {
+                            return Err(LifecycleError::IdempotencyBusy { key: err.key });
+                        }
+                        crate::idempotency::EntryState::Completed { event_id } => {
+                            // Lookup said Absent/Expired but start()
+                            // saw a Completed — only possible if
+                            // another caller raced in. Treat as a
+                            // successful replay to keep the §0.8
+                            // contract consistent.
+                            return Ok(MutateOutcome::Replayed { event_id });
+                        }
+                    }
+                }
+
+                match self.apply_write_ordering(verb, args, patch, Some(key.clone())) {
+                    Ok(event_id) => {
+                        self.idempotency.complete(&key, event_id);
+                        Ok(MutateOutcome::Applied { event_id })
+                    }
+                    Err(e) => {
+                        self.idempotency.abort(&key);
+                        Err(e)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Steps 1-3 of §0.8 write-ordering. Shared between the keyed and
+    /// un-keyed [`Self::mutate`] paths. Returns the event id on
+    /// success.
+    fn apply_write_ordering(
+        &mut self,
+        verb: &str,
+        args: Value,
+        patch: &json_patch::Patch,
+        idempotency_key: Option<String>,
+    ) -> Result<EventId, LifecycleError> {
         // Step 1: validate without touching real state.
         let _candidate = self.project.apply(patch)?;
 
         // Step 2: build and durably write the event.
-        let event = Event::new(verb, args, patch.clone());
+        let mut event = Event::new(verb, args, patch.clone());
+        event.idempotency_key = idempotency_key;
         let event_id = event.id;
         let line = serde_json::to_string(&event).map_err(|e| {
             LifecycleError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
@@ -326,7 +506,7 @@ impl ProjectStore {
         self.project = self.project.apply(patch)?;
         self.last_applied_event_id = Some(event_id);
 
-        Ok(&self.project)
+        Ok(event_id)
     }
 
     /// §2.3 `project.save`: atomic write of in-memory project to
@@ -391,6 +571,15 @@ impl ProjectStore {
     #[must_use]
     pub fn last_applied_event_id(&self) -> Option<EventId> {
         self.last_applied_event_id
+    }
+
+    /// Read-only handle on the §0.8 idempotency dedup index. Exposed
+    /// so callers can drive [`IdempotencyIndex::evict_expired`] on a
+    /// schedule and inspect the index in tests; mutation of the index
+    /// happens transparently inside [`Self::mutate`].
+    #[must_use]
+    pub fn idempotency(&self) -> &IdempotencyIndex {
+        &self.idempotency
     }
 }
 

@@ -71,6 +71,7 @@ pub mod asset_meta;
 pub mod canvas;
 pub mod clip;
 pub mod effect;
+pub mod idempotency;
 pub mod invariants;
 pub mod keyframe;
 #[cfg(feature = "native")]
@@ -95,6 +96,10 @@ pub use clip::{BlendMode, Clip, ClipMask, FadeCurve, MaskKind, SpeedCurvePoint};
 pub use effect::{
     Effect, EffectKind, EffectNewtypeError, EffectWindow, EffectWindowDependencyError,
 };
+pub use idempotency::{
+    AlreadyExists, Clock, DEFAULT_STALE_IN_PROGRESS, DEFAULT_TTL, Entry, EntryState,
+    IdempotencyIndex, LookupOutcome, MockClock, SystemClock,
+};
 pub use invariants::{
     AssetIdState, EFFECT_PARAMS_MAX_BYTES, EFFECT_PARAMS_MAX_KEYS, InvariantViolation,
     METADATA_MAX_BYTES, METADATA_MAX_KEYS, MaskParamsError, SourceInTkKind, check_asset_existence,
@@ -107,7 +112,7 @@ pub use invariants::{
 };
 pub use keyframe::{Easing, Keyframe, KeyframeNewtypeError, KeyframeProperty};
 #[cfg(feature = "native")]
-pub use lifecycle::{LifecycleError, ProjectStore, SaveInfo};
+pub use lifecycle::{LifecycleError, MutateOutcome, ProjectStore, SaveInfo};
 pub use marker::Marker;
 pub use newtypes::{AssetNewtypeError, AssetPath, AssetRef, Color, Sha256};
 pub use project::{Project, SCHEMA_VERSION};
