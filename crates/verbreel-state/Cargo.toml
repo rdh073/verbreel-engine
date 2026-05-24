@@ -33,6 +33,10 @@ jsonptr.workspace = true
 # AssetPath, AssetRef. Patterns mirror `spec/project-schema.json`
 # `$defs/Sha256` / `$defs/AssetPath` / `$defs/AssetRef`.
 regex.workspace = true
+# Phase 2 events-integration (#31): ProjectStore lifecycle uses
+# `tempfile + rename + parent-dir fsync` for the atomic project.json
+# write per §2.3.
+tempfile.workspace = true
 
 # Dev-dependencies:
 #   - `jsonschema` is used by `tests/schema_validation.rs` to lock the

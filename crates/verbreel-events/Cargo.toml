@@ -24,6 +24,13 @@ serde_json.workspace = true
 uuid.workspace       = true
 thiserror.workspace  = true
 tracing.workspace    = true
+# Phase 2 (#31): Event now carries the RFC 6902 patch inline per
+# Appendix C minimal-but-real shape. json-patch is target-agnostic
+# (works on both native and wasm32 builds).
+json-patch.workspace = true
+# Phase 2 (#31): replace the broken std-only `format_unix_secs` placeholder
+# with `time::OffsetDateTime` RFC 3339 formatting.
+time.workspace       = true
 
 # Native-backend deps — gated by `native` feature.
 fs4         = { workspace = true, optional = true }

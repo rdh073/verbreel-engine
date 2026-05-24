@@ -63,6 +63,10 @@ fs4           = { version = "1" }
 tempfile      = { version = "3" }
 parking_lot   = { version = "0.12" }
 
+# Time formatting — RFC 3339 for events.jsonl `ts` field per Appendix C.
+# `formatting` + `parsing` features cover the round-trip path.
+time          = { version = "0.3", features = ["formatting", "parsing"] }
+
 # JSON patch/pointer
 jsonptr       = { version = "0.7" }
 json-patch    = { version = "4" }
