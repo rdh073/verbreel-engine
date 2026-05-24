@@ -106,6 +106,7 @@ impl Drop for NativeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::Event;
     use tempfile::tempdir;
 
     #[test]
@@ -131,5 +132,90 @@ mod tests {
         assert_eq!(be.len().unwrap(), 6);
         be.truncate(4).unwrap();
         assert_eq!(be.len().unwrap(), 4);
+    }
+
+    fn write_event(be: &NativeBackend, ev: &Event) {
+        let line = serde_json::to_string(ev).unwrap();
+        be.append(line.as_bytes()).unwrap();
+    }
+
+    fn fresh_event(verb: &str) -> Event {
+        Event::new(verb, serde_json::json!({}), json_patch::Patch(Vec::new()))
+    }
+
+    #[test]
+    fn read_by_id_returns_event_when_present() {
+        // Append 3 events; read_by_id on the middle one returns it.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let be = NativeBackend::open(&path).unwrap();
+
+        let e1 = fresh_event("clip.add");
+        let e2 = fresh_event("clip.remove");
+        let e3 = fresh_event("project.set_metadata");
+        write_event(&be, &e1);
+        write_event(&be, &e2);
+        write_event(&be, &e3);
+
+        let got = be.read_by_id(&e2.id).unwrap();
+        let Some(got) = got else {
+            panic!("expected to find the middle event, got None");
+        };
+        assert_eq!(got.id, e2.id);
+        assert_eq!(got.verb, "clip.remove");
+    }
+
+    #[test]
+    fn read_by_id_returns_none_when_absent() {
+        // A fresh id not in the log produces None.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let be = NativeBackend::open(&path).unwrap();
+
+        let e1 = fresh_event("clip.add");
+        write_event(&be, &e1);
+
+        let stranger = verbreel_types::EventId::now();
+        assert_ne!(stranger, e1.id, "test relies on monotonic UUIDv7");
+        assert!(be.read_by_id(&stranger).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_by_id_empty_log_returns_none() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let be = NativeBackend::open(&path).unwrap();
+
+        let probe = verbreel_types::EventId::now();
+        assert!(be.read_by_id(&probe).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_by_id_torn_line_returns_error() {
+        // Append a valid line, then append garbage (no trailing newline,
+        // invalid JSON). read_by_id walks line-by-line — the garbage at
+        // the tail must surface as BackendError::TornLine.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let be = NativeBackend::open(&path).unwrap();
+
+        let e1 = fresh_event("clip.add");
+        write_event(&be, &e1);
+
+        // Append corrupt bytes without a trailing newline. NativeBackend
+        // adds one on b"...\n"-terminated lines only if the caller didn't
+        // — pass garbage with no terminator, which the backend will then
+        // \n-terminate. Make sure the result is invalid JSON regardless.
+        be.append(b"this is not json{").unwrap();
+
+        // Search for some EventId that is NOT e1.id so we have to walk
+        // past the torn line.
+        let stranger = verbreel_types::EventId::now();
+        assert_ne!(stranger, e1.id);
+        let err = be.read_by_id(&stranger).expect_err("torn line must error");
+        assert!(
+            matches!(err, BackendError::TornLine { .. }),
+            "expected TornLine, got {err:?}"
+        );
     }
 }

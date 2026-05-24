@@ -51,7 +51,8 @@ use crate::apply::ApplyError;
 use crate::idempotency::{IdempotencyIndex, LookupOutcome};
 use crate::project::Project;
 use crate::reconstructor::{
-    RecordedEvent, ValidationError, VerbError, VerbRegistry, validate_reconstructors,
+    ReconstructError, RecordedEvent, ValidationError, VerbError, VerbRegistry,
+    validate_reconstructors,
 };
 
 // ---------------------------------------------------------------------
@@ -191,6 +192,47 @@ pub enum LifecycleError {
         #[source]
         source: VerbError,
     },
+
+    /// [`ProjectStore::mutate_via_verb`] hit the §0.8 idempotency replay
+    /// path, read the recorded event line from `events.jsonl`, and the
+    /// verb's [`crate::reconstructor::Verb::reconstruct`] returned an
+    /// error against the recorded 5-tuple
+    /// `(args, patch, warnings, post_state)`.
+    ///
+    /// This is a verb-author bug surfaced at replay time: the
+    /// reconstructor purity startup gate
+    /// ([`validate_reconstructors`]) is supposed to catch
+    /// reconstruction failures at engine start, but a verb may still
+    /// fail at runtime against an event the gate's fixtures did not
+    /// cover (e.g. a `details.*` field shape that no fixture
+    /// exercised). The replay request is rejected rather than silently
+    /// fabricating a `data` envelope.
+    #[error("replay reconstruct failed for verb={verb_id} event={event_id}: {source}")]
+    ReplayReconstructFailed {
+        /// The event id whose reconstruction failed.
+        event_id: EventId,
+        /// The verb id whose reconstructor returned the error.
+        verb_id: String,
+        /// The underlying reconstructor failure.
+        #[source]
+        source: ReconstructError,
+    },
+
+    /// [`ProjectStore::mutate_via_verb`] hit the §0.8 idempotency replay
+    /// path with a `Completed { event_id }` index entry, but
+    /// [`EventBackend::read_by_id`] returned `None` — the event id the
+    /// idempotency index pointed at is not present in `events.jsonl`.
+    ///
+    /// This indicates either log corruption (the recorded line was
+    /// truncated away after the in-memory index recorded it) or a
+    /// bookkeeping bug. Defensive: in normal operation the index is
+    /// rebuilt from the log on `project.open`, so by construction the
+    /// id is always present.
+    #[error("replay event missing from log: {event_id}")]
+    ReplayEventMissing {
+        /// The event id the idempotency index pointed at.
+        event_id: EventId,
+    },
 }
 
 // ---------------------------------------------------------------------
@@ -234,16 +276,18 @@ pub struct SaveInfo {
 /// the raw API cannot infer typed data without going through the verb
 /// trait, which is the price of bypassing verb routing.
 ///
-/// ## Replay-path caveat
+/// ## Replay-path semantics
 ///
 /// On the [`MutateOutcome::Replayed`] path, the `data` field is
-/// currently the freshly-computed envelope from the duplicate call's
-/// `Verb::compute_patch` rather than a reconstruction of the original
-/// call's `data` from `events.jsonl`. True disk-based reconstruction
-/// requires an `events::read_by_id` API that does not exist yet; that
-/// is a separate slice. For the canonical happy path (same args ⇒ same
-/// patch ⇒ same envelope), this is functionally equivalent to disk
-/// replay.
+/// reconstructed from the on-disk event line per §0.8: the kernel
+/// looks the original event up via
+/// [`verbreel_events::EventBackend::read_by_id`] using the id from the
+/// idempotency-index lookup and calls
+/// [`crate::reconstructor::Verb::reconstruct`] against the recorded
+/// 5-tuple `(args, patch, warnings, post_state)`. The duplicate call's
+/// freshly-computed envelope is discarded — the recorded inputs are
+/// the source of truth, not the retry's args, so a retry that lost
+/// `warnings.details.*` content still surfaces the original envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MutateOutcome {
     /// First call (or call without an `idempotency_key`). The patch was
@@ -702,18 +746,42 @@ impl ProjectStore {
     /// migration tooling); it is **purely additive** to keep
     /// `mutate_via_verb` slim.
     ///
-    /// ## Known gap: replay-path `data` reconstruction
+    /// ## Replay path semantics
     ///
     /// When this call hits the §0.8 idempotency replay path
-    /// (`MutateOutcome::Replayed`), the returned `data` is the freshly-
-    /// computed envelope from THIS call's `compute_patch` rather than
-    /// a reconstruction of the original call's `data` from the on-disk
-    /// `events.jsonl` line. For the canonical happy path (same args ⇒
-    /// same patch ⇒ same envelope) this is functionally equivalent,
-    /// but it is NOT the strict §0.8 "envelope reconstructed from the
-    /// recorded 5-tuple" contract. Disk-based reconstruction needs a
-    /// new `events::read_by_id(id)` API (no such API exists yet) and
-    /// is tracked as a follow-up slice.
+    /// (`MutateOutcome::Replayed`), the returned `data` is reconstructed
+    /// from the **on-disk** event line — not the duplicate call's
+    /// freshly-computed envelope. The kernel:
+    ///
+    /// 1. Takes the `event_id` returned by the idempotency-index
+    ///    lookup.
+    /// 2. Reads the recorded event via
+    ///    [`verbreel_events::EventBackend::read_by_id`].
+    /// 3. Calls
+    ///    [`crate::reconstructor::Verb::reconstruct`] over the recorded
+    ///    5-tuple `(args, patch, warnings, post_state)` per §0.8.
+    ///
+    /// `post_state` passed to `reconstruct` is `&self.project` — the
+    /// current in-memory project. By the time replay fires, the
+    /// original first call's patch has already been applied (that
+    /// produced the same idempotency-index `Completed { event_id }`
+    /// entry the lookup just returned), so the in-memory project is
+    /// the post-state for that patch. The replay does **not** re-apply
+    /// the patch and does **not** write a new event line.
+    ///
+    /// Two failure modes are surfaced on this path beyond the
+    /// `Self::mutate` set:
+    ///
+    /// - [`LifecycleError::ReplayReconstructFailed`] — the verb's
+    ///   `reconstruct` returned an error against the recorded
+    ///   5-tuple. Verb-author bug; the §0.8 startup gate
+    ///   ([`crate::reconstructor::validate_reconstructors`]) should
+    ///   catch the common cases but a verb may still fail on an
+    ///   event shape no fixture exercised.
+    /// - [`LifecycleError::ReplayEventMissing`] — defensive: the
+    ///   idempotency index pointed at an event id absent from the
+    ///   log. Should not happen in normal operation because the
+    ///   index is rebuilt from the same log on `project.open`.
     ///
     /// # Errors
     ///
@@ -721,6 +789,10 @@ impl ProjectStore {
     /// - [`LifecycleError::VerbExecutionFailed`] — verb's
     ///   `compute_patch` rejected the args (bad shape, cap violation,
     ///   etc.).
+    /// - [`LifecycleError::ReplayReconstructFailed`] — replay path:
+    ///   the verb's `reconstruct` returned an error.
+    /// - [`LifecycleError::ReplayEventMissing`] — replay path: the
+    ///   recorded event id is not present in the log.
     /// - Everything [`Self::mutate`] can fail with — apply, IO,
     ///   backend, idempotency-busy / -conflict / -canonicalize.
     pub fn mutate_via_verb(
@@ -753,10 +825,39 @@ impl ProjectStore {
                 Ok(MutateOutcome::Applied { event_id, data })
             }
             MutateOutcome::Replayed { event_id, data: _ } => {
-                // Known-gap: see method-level rustdoc — the `data`
-                // returned here is the duplicate-call's freshly-
-                // computed envelope, not a disk reconstruction of
-                // the original call's envelope.
+                // §0.8 replay: drop the freshly-computed `data` and
+                // reconstruct from the on-disk event line per the
+                // method's "Replay path semantics" rustdoc.
+                let recorded = self
+                    .backend
+                    .read_by_id(&event_id)?
+                    .ok_or(LifecycleError::ReplayEventMissing { event_id })?;
+
+                // `Verb::reconstruct` takes `patch: &Value` (the wire
+                // shape) — convert the recorded `json_patch::Patch`.
+                let patch_value = serde_json::to_value(&recorded.patch).map_err(|e| {
+                    LifecycleError::ReplayReconstructFailed {
+                        event_id,
+                        verb_id: verb_id.to_string(),
+                        source: ReconstructError::Custom(format!(
+                            "recorded patch could not be re-serialized to Value: {e}"
+                        )),
+                    }
+                })?;
+
+                let data = verb
+                    .reconstruct(
+                        &recorded.args,
+                        &patch_value,
+                        &recorded.warnings,
+                        &self.project,
+                    )
+                    .map_err(|source| LifecycleError::ReplayReconstructFailed {
+                        event_id,
+                        verb_id: verb_id.to_string(),
+                        source,
+                    })?;
+
                 Ok(MutateOutcome::Replayed { event_id, data })
             }
         }
