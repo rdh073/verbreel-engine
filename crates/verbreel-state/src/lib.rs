@@ -132,6 +132,10 @@ pub use text_element::{TextAlign, TextElement};
 pub use track::{Track, TrackKind};
 pub use tracker::Tracker;
 pub use transform::Transform;
+pub use verbs::project_rename::{
+    PROJECT_NAME_MAX, PROJECT_NAME_MIN, ProjectRenameArgs, ProjectRenameData, ProjectRenameError,
+    ProjectRenameVerb,
+};
 pub use verbs::project_set_canvas::{
     CANVAS_MAX_DIM, CANVAS_MIN_DIM, PIXEL_ASPECT_MIN, ProjectSetCanvasArgs, ProjectSetCanvasData,
     ProjectSetCanvasError, ProjectSetCanvasVerb,
