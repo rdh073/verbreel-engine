@@ -71,6 +71,7 @@ pub mod asset_meta;
 pub mod canvas;
 pub mod clip;
 pub mod effect;
+pub mod invariants;
 pub mod keyframe;
 #[cfg(feature = "native")]
 pub mod lifecycle;
@@ -94,6 +95,7 @@ pub use clip::{BlendMode, Clip, ClipMask, FadeCurve, MaskKind, SpeedCurvePoint};
 pub use effect::{
     Effect, EffectKind, EffectNewtypeError, EffectWindow, EffectWindowDependencyError,
 };
+pub use invariants::{InvariantViolation, check_fade_clamp, timeline_duration_tk};
 pub use keyframe::{Easing, Keyframe, KeyframeNewtypeError, KeyframeProperty};
 #[cfg(feature = "native")]
 pub use lifecycle::{LifecycleError, ProjectStore, SaveInfo};

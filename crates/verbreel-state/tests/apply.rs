@@ -155,32 +155,36 @@ fn apply_type_violation_returns_type_violation() {
 }
 
 #[test]
-fn apply_does_not_enforce_invariants() {
-    // **MVP boundary lock.**
+fn apply_rejects_fade_clamp_violation() {
+    // Was: MVP-boundary lock (`apply_does_not_enforce_invariants`).
+    // Now: fade-clamp enforced. See PR #34 (§0.13 fade-clamp slice).
     //
     // §0.13 invariant: `fade_in_tk + fade_out_tk <= timeline_duration`
     // of the clip. The three-track fixture's video clip has
-    // `source_in_tk=0`, `source_out_tk=2_400_000` (timeline
-    // duration ≈ 2_400_000 ticks). Patching `fade_in_tk` to a value
-    // that exceeds the clip's full timeline duration is an
-    // invariant violation by the spec — but the MVP slice does NOT
-    // enforce that constraint. This test asserts the gap.
-    //
-    // When the fade-clamp follow-up slice lands, this test must
-    // flip to `expect_err(...)` and assert
-    // `ApplyError::InvariantViolation::FadeClamp { .. }`.
+    // `source_in_tk=0`, `source_out_tk=2_400_000` (timeline duration
+    // 2_400_000 ticks). Patching `fade_in_tk` to a value that exceeds
+    // the clip's full timeline duration must now be rejected.
+    use verbreel_state::InvariantViolation;
     let p = load_three_track();
     let patch = parse_patch(
         r#"[{"op":"replace","path":"/tracks/0/clips/0/fade_in_tk","value":9999999999}]"#,
     );
-    let out = p
+    let err = p
         .apply(&patch)
-        .expect("MVP boundary: fade > timeline still succeeds (no §0.13 enforcement)");
-    let new_fade = out.tracks[0].clips[0].fade_in_tk.get();
-    assert_eq!(
-        new_fade, 9_999_999_999,
-        "patched value applied as-is — locking the MVP boundary"
-    );
+        .expect_err("fade > timeline must surface as InvariantViolation");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::FadeClamp {
+            fade_in_tk,
+            fade_out_tk,
+            timeline_duration_tk,
+            ..
+        }) => {
+            assert_eq!(fade_in_tk.get(), 9_999_999_999);
+            assert_eq!(fade_out_tk.get(), 0);
+            assert_eq!(timeline_duration_tk.get(), 2_400_000);
+        }
+        other => panic!("expected FadeClamp variant, got {other:?}"),
+    }
 }
 
 #[test]

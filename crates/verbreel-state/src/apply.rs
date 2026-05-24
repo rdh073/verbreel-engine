@@ -17,21 +17,20 @@
 //! Any failure surfaces as a typed [`ApplyError`] variant. The input
 //! is never mutated — callers receive a new `Project`.
 //!
-//! ## What this module does NOT do
+//! ## §0.13 invariant enforcement
 //!
-//! `apply()` enforces only **type-level** validity (the patched
-//! `Value` must deserialize back into `Project`). §0.13 engine
-//! invariants — fade clamp, track contiguity, no-overlap, the
-//! `Project.duration_tk` maintenance contract, dangling-keyframe
-//! cascade, etc. — are deliberately NOT enforced at this MVP level.
-//! They land in follow-up slices, one invariant family per slice,
-//! each gated by a new [`ApplyError`] variant under
-//! `InvariantViolation::<Kind>`.
+//! After the deserialize step succeeds, `apply()` composes the
+//! [`crate::invariants`] `check_*` family. As of the fade-clamp
+//! slice:
 //!
-//! The MVP boundary is locked by an explicit test
-//! (`apply_does_not_enforce_invariants` in `tests/apply.rs`) which
-//! the follow-up fade-clamp slice will flip from a success
-//! assertion to a failure assertion.
+//! - `check_fade_clamp` — every clip satisfies
+//!   `fade_in_tk + fade_out_tk ≤ timeline_duration_tk`.
+//!
+//! Subsequent slices add more checks here, one invariant family per
+//! slice. Each violation surfaces as
+//! [`ApplyError::InvariantViolation`] wrapping the typed
+//! [`crate::invariants::InvariantViolation`] enum so callers can
+//! pattern-match on the specific failure.
 //!
 //! ## Spec references
 //!
@@ -43,6 +42,7 @@
 
 use thiserror::Error;
 
+use crate::invariants::{InvariantViolation, check_fade_clamp};
 use crate::project::Project;
 
 // ---------------------------------------------------------------------
@@ -86,16 +86,18 @@ pub enum ApplyError {
          that doesn't match its destination's type): {0}"
     )]
     TypeViolation(serde_json::Error),
-    // TODO(follow-up slices §0.13): add `InvariantViolation::<Kind>`
-    // variants here, one per invariant family. Examples planned:
-    //   InvariantViolation::FadeClamp { clip_id, .. }
-    //   InvariantViolation::TrackContiguity { .. }
-    //   InvariantViolation::NoOverlap { track_id, clip_a, clip_b }
-    //   InvariantViolation::DanglingKeyframe { keyframe_id, .. }
-    //   InvariantViolation::DurationOutOfSync { .. }
-    // The MVP boundary test `apply_does_not_enforce_invariants` will
-    // be flipped to assert failure when the corresponding variant
-    // lands.
+
+    /// The patch produced a Project that violates a §0.13 engine
+    /// invariant. See [`InvariantViolation`] for the per-invariant
+    /// variants currently checked.
+    ///
+    /// Each subsequent invariant slice adds a new variant to
+    /// [`InvariantViolation`]; callers' exhaustive matches are
+    /// expected to re-prompt for handling at that point (the design
+    /// intent — see the type-level doc comment for the
+    /// `#[non_exhaustive]`-NOT rationale).
+    #[error("§0.13 invariant violation: {0}")]
+    InvariantViolation(#[from] InvariantViolation),
 }
 
 // ---------------------------------------------------------------------
@@ -114,13 +116,11 @@ impl Project {
     /// which leaves the document in a partially-applied state on
     /// failure).
     ///
-    /// MVP scope: this method enforces only **type-level** validity
-    /// (the patched `Value` must deserialize back into `Project`).
-    /// §0.13 engine invariants (fade clamp, track contiguity,
-    /// no-overlap, `duration_tk` maintenance, dangling-keyframe
-    /// cascade, etc.) are deliberately NOT enforced here — they land
-    /// in follow-up slices, each gated by their own [`ApplyError`]
-    /// variants.
+    /// Enforces **type-level** validity (the patched `Value` must
+    /// deserialize back into `Project`) AND every §0.13 invariant
+    /// landed so far (fade clamp as of this slice; future slices
+    /// add track contiguity, no-overlap, `duration_tk` maintenance,
+    /// dangling-keyframe cascade, etc.).
     ///
     /// # Errors
     ///
@@ -134,10 +134,14 @@ impl Project {
     ///   successfully but the resulting `Value` is no longer a
     ///   well-typed `Project` (e.g. a string where a `Tick` is
     ///   expected). Carries the underlying serde error.
+    /// - [`ApplyError::InvariantViolation`] — the patched Project is
+    ///   well-typed but violates a §0.13 invariant (currently
+    ///   `fade_in_tk + fade_out_tk ≤ timeline_duration_tk`).
     pub fn apply(&self, patch: &json_patch::Patch) -> Result<Self, ApplyError> {
         let mut value = serde_json::to_value(self).map_err(ApplyError::SerializationFailed)?;
         json_patch::patch(&mut value, patch)?;
         let project: Self = serde_json::from_value(value).map_err(ApplyError::TypeViolation)?;
+        check_fade_clamp(&project)?;
         Ok(project)
     }
 
