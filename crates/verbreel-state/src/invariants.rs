@@ -53,6 +53,18 @@
 //!   (rect `{w,h} > 0`, ellipse `{rx,ry} > 0`, polygon
 //!   `points.len() in 3..=256`, asset `asset_id` resolves to an
 //!   image asset with optional `threshold ∈ [0,1]`).
+//! - [`check_effect_window_within_parent`] — each clip-attached
+//!   `Effect.window` (when present) satisfies
+//!   `0 ≤ in_tk < out_tk ≤ parent_clip.timeline_duration_tk`.
+//! - [`check_effect_params_caps`] — every clip-attached
+//!   `Effect.params` has at most [`EFFECT_PARAMS_MAX_KEYS`] keys
+//!   and serializes to at most [`EFFECT_PARAMS_MAX_BYTES`] bytes.
+//! - [`check_metadata_caps`] — `Project.metadata` has at most
+//!   [`METADATA_MAX_KEYS`] keys and serializes to at most
+//!   [`METADATA_MAX_BYTES`] bytes.
+//! - [`check_asset_id_uniqueness`] — every `Asset.id` is unique
+//!   across `Project.assets[]` (duplicates rejected with the first
+//!   pair of conflicting indices).
 //!
 //! ## `apply()` check order
 //!
@@ -78,7 +90,15 @@
 //! 12. [`check_text_clip_text_field`] — text-track ⇔
 //!     `Clip.text.is_some()`.
 //! 13. [`check_mask_params`] — per-kind `Clip.mask.params` shape.
-//! 14. (future slices append here)
+//! 14. [`check_effect_window_within_parent`] — per-clip
+//!     `Effect.window` lies within the parent clip's duration.
+//! 15. [`check_effect_params_caps`] — per-clip
+//!     `Effect.params` key count + serialized-byte caps.
+//! 16. [`check_metadata_caps`] — `Project.metadata` key count +
+//!     serialized-byte caps.
+//! 17. [`check_asset_id_uniqueness`] — `Asset.id` collision check
+//!     over `Project.assets[]`.
+//! 18. (future slices append here)
 //!
 //! Biconditional runs before existence intentionally: a nil
 //! `asset_id` on a non-text track is a kind-mismatch (structurally
@@ -89,31 +109,63 @@
 //! cross-checked, `Project.assets[]` has already been audited and
 //! the same `resolve_asset_kind` helper is reused.
 //!
+//! The size-cap / uniqueness block at the tail (14 → 17) is ordered
+//! cheap → expensive: effect-window checks are integer comparisons
+//! per effect, effect-params caps allocate one `serde_json::to_vec`
+//! per oversized effect, `metadata_caps` allocates once over the
+//! whole project metadata, and `asset_id_uniqueness` allocates a
+//! `HashMap` over `Project.assets[]`. Asset-id uniqueness runs last
+//! so the more-localized rejection paths surface first.
+//!
 //! ## Planned future invariant slices
 //!
-//! - `check_metadata_size_caps` — `Project.metadata` ≤ 256 keys / 64 KiB.
-//! - `check_effect_params_size_caps` — `Effect.params` ≤ 64 keys / 16 KiB.
 //! - `check_speed_curve_internal_validity` — `speed_curve` bounds
 //!   (`2 ≤ len ≤ 256`, monotonic `time_tk`, factor `[0.001, 100]`).
-//! - `check_effect_window_inside_parent` — `0 ≤ in_tk < out_tk ≤
-//!   parent_clip.timeline_duration_tk` on every `Effect.window`.
+//! - Track-level effect window / params caps once `Track.effects`
+//!   becomes a typed `Vec<Effect>` (currently `Vec<Value>`
+//!   placeholder).
 //!
 //! ## Spec references
 //!
 //! - §0.13 — full invariants list.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use regex::Regex;
 use thiserror::Error;
-use verbreel_types::{AssetId, ClipId, KeyframeId, Tick};
+use verbreel_types::{AssetId, ClipId, EffectId, KeyframeId, Tick};
 
 use crate::asset::Asset;
 use crate::clip::{ClipMask, MaskKind};
 use crate::newtypes::AssetRef;
 use crate::project::Project;
 use crate::track::TrackKind;
+
+// ---------------------------------------------------------------------
+// Size-cap constants (§0.13)
+// ---------------------------------------------------------------------
+
+/// Maximum number of top-level keys allowed in `Project.metadata`.
+/// Spec §0.13 — bounds the per-project metadata footprint so the
+/// engine never grows an unbounded key-value bag through verb
+/// composition.
+pub const METADATA_MAX_KEYS: usize = 256;
+
+/// Maximum serialized-JSON byte length allowed for
+/// `Project.metadata`. Spec §0.13 (64 KiB). Computed with compact
+/// (non-pretty) `serde_json::to_vec` — the same form used for
+/// network transport and the engine's bytes-on-the-wire reference.
+pub const METADATA_MAX_BYTES: usize = 65_536;
+
+/// Maximum number of top-level keys allowed in any clip-attached
+/// `Effect.params`. Spec §0.13.
+pub const EFFECT_PARAMS_MAX_KEYS: usize = 64;
+
+/// Maximum serialized-JSON byte length allowed for any clip-attached
+/// `Effect.params`. Spec §0.13 (16 KiB). Same compact serialization
+/// rationale as [`METADATA_MAX_BYTES`].
+pub const EFFECT_PARAMS_MAX_BYTES: usize = 16_384;
 
 // ---------------------------------------------------------------------
 // AssetKind / SourceInTkKind helpers
@@ -617,6 +669,121 @@ pub enum InvariantViolation {
         mask_kind: MaskKind,
         /// Specific per-kind rule that fired (see [`MaskParamsError`]).
         reason: MaskParamsError,
+    },
+
+    /// `Project.metadata` carries more than [`METADATA_MAX_KEYS`]
+    /// top-level keys. Spec §0.13 — bounds the per-project metadata
+    /// footprint so the engine never grows an unbounded key-value
+    /// bag through verb composition.
+    #[error(
+        "§0.13 metadata-caps invariant: Project.metadata has {count} top-level keys, \
+         exceeds maximum of {max}"
+    )]
+    ProjectMetadataTooManyKeys {
+        /// Actual key count found.
+        count: usize,
+        /// The applicable cap ([`METADATA_MAX_KEYS`]).
+        max: usize,
+    },
+
+    /// `Project.metadata` serializes to more than [`METADATA_MAX_BYTES`]
+    /// bytes (compact `serde_json::to_vec`). Spec §0.13.
+    #[error(
+        "§0.13 metadata-caps invariant: Project.metadata serializes to {bytes} bytes, \
+         exceeds maximum of {max_bytes}"
+    )]
+    ProjectMetadataTooBigBytes {
+        /// Actual compact-serialized byte length.
+        bytes: usize,
+        /// The applicable cap ([`METADATA_MAX_BYTES`]).
+        max_bytes: usize,
+    },
+
+    /// A clip-attached `Effect.params` carries more than
+    /// [`EFFECT_PARAMS_MAX_KEYS`] top-level keys. Spec §0.13.
+    ///
+    /// Track-attached effects are NOT walked yet — `Track.effects`
+    /// is still a `Vec<serde_json::Value>` placeholder per Task 11's
+    /// deviation; typing it is a separate slice.
+    #[error(
+        "§0.13 effect-params-caps invariant: Effect {effect_id} params has {count} top-level \
+         keys, exceeds maximum of {max}"
+    )]
+    EffectParamsTooManyKeys {
+        /// Offending effect id.
+        effect_id: EffectId,
+        /// Actual key count found.
+        count: usize,
+        /// The applicable cap ([`EFFECT_PARAMS_MAX_KEYS`]).
+        max: usize,
+    },
+
+    /// A clip-attached `Effect.params` serializes to more than
+    /// [`EFFECT_PARAMS_MAX_BYTES`] bytes. Spec §0.13.
+    #[error(
+        "§0.13 effect-params-caps invariant: Effect {effect_id} params serializes to {bytes} \
+         bytes, exceeds maximum of {max_bytes}"
+    )]
+    EffectParamsTooBigBytes {
+        /// Offending effect id.
+        effect_id: EffectId,
+        /// Actual compact-serialized byte length.
+        bytes: usize,
+        /// The applicable cap ([`EFFECT_PARAMS_MAX_BYTES`]).
+        max_bytes: usize,
+    },
+
+    /// A clip-attached `Effect.window` lies outside the half-open
+    /// `[0, parent_clip.timeline_duration_tk]` interval (or its
+    /// `in_tk` is not strictly less than `out_tk`). Spec §0.13 —
+    /// *"For clip-attached effects: window expressed in
+    /// parent-relative ticks; `0 ≤ in_tk < out_tk ≤
+    /// timeline_duration_tk`."*
+    ///
+    /// Equality at the upper bound (`out_tk == parent_duration_tk`)
+    /// is accepted — `out_tk` is exclusive per the spec's half-open
+    /// convention; a window that ends precisely at the clip's last
+    /// renderable tick is valid.
+    #[error(
+        "§0.13 effect-window invariant: clip {clip_id} effect {effect_id} window \
+         (in_tk={}, out_tk={}) is not within the parent clip's duration \
+         (parent_duration_tk={}); spec requires 0 <= in_tk < out_tk <= parent_duration_tk",
+        in_tk.get(), out_tk.get(), parent_duration_tk.get()
+    )]
+    EffectWindowOutOfBounds {
+        /// Effect id whose window is invalid.
+        effect_id: EffectId,
+        /// Parent clip id (for caller-side log-locate convenience).
+        clip_id: ClipId,
+        /// `Effect.window.in_tk` as read from the patched project.
+        in_tk: Tick,
+        /// `Effect.window.out_tk` as read from the patched project.
+        out_tk: Tick,
+        /// Computed `timeline_duration_tk(clip.source_in_tk,
+        /// clip.source_out_tk, clip.speed)` for the parent clip.
+        parent_duration_tk: Tick,
+    },
+
+    /// Two entries in `Project.assets[]` share the same `Asset.id`.
+    /// Spec §0.13 — each registered asset must have a unique
+    /// `UuidV7` identifier across the project's asset registry.
+    ///
+    /// Hand-edited project.json that introduces a second entry with
+    /// the same id (or a verb-layer bug that bypasses asset-id
+    /// uniqueness) is rejected at `apply()` time. Indices are
+    /// reported as `(first_index, second_index)` in declaration
+    /// order so callers can locate both entries.
+    #[error(
+        "§0.13 asset-id-uniqueness invariant: asset_id {asset_id} appears at both index \
+         {first_index} and index {second_index} in Project.assets[]"
+    )]
+    DuplicateAssetId {
+        /// The colliding `AssetId`.
+        asset_id: AssetId,
+        /// Index of the first occurrence (lower).
+        first_index: usize,
+        /// Index of the second (duplicate) occurrence.
+        second_index: usize,
     },
 }
 
@@ -1461,4 +1628,189 @@ fn asset_kind_name(kind: AssetKind) -> &'static str {
         AssetKind::Image => "image",
         AssetKind::Subtitle => "subtitle",
     }
+}
+
+// ---------------------------------------------------------------------
+// check_effect_window_within_parent
+// ---------------------------------------------------------------------
+
+/// Verify every clip-attached `Effect.window` (when present)
+/// satisfies `0 ≤ in_tk < out_tk ≤ parent_clip.timeline_duration_tk`.
+/// Spec §0.13.
+///
+/// Uses [`timeline_duration_tk`] to compute the parent's duration —
+/// the same helper used by [`check_fade_clamp`], [`check_no_overlap`],
+/// and [`check_duration_tk`] — so the duration interpretation stays
+/// consistent across invariants.
+///
+/// `out_tk` is exclusive in the spec's half-open convention: a
+/// window that ends precisely at `parent_duration_tk` is valid (its
+/// last sampled tick is `parent_duration_tk - 1`).
+///
+/// Effects without `window` (`window == None`) trivially pass — the
+/// effect applies to the full parent duration.
+///
+/// **Layer note**: track-attached effects (`Track.effects`) are NOT
+/// walked yet — that field is still a `Vec<serde_json::Value>`
+/// placeholder until track-level effect typing lands. The
+/// corresponding track-level window check is a separate slice.
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::EffectWindowOutOfBounds`] for the
+/// first effect whose window violates the spec.
+pub fn check_effect_window_within_parent(project: &Project) -> Result<(), InvariantViolation> {
+    for track in &project.tracks {
+        for clip in &track.clips {
+            let parent_dur =
+                timeline_duration_tk(clip.source_in_tk, clip.source_out_tk, clip.speed);
+            for effect in &clip.effects {
+                let Some(window) = effect.window.as_ref() else {
+                    continue;
+                };
+                let in_tk = window.in_tk;
+                let out_tk = window.out_tk;
+                // Spec §0.13: 0 ≤ in_tk < out_tk ≤ parent_dur.
+                let bounds_ok = in_tk.get() >= 0
+                    && in_tk.get() < out_tk.get()
+                    && out_tk.get() <= parent_dur.get();
+                if !bounds_ok {
+                    return Err(InvariantViolation::EffectWindowOutOfBounds {
+                        effect_id: effect.id,
+                        clip_id: clip.id,
+                        in_tk,
+                        out_tk,
+                        parent_duration_tk: parent_dur,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_effect_params_caps
+// ---------------------------------------------------------------------
+
+/// Verify every clip-attached `Effect.params` is within both
+/// per-effect caps: [`EFFECT_PARAMS_MAX_KEYS`] top-level keys and
+/// [`EFFECT_PARAMS_MAX_BYTES`] compact-serialized bytes. Spec §0.13.
+///
+/// Key count is checked before byte length so the cheaper rejection
+/// (no allocation) surfaces first on the (more common) "too many
+/// keys" path. Byte length is computed via `serde_json::to_vec` —
+/// compact form, no pretty-print — matching the engine's
+/// bytes-on-the-wire reference.
+///
+/// **Layer note**: track-attached effects are NOT walked yet (same
+/// reason as [`check_effect_window_within_parent`]).
+///
+/// # Errors
+///
+/// Returns the first of [`InvariantViolation::EffectParamsTooManyKeys`]
+/// or [`InvariantViolation::EffectParamsTooBigBytes`] that fires.
+/// The internal serialization-step failure is mapped to
+/// [`InvariantViolation::EffectParamsTooBigBytes`] with `bytes =
+/// usize::MAX`; that path is unreachable for `serde_json::Map<String,
+/// Value>` (no fallible custom serde impls in scope) but is kept
+/// honest at the type level.
+pub fn check_effect_params_caps(project: &Project) -> Result<(), InvariantViolation> {
+    for track in &project.tracks {
+        for clip in &track.clips {
+            for effect in &clip.effects {
+                let count = effect.params.len();
+                if count > EFFECT_PARAMS_MAX_KEYS {
+                    return Err(InvariantViolation::EffectParamsTooManyKeys {
+                        effect_id: effect.id,
+                        count,
+                        max: EFFECT_PARAMS_MAX_KEYS,
+                    });
+                }
+                let bytes = serde_json::to_vec(&effect.params).map_or(usize::MAX, |v| v.len());
+                if bytes > EFFECT_PARAMS_MAX_BYTES {
+                    return Err(InvariantViolation::EffectParamsTooBigBytes {
+                        effect_id: effect.id,
+                        bytes,
+                        max_bytes: EFFECT_PARAMS_MAX_BYTES,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_metadata_caps
+// ---------------------------------------------------------------------
+
+/// Verify `Project.metadata` is within both per-project caps:
+/// [`METADATA_MAX_KEYS`] top-level keys and [`METADATA_MAX_BYTES`]
+/// compact-serialized bytes. Spec §0.13.
+///
+/// Same compact-serialization + check-cheap-first ordering as
+/// [`check_effect_params_caps`].
+///
+/// # Errors
+///
+/// Returns the first of [`InvariantViolation::ProjectMetadataTooManyKeys`]
+/// or [`InvariantViolation::ProjectMetadataTooBigBytes`] that fires.
+pub fn check_metadata_caps(project: &Project) -> Result<(), InvariantViolation> {
+    let count = project.metadata.len();
+    if count > METADATA_MAX_KEYS {
+        return Err(InvariantViolation::ProjectMetadataTooManyKeys {
+            count,
+            max: METADATA_MAX_KEYS,
+        });
+    }
+    let bytes = serde_json::to_vec(&project.metadata).map_or(usize::MAX, |v| v.len());
+    if bytes > METADATA_MAX_BYTES {
+        return Err(InvariantViolation::ProjectMetadataTooBigBytes {
+            bytes,
+            max_bytes: METADATA_MAX_BYTES,
+        });
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_asset_id_uniqueness
+// ---------------------------------------------------------------------
+
+/// Verify every `Asset.id` in `Project.assets[]` is unique. Spec
+/// §0.13.
+///
+/// Walks `project.assets[]` once, indexing each `(id, index)` pair
+/// into a `HashMap`. On the first collision, returns
+/// [`InvariantViolation::DuplicateAssetId`] with both the first
+/// occurrence's index and the duplicate's index — letting callers
+/// locate both entries without a second walk.
+///
+/// **Layer note**: this is a structural collision check. It does
+/// NOT cross-reference clips, masks, or any other consumer of
+/// `Asset.id` — those references are handled by
+/// [`check_asset_existence`] (clips) and [`check_mask_params`]
+/// (mask-asset references), both of which run earlier in the
+/// chain. A `Project.assets[]` containing duplicates would pass
+/// existence (both entries match the same id) but fails this check.
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::DuplicateAssetId`] for the first
+/// duplicate-id pair encountered.
+pub fn check_asset_id_uniqueness(project: &Project) -> Result<(), InvariantViolation> {
+    let mut seen: HashMap<&AssetId, usize> = HashMap::with_capacity(project.assets.len());
+    for (index, asset) in project.assets.iter().enumerate() {
+        let id = asset.id();
+        if let Some(&first_index) = seen.get(id) {
+            return Err(InvariantViolation::DuplicateAssetId {
+                asset_id: *id,
+                first_index,
+                second_index: index,
+            });
+        }
+        seen.insert(id, index);
+    }
+    Ok(())
 }

@@ -6,14 +6,16 @@
 
 use serde_json::json;
 use verbreel_state::{
-    ApplyError, AssetIdState, AssetRef, BlendMode, Clip, ClipMask, Effect, EffectKind, FadeCurve,
-    InvariantViolation, Keyframe, KeyframeProperty, MaskKind, MaskParamsError, Project,
-    SourceInTkKind, SpeedCurvePoint, Track, TrackKind, Transform, check_asset_existence,
-    check_asset_id_biconditional, check_dangling_keyframes, check_duration_tk,
-    check_effect_track_empty, check_fade_clamp, check_mask_params, check_no_overlap,
-    check_source_in_tk, check_speed_curve_on_image_text, check_speed_on_image_text,
-    check_text_clip_text_field, check_track_contiguity, extract_effect_id_from_property,
-    timeline_duration_tk,
+    ApplyError, AssetIdState, AssetRef, BlendMode, Clip, ClipMask, EFFECT_PARAMS_MAX_BYTES,
+    EFFECT_PARAMS_MAX_KEYS, Effect, EffectKind, EffectWindow, FadeCurve, InvariantViolation,
+    Keyframe, KeyframeProperty, METADATA_MAX_BYTES, METADATA_MAX_KEYS, MaskKind, MaskParamsError,
+    Project, SourceInTkKind, SpeedCurvePoint, Track, TrackKind, Transform, check_asset_existence,
+    check_asset_id_biconditional, check_asset_id_uniqueness, check_dangling_keyframes,
+    check_duration_tk, check_effect_params_caps, check_effect_track_empty,
+    check_effect_window_within_parent, check_fade_clamp, check_mask_params, check_metadata_caps,
+    check_no_overlap, check_source_in_tk, check_speed_curve_on_image_text,
+    check_speed_on_image_text, check_text_clip_text_field, check_track_contiguity,
+    extract_effect_id_from_property, timeline_duration_tk,
 };
 use verbreel_types::{AssetId, ClipId, EffectId, KeyframeId, Tick, TrackId, UuidV7};
 
@@ -2797,5 +2799,449 @@ fn fixtures_satisfy_track_structure_invariants() {
         check_text_clip_text_field(&p)
             .unwrap_or_else(|e| panic!("fixture {name:?} text-clip-text-field: {e}"));
         check_mask_params(&p).unwrap_or_else(|e| panic!("fixture {name:?} mask-params: {e}"));
+    }
+}
+
+// =====================================================================
+// §0.13 size-cap / window / uniqueness invariants — slice 14/15/16/17:
+//   - check_effect_window_within_parent
+//   - check_effect_params_caps
+//   - check_metadata_caps
+//   - check_asset_id_uniqueness
+// =====================================================================
+
+// ---------------------------------------------------------------------
+// check_metadata_caps
+// ---------------------------------------------------------------------
+
+/// Empty-project fixture with the metadata field replaced by the
+/// caller-supplied map. The empty fixture has `metadata: {}`, so this
+/// is just a thin wrapper that swaps the field in.
+fn project_with_metadata(metadata: serde_json::Map<String, serde_json::Value>) -> Project {
+    let mut p: Project =
+        serde_json::from_str(include_str!("fixtures/empty_project_create.json")).unwrap();
+    p.metadata = metadata;
+    p
+}
+
+#[test]
+fn metadata_empty_passes() {
+    let p = project_with_metadata(serde_json::Map::new());
+    check_metadata_caps(&p).expect("empty metadata trivially passes");
+}
+
+#[test]
+fn metadata_256_keys_passes() {
+    let mut m = serde_json::Map::new();
+    for i in 0..METADATA_MAX_KEYS {
+        m.insert(format!("k{i}"), json!(i));
+    }
+    let p = project_with_metadata(m);
+    check_metadata_caps(&p).expect("exactly 256 keys is the upper bound (inclusive)");
+}
+
+#[test]
+fn metadata_257_keys_rejected() {
+    let mut m = serde_json::Map::new();
+    for i in 0..=METADATA_MAX_KEYS {
+        m.insert(format!("k{i}"), json!(0));
+    }
+    // 257 keys, every value short — fail on key count before bytes.
+    let p = project_with_metadata(m);
+    match check_metadata_caps(&p).unwrap_err() {
+        InvariantViolation::ProjectMetadataTooManyKeys { count, max } => {
+            assert_eq!(count, METADATA_MAX_KEYS + 1);
+            assert_eq!(max, METADATA_MAX_KEYS);
+        }
+        other => panic!("expected ProjectMetadataTooManyKeys, got {other:?}"),
+    }
+}
+
+#[test]
+fn metadata_small_bytes_passes() {
+    // A handful of small keys is well under both caps.
+    let mut m = serde_json::Map::new();
+    m.insert("project_owner".into(), json!("rdh073"));
+    m.insert("client".into(), json!("internal"));
+    let p = project_with_metadata(m);
+    check_metadata_caps(&p).expect("small metadata trivially passes byte cap");
+}
+
+#[test]
+fn metadata_64kib_boundary_passes() {
+    // Construct a metadata map whose compact serialization is as
+    // close to METADATA_MAX_BYTES as possible without exceeding it.
+    // Start with a single long string and trim until it fits.
+    let mut m = serde_json::Map::new();
+    let padding = "x".repeat(METADATA_MAX_BYTES - 20); // headroom for `{"k":"…"}` framing
+    m.insert("k".into(), json!(padding));
+    let bytes = serde_json::to_vec(&m).unwrap().len();
+    assert!(
+        bytes <= METADATA_MAX_BYTES,
+        "test setup must stay under cap; got {bytes}"
+    );
+    let p = project_with_metadata(m);
+    check_metadata_caps(&p).expect("near-boundary metadata still under cap passes");
+}
+
+#[test]
+fn metadata_over_64kib_rejected() {
+    let mut m = serde_json::Map::new();
+    let blob = "x".repeat(METADATA_MAX_BYTES + 100);
+    m.insert("k".into(), json!(blob));
+    let p = project_with_metadata(m);
+    match check_metadata_caps(&p).unwrap_err() {
+        InvariantViolation::ProjectMetadataTooBigBytes { bytes, max_bytes } => {
+            assert!(bytes > max_bytes, "bytes={bytes}, max_bytes={max_bytes}");
+            assert_eq!(max_bytes, METADATA_MAX_BYTES);
+        }
+        other => panic!("expected ProjectMetadataTooBigBytes, got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_rejects_metadata_too_many_keys() {
+    // Patch replaces /metadata with a 257-key object. apply() must
+    // reject with ProjectMetadataTooManyKeys.
+    let p: Project =
+        serde_json::from_str(include_str!("fixtures/empty_project_create.json")).unwrap();
+    let mut big = serde_json::Map::new();
+    for i in 0..=METADATA_MAX_KEYS {
+        big.insert(format!("k{i}"), json!(0));
+    }
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op": "replace", "path": "/metadata", "value": serde_json::Value::Object(big)},
+    ]))
+    .unwrap();
+    let err = p
+        .apply(&patch)
+        .expect_err("metadata with 257 keys must reject");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::ProjectMetadataTooManyKeys {
+            count,
+            max,
+        }) => {
+            assert_eq!(count, METADATA_MAX_KEYS + 1);
+            assert_eq!(max, METADATA_MAX_KEYS);
+        }
+        other => panic!("expected ProjectMetadataTooManyKeys, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// check_effect_params_caps
+// ---------------------------------------------------------------------
+
+/// Build a Project with one video clip on a video track, carrying the
+/// provided single Effect. Reuses `project_with_image_clip` shape but
+/// swaps in the effect.
+fn project_with_clip_carrying_effect(effect: Effect) -> Project {
+    let mut p = project_with_image_clip();
+    p.tracks[0].clips[0].effects = vec![effect];
+    p
+}
+
+#[test]
+fn effect_params_empty_passes() {
+    let eff = make_effect("0000000000c1", "blur");
+    let p = project_with_clip_carrying_effect(eff);
+    check_effect_params_caps(&p).expect("empty effect params trivially passes");
+}
+
+#[test]
+fn effect_params_64_keys_passes() {
+    let mut eff = make_effect("0000000000c2", "blur");
+    for i in 0..EFFECT_PARAMS_MAX_KEYS {
+        eff.params.insert(format!("k{i}"), json!(i));
+    }
+    let p = project_with_clip_carrying_effect(eff);
+    check_effect_params_caps(&p).expect("exactly 64 keys is the upper bound (inclusive)");
+}
+
+#[test]
+fn effect_params_65_keys_rejected() {
+    let mut eff = make_effect("0000000000c3", "blur");
+    let eff_id = eff.id;
+    for i in 0..=EFFECT_PARAMS_MAX_KEYS {
+        eff.params.insert(format!("k{i}"), json!(0));
+    }
+    let p = project_with_clip_carrying_effect(eff);
+    match check_effect_params_caps(&p).unwrap_err() {
+        InvariantViolation::EffectParamsTooManyKeys {
+            effect_id,
+            count,
+            max,
+        } => {
+            assert_eq!(effect_id, eff_id);
+            assert_eq!(count, EFFECT_PARAMS_MAX_KEYS + 1);
+            assert_eq!(max, EFFECT_PARAMS_MAX_KEYS);
+        }
+        other => panic!("expected EffectParamsTooManyKeys, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_params_under_16kib_passes() {
+    let mut eff = make_effect("0000000000c4", "blur");
+    eff.params.insert("payload".into(), json!("x".repeat(1024)));
+    let p = project_with_clip_carrying_effect(eff);
+    check_effect_params_caps(&p).expect("1 KiB payload passes byte cap");
+}
+
+#[test]
+fn effect_params_over_16kib_rejected() {
+    let mut eff = make_effect("0000000000c5", "blur");
+    let eff_id = eff.id;
+    eff.params.insert(
+        "payload".into(),
+        json!("x".repeat(EFFECT_PARAMS_MAX_BYTES + 100)),
+    );
+    let p = project_with_clip_carrying_effect(eff);
+    match check_effect_params_caps(&p).unwrap_err() {
+        InvariantViolation::EffectParamsTooBigBytes {
+            effect_id,
+            bytes,
+            max_bytes,
+        } => {
+            assert_eq!(effect_id, eff_id);
+            assert!(bytes > max_bytes);
+            assert_eq!(max_bytes, EFFECT_PARAMS_MAX_BYTES);
+        }
+        other => panic!("expected EffectParamsTooBigBytes, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// check_effect_window_within_parent
+// ---------------------------------------------------------------------
+
+#[test]
+fn effect_window_none_passes() {
+    // Effect with no window — applies to full parent duration,
+    // trivially valid.
+    let eff = make_effect("00000000d101", "blur");
+    let p = project_with_clip_carrying_effect(eff);
+    check_effect_window_within_parent(&p).expect("None window trivially passes");
+}
+
+#[test]
+fn effect_window_valid_passes() {
+    // project_with_image_clip has source_in_tk=0, source_out_tk=480000,
+    // speed=1 → timeline_duration_tk = 480000. Window inside that.
+    let mut eff = make_effect("00000000d102", "blur");
+    eff.window = Some(EffectWindow {
+        in_tk: Tick::new(100),
+        out_tk: Tick::new(200),
+    });
+    let p = project_with_clip_carrying_effect(eff);
+    check_effect_window_within_parent(&p).expect("[100, 200) inside [0, 480000) passes");
+}
+
+#[test]
+fn effect_window_zero_in_zero_out_rejected() {
+    // in_tk == out_tk → strict-less violation.
+    let mut eff = make_effect("00000000d103", "blur");
+    let eff_id = eff.id;
+    eff.window = Some(EffectWindow {
+        in_tk: Tick::new(0),
+        out_tk: Tick::new(0),
+    });
+    let p = project_with_clip_carrying_effect(eff);
+    match check_effect_window_within_parent(&p).unwrap_err() {
+        InvariantViolation::EffectWindowOutOfBounds {
+            effect_id,
+            in_tk,
+            out_tk,
+            ..
+        } => {
+            assert_eq!(effect_id, eff_id);
+            assert_eq!(in_tk.get(), 0);
+            assert_eq!(out_tk.get(), 0);
+        }
+        other => panic!("expected EffectWindowOutOfBounds, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_window_in_above_out_rejected() {
+    let mut eff = make_effect("00000000d104", "blur");
+    eff.window = Some(EffectWindow {
+        in_tk: Tick::new(500),
+        out_tk: Tick::new(100),
+    });
+    let p = project_with_clip_carrying_effect(eff);
+    match check_effect_window_within_parent(&p).unwrap_err() {
+        InvariantViolation::EffectWindowOutOfBounds { in_tk, out_tk, .. } => {
+            assert_eq!(in_tk.get(), 500);
+            assert_eq!(out_tk.get(), 100);
+        }
+        other => panic!("expected EffectWindowOutOfBounds, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_window_out_beyond_clip_duration_rejected() {
+    // parent_duration = 480000. out_tk = 480001 → upper bound exceeded.
+    let mut eff = make_effect("00000000d105", "blur");
+    eff.window = Some(EffectWindow {
+        in_tk: Tick::new(0),
+        out_tk: Tick::new(480_001),
+    });
+    let p = project_with_clip_carrying_effect(eff);
+    match check_effect_window_within_parent(&p).unwrap_err() {
+        InvariantViolation::EffectWindowOutOfBounds {
+            out_tk,
+            parent_duration_tk,
+            ..
+        } => {
+            assert_eq!(out_tk.get(), 480_001);
+            assert_eq!(parent_duration_tk.get(), 480_000);
+        }
+        other => panic!("expected EffectWindowOutOfBounds, got {other:?}"),
+    }
+}
+
+#[test]
+fn effect_window_at_clip_duration_boundary_passes() {
+    // out_tk == parent_duration is the inclusive upper bound. Passes.
+    let mut eff = make_effect("00000000d106", "blur");
+    eff.window = Some(EffectWindow {
+        in_tk: Tick::new(0),
+        out_tk: Tick::new(480_000),
+    });
+    let p = project_with_clip_carrying_effect(eff);
+    check_effect_window_within_parent(&p).expect("out_tk == parent_duration is on the boundary");
+}
+
+#[test]
+fn apply_rejects_effect_window_out_of_bounds() {
+    // Patch attaches an effect with window out of bounds onto the
+    // keyframes-fixture video clip and confirms apply() rejects.
+    let p = load_three_track();
+    // Video clip duration = source_out - source_in = 2_400_000 (speed 1).
+    let bad_effect = json!({
+        "id": "01890000-0000-7000-8000-00000000ddd0",
+        "kind": "blur",
+        "enabled": true,
+        "params": {},
+        "in_tk": 0,
+        "out_tk": 999_999_999_i64  // way past clip duration
+    });
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op": "add", "path": "/tracks/0/clips/0/effects/-", "value": bad_effect},
+    ]))
+    .unwrap();
+    let err = p
+        .apply(&patch)
+        .expect_err("out-of-bounds window must reject at apply()");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::EffectWindowOutOfBounds {
+            out_tk,
+            parent_duration_tk,
+            ..
+        }) => {
+            assert_eq!(out_tk.get(), 999_999_999);
+            assert_eq!(parent_duration_tk.get(), 2_400_000);
+        }
+        other => panic!("expected EffectWindowOutOfBounds, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// check_asset_id_uniqueness
+// ---------------------------------------------------------------------
+
+#[test]
+fn asset_id_unique_passes() {
+    // All 5 fixtures have unique asset ids. Use the multi-asset one.
+    let p: Project =
+        serde_json::from_str(include_str!("fixtures/project_with_assets.json")).unwrap();
+    check_asset_id_uniqueness(&p).expect("fixture with distinct asset ids passes");
+}
+
+#[test]
+fn asset_id_duplicate_rejected() {
+    // Take project_with_assets and duplicate the first asset (push a
+    // clone of assets[0] onto the end). Direct walk; we don't run
+    // apply() because cloning would also clone fingerprints / hashes
+    // which is engine-illegal but orthogonal to the uniqueness check.
+    let mut p: Project =
+        serde_json::from_str(include_str!("fixtures/project_with_assets.json")).unwrap();
+    let first = p.assets[0].clone();
+    let first_id = *first.id();
+    let first_index = 0;
+    let new_index = p.assets.len();
+    p.assets.push(first);
+    match check_asset_id_uniqueness(&p).unwrap_err() {
+        InvariantViolation::DuplicateAssetId {
+            asset_id,
+            first_index: fi,
+            second_index: si,
+        } => {
+            assert_eq!(asset_id, first_id);
+            assert_eq!(fi, first_index);
+            assert_eq!(si, new_index);
+        }
+        other => panic!("expected DuplicateAssetId, got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_rejects_duplicate_asset_id() {
+    // Patch appends a duplicate of /assets/0 onto /assets/-. apply()
+    // must reject. Use the assets fixture (richer than empty).
+    let p: Project =
+        serde_json::from_str(include_str!("fixtures/project_with_assets.json")).unwrap();
+    let first_value = serde_json::to_value(&p.assets[0]).unwrap();
+    let first_id = *p.assets[0].id();
+    let original_len = p.assets.len();
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op": "add", "path": "/assets/-", "value": first_value},
+    ]))
+    .unwrap();
+    let err = p.apply(&patch).expect_err("duplicate asset id must reject");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::DuplicateAssetId {
+            asset_id,
+            first_index,
+            second_index,
+        }) => {
+            assert_eq!(asset_id, first_id);
+            assert_eq!(first_index, 0);
+            assert_eq!(second_index, original_len);
+        }
+        other => panic!("expected DuplicateAssetId, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// fixtures canary — all 5 fixtures satisfy the four new invariants.
+// ---------------------------------------------------------------------
+
+#[test]
+fn fixtures_satisfy_all_remaining_invariants() {
+    let fixtures: [(&str, &str); 5] = [
+        ("empty", include_str!("fixtures/empty_project_create.json")),
+        ("assets", include_str!("fixtures/project_with_assets.json")),
+        ("clips", include_str!("fixtures/project_with_clips.json")),
+        (
+            "effects",
+            include_str!("fixtures/project_with_effects.json"),
+        ),
+        (
+            "keyframes",
+            include_str!("fixtures/project_with_keyframes.json"),
+        ),
+    ];
+    for (name, src) in fixtures {
+        let p: Project =
+            serde_json::from_str(src).unwrap_or_else(|e| panic!("fixture {name:?} parses: {e}"));
+        check_effect_window_within_parent(&p)
+            .unwrap_or_else(|e| panic!("fixture {name:?} effect-window: {e}"));
+        check_effect_params_caps(&p)
+            .unwrap_or_else(|e| panic!("fixture {name:?} effect-params-caps: {e}"));
+        check_metadata_caps(&p).unwrap_or_else(|e| panic!("fixture {name:?} metadata-caps: {e}"));
+        check_asset_id_uniqueness(&p)
+            .unwrap_or_else(|e| panic!("fixture {name:?} asset-id-uniqueness: {e}"));
     }
 }
