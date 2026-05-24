@@ -6,12 +6,14 @@
 
 use serde_json::json;
 use verbreel_state::{
-    ApplyError, AssetIdState, AssetRef, BlendMode, Clip, Effect, EffectKind, FadeCurve,
-    InvariantViolation, Keyframe, KeyframeProperty, Project, SourceInTkKind, SpeedCurvePoint,
-    Track, TrackKind, Transform, check_asset_existence, check_asset_id_biconditional,
-    check_dangling_keyframes, check_duration_tk, check_fade_clamp, check_no_overlap,
+    ApplyError, AssetIdState, AssetRef, BlendMode, Clip, ClipMask, Effect, EffectKind, FadeCurve,
+    InvariantViolation, Keyframe, KeyframeProperty, MaskKind, MaskParamsError, Project,
+    SourceInTkKind, SpeedCurvePoint, Track, TrackKind, Transform, check_asset_existence,
+    check_asset_id_biconditional, check_dangling_keyframes, check_duration_tk,
+    check_effect_track_empty, check_fade_clamp, check_mask_params, check_no_overlap,
     check_source_in_tk, check_speed_curve_on_image_text, check_speed_on_image_text,
-    check_track_contiguity, extract_effect_id_from_property, timeline_duration_tk,
+    check_text_clip_text_field, check_track_contiguity, extract_effect_id_from_property,
+    timeline_duration_tk,
 };
 use verbreel_types::{AssetId, ClipId, EffectId, KeyframeId, Tick, TrackId, UuidV7};
 
@@ -2234,5 +2236,566 @@ fn fixtures_satisfy_asset_id_biconditional_and_existence() {
         check_asset_existence(&p).unwrap_or_else(|e| {
             panic!("fixture {name:?} must satisfy asset-existence: {e}");
         });
+    }
+}
+
+// =====================================================================
+// §0.13 track-structure invariants — slice 11/12/13:
+//   - check_effect_track_empty
+//   - check_text_clip_text_field
+//   - check_mask_params
+// =====================================================================
+
+// ---------------------------------------------------------------------
+// check_effect_track_empty
+// ---------------------------------------------------------------------
+
+#[test]
+fn effect_track_empty_passes() {
+    // Two-track project (V, E) where the effect track has no clips —
+    // canonical shape.
+    let mut p: Project =
+        serde_json::from_str(include_str!("fixtures/empty_project_create.json")).unwrap();
+    p.tracks = vec![
+        track_of(TrackKind::Video, "v0"),
+        track_of(TrackKind::Effect, "e0"),
+    ];
+    check_effect_track_empty(&p).expect("empty effect track passes");
+}
+
+#[test]
+fn effect_track_nonempty_rejected() {
+    // Push a non-empty clip onto the effect track — must reject.
+    // Direct walk; we don't need duration_tk / biconditional to be
+    // consistent because the effect-track-empty check is independent.
+    let mut p: Project =
+        serde_json::from_str(include_str!("fixtures/empty_project_create.json")).unwrap();
+    p.tracks = vec![
+        track_of(TrackKind::Video, "v0"),
+        track_of(TrackKind::Effect, "e0"),
+    ];
+    p.tracks[1].clips.push(clip_at(0, 100, 1.0));
+    let err = check_effect_track_empty(&p).expect_err("effect track with clips must reject");
+    match err {
+        InvariantViolation::EffectTrackHasClips {
+            track_index,
+            clip_count,
+        } => {
+            assert_eq!(track_index, 1);
+            assert_eq!(clip_count, 1);
+        }
+        other => panic!("expected EffectTrackHasClips, got {other:?}"),
+    }
+}
+
+#[test]
+fn non_effect_track_with_clips_passes() {
+    // The keyframes fixture has clips on video + text tracks (no
+    // effect tracks) — effect-track-empty check is trivially OK.
+    let p = load_three_track();
+    check_effect_track_empty(&p).expect("project without effect tracks passes trivially");
+}
+
+#[test]
+fn apply_rejects_effect_track_with_clips() {
+    // Build a project with [V, E] in JSON, append a clip onto the
+    // effect track via patch, apply must reject. We piggyback on
+    // empty_project_create.json (V, A) and replace the audio track
+    // with an effect track via JSON, then patch a clip onto it.
+    let mut p: Project =
+        serde_json::from_str(include_str!("fixtures/empty_project_create.json")).unwrap();
+    p.tracks[1] = track_of(TrackKind::Effect, "fx0");
+
+    // Patch: append clip_at(0, 100, 1.0) to /tracks/1/clips. Use a
+    // nil asset_id so we don't trip the biconditional (effect-track
+    // clip with nil asset_id → biconditional fires first since it
+    // runs earlier in the chain). Confirm the rejected variant is
+    // EffectTrackHasClips: the chain order is biconditional →
+    // asset_existence → effect_track_empty → text → mask, so an
+    // effect-track clip with nil asset_id trips biconditional first.
+    // To isolate effect_track_empty as the rejection variant, give
+    // the clip a real asset id resolving to a real asset. Easiest
+    // path: reuse the keyframes fixture (has both a real video asset
+    // and a video clip) and PATCH an effect track + a clip onto it.
+    let kf = load_three_track();
+    let real_id_str = kf.assets[0].id().to_string();
+    let new_clip_template = serde_json::json!({
+        "id": "0190b8d3-15e3-7000-bd00-000000efff01",
+        "name": "errant clip",
+        "asset_id": real_id_str,
+        "track_position_tk": 0,
+        "source_in_tk": 0,
+        "source_out_tk": 480000
+    });
+    let new_track_template = serde_json::json!({
+        "id": "0190b8d3-15e3-7000-bd00-000000efff00",
+        "kind": "effect",
+        "name": "Effect 1",
+        "clips": [new_clip_template],
+        "muted": false, "solo": false, "locked": false, "hidden": false,
+        "volume": 1.0, "pan": 0.0, "effects": []
+    });
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op": "add", "path": "/tracks/-", "value": new_track_template},
+    ]))
+    .unwrap();
+    let err = kf
+        .apply(&patch)
+        .expect_err("appending an effect track with a clip must reject");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::EffectTrackHasClips {
+            track_index,
+            clip_count,
+        }) => {
+            assert_eq!(
+                track_index, 3,
+                "kf fixture has 3 existing tracks (V, A, T); new effect at index 3"
+            );
+            assert_eq!(clip_count, 1);
+        }
+        other => panic!("expected EffectTrackHasClips, got {other:?}"),
+    }
+    // Silence unused-binding lint from the early prototype path.
+    let _ = p;
+}
+
+#[test]
+fn effect_track_has_clips_error_carries_index_and_count() {
+    let mut p: Project =
+        serde_json::from_str(include_str!("fixtures/empty_project_create.json")).unwrap();
+    p.tracks = vec![
+        track_of(TrackKind::Video, "v0"),
+        track_of(TrackKind::Effect, "e0"),
+    ];
+    // Three clips, just so count is visibly > 1.
+    p.tracks[1].clips.extend([
+        clip_at(0, 100, 1.0),
+        clip_at(200, 100, 1.0),
+        clip_at(400, 100, 1.0),
+    ]);
+    match check_effect_track_empty(&p).unwrap_err() {
+        v @ InvariantViolation::EffectTrackHasClips {
+            track_index,
+            clip_count,
+        } => {
+            assert_eq!(track_index, 1);
+            assert_eq!(clip_count, 3);
+            let msg = v.to_string();
+            assert!(msg.contains("effect track"), "msg={msg}");
+            assert!(msg.contains("must be empty"), "msg={msg}");
+        }
+        other => panic!("expected EffectTrackHasClips, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// check_text_clip_text_field
+// ---------------------------------------------------------------------
+
+#[test]
+fn text_clip_with_text_field_passes() {
+    // Three-track keyframes fixture: text clip on text track has the
+    // text field populated.
+    let p = load_three_track();
+    check_text_clip_text_field(&p).expect("text-track clip with Clip.text passes");
+}
+
+#[test]
+fn text_clip_missing_text_field_rejected() {
+    let mut p = load_three_track();
+    let expected_id = p.tracks[2].clips[0].id;
+    p.tracks[2].clips[0].text = None;
+    match check_text_clip_text_field(&p).unwrap_err() {
+        InvariantViolation::TextClipMissingTextField { clip_id } => {
+            assert_eq!(clip_id, expected_id);
+        }
+        other => panic!("expected TextClipMissingTextField, got {other:?}"),
+    }
+}
+
+#[test]
+fn non_text_clip_with_text_field_rejected() {
+    // Build a synthetic project: image clip on video track with
+    // Clip.text populated. Reuse project_with_image_clip and graft a
+    // TextElement onto the clip via JSON round-trip (avoids
+    // importing TextElement here).
+    let mut p = project_with_image_clip();
+    let text_value = json!({
+        "content": "should not be here",
+        "font_family": "Inter",
+        "font_size_px": 24.0,
+        "font_weight": 400,
+        "italic": false,
+        "color": "#ffffffff",
+        "stroke_px": 0.0,
+        "align": "left",
+        "letter_spacing": 0.0,
+        "line_height": 1.2,
+        "padding_px": 0.0
+    });
+    let mut clip_value = serde_json::to_value(&p.tracks[0].clips[0]).unwrap();
+    clip_value
+        .as_object_mut()
+        .unwrap()
+        .insert("text".to_string(), text_value);
+    p.tracks[0].clips[0] = serde_json::from_value(clip_value).unwrap();
+    let expected_id = p.tracks[0].clips[0].id;
+    match check_text_clip_text_field(&p).unwrap_err() {
+        InvariantViolation::NonTextClipHasTextField {
+            clip_id,
+            track_kind,
+        } => {
+            assert_eq!(clip_id, expected_id);
+            assert_eq!(track_kind, TrackKind::Video);
+        }
+        other => panic!("expected NonTextClipHasTextField, got {other:?}"),
+    }
+}
+
+#[test]
+fn non_text_clip_without_text_field_passes() {
+    // The image-clip helper builds a clip with Clip.text == None on
+    // a video track — canonical shape.
+    let p = project_with_image_clip();
+    check_text_clip_text_field(&p).expect("non-text-track clip without Clip.text passes");
+}
+
+#[test]
+fn apply_rejects_text_clip_missing_text() {
+    // Patch removes /tracks/2/clips/0/text. apply() must reject with
+    // TextClipMissingTextField.
+    let p = load_three_track();
+    let expected_id = p.tracks[2].clips[0].id;
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op": "remove", "path": "/tracks/2/clips/0/text"},
+    ]))
+    .unwrap();
+    let err = p
+        .apply(&patch)
+        .expect_err("removing text on a text-track clip must reject");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::TextClipMissingTextField {
+            clip_id,
+        }) => {
+            assert_eq!(clip_id, expected_id);
+        }
+        other => panic!("expected TextClipMissingTextField, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// check_mask_params — synthetic projects
+// ---------------------------------------------------------------------
+
+/// Build a rect mask with the given dimensions. Helper isolates the
+/// JSON-Map construction so the tests below are tight.
+fn mask_rect(w: f64, h: f64) -> ClipMask {
+    let mut params = serde_json::Map::new();
+    params.insert("x".into(), json!(0.0));
+    params.insert("y".into(), json!(0.0));
+    params.insert("w".into(), json!(w));
+    params.insert("h".into(), json!(h));
+    ClipMask {
+        kind: MaskKind::Rect,
+        params,
+        feather_px: 0.0,
+        inverted: false,
+    }
+}
+
+fn mask_ellipse(rx: f64, ry: f64) -> ClipMask {
+    let mut params = serde_json::Map::new();
+    params.insert("cx".into(), json!(0.5));
+    params.insert("cy".into(), json!(0.5));
+    params.insert("rx".into(), json!(rx));
+    params.insert("ry".into(), json!(ry));
+    ClipMask {
+        kind: MaskKind::Ellipse,
+        params,
+        feather_px: 0.0,
+        inverted: false,
+    }
+}
+
+fn mask_polygon(points: Vec<[f64; 2]>) -> ClipMask {
+    let mut params = serde_json::Map::new();
+    let json_points: Vec<serde_json::Value> =
+        points.into_iter().map(|p| json!([p[0], p[1]])).collect();
+    params.insert("points".into(), serde_json::Value::Array(json_points));
+    ClipMask {
+        kind: MaskKind::Polygon,
+        params,
+        feather_px: 0.0,
+        inverted: false,
+    }
+}
+
+fn mask_asset(asset_id: Option<&str>, threshold: Option<f64>) -> ClipMask {
+    let mut params = serde_json::Map::new();
+    if let Some(id) = asset_id {
+        params.insert("asset_id".into(), json!(id));
+    }
+    if let Some(t) = threshold {
+        params.insert("threshold".into(), json!(t));
+    }
+    ClipMask {
+        kind: MaskKind::Asset,
+        params,
+        feather_px: 0.0,
+        inverted: false,
+    }
+}
+
+#[test]
+fn mask_none_passes_trivially() {
+    let p = project_with_image_clip();
+    assert!(p.tracks[0].clips[0].mask.is_none());
+    check_mask_params(&p).expect("no mask is trivially valid");
+}
+
+#[test]
+fn mask_rect_valid_passes() {
+    let mut p = project_with_image_clip();
+    p.tracks[0].clips[0].mask = Some(mask_rect(640.0, 480.0));
+    check_mask_params(&p).expect("rect with w>0, h>0 passes");
+}
+
+#[test]
+fn mask_rect_zero_w_rejected() {
+    let mut p = project_with_image_clip();
+    p.tracks[0].clips[0].mask = Some(mask_rect(0.0, 480.0));
+    match check_mask_params(&p).unwrap_err() {
+        InvariantViolation::InvalidMaskParams {
+            mask_kind, reason, ..
+        } => {
+            assert_eq!(mask_kind, MaskKind::Rect);
+            assert_eq!(reason, MaskParamsError::RectInvalidWH);
+        }
+        other => panic!("expected InvalidMaskParams::RectInvalidWH, got {other:?}"),
+    }
+}
+
+#[test]
+fn mask_rect_zero_h_rejected() {
+    let mut p = project_with_image_clip();
+    p.tracks[0].clips[0].mask = Some(mask_rect(100.0, 0.0));
+    match check_mask_params(&p).unwrap_err() {
+        InvariantViolation::InvalidMaskParams { reason, .. } => {
+            assert_eq!(reason, MaskParamsError::RectInvalidWH);
+        }
+        other => panic!("expected InvalidMaskParams::RectInvalidWH, got {other:?}"),
+    }
+}
+
+#[test]
+fn mask_ellipse_valid_passes() {
+    let mut p = project_with_image_clip();
+    p.tracks[0].clips[0].mask = Some(mask_ellipse(100.0, 50.0));
+    check_mask_params(&p).expect("ellipse with rx>0, ry>0 passes");
+}
+
+#[test]
+fn mask_ellipse_zero_rx_rejected() {
+    let mut p = project_with_image_clip();
+    p.tracks[0].clips[0].mask = Some(mask_ellipse(0.0, 50.0));
+    match check_mask_params(&p).unwrap_err() {
+        InvariantViolation::InvalidMaskParams {
+            mask_kind, reason, ..
+        } => {
+            assert_eq!(mask_kind, MaskKind::Ellipse);
+            assert_eq!(reason, MaskParamsError::EllipseInvalidRxRy);
+        }
+        other => panic!("expected InvalidMaskParams::EllipseInvalidRxRy, got {other:?}"),
+    }
+}
+
+#[test]
+fn mask_polygon_3_points_passes() {
+    let mut p = project_with_image_clip();
+    p.tracks[0].clips[0].mask = Some(mask_polygon(vec![[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]));
+    check_mask_params(&p).expect("polygon with exactly 3 points passes (lower bound)");
+}
+
+#[test]
+fn mask_polygon_2_points_rejected() {
+    let mut p = project_with_image_clip();
+    p.tracks[0].clips[0].mask = Some(mask_polygon(vec![[0.0, 0.0], [1.0, 1.0]]));
+    match check_mask_params(&p).unwrap_err() {
+        InvariantViolation::InvalidMaskParams {
+            mask_kind, reason, ..
+        } => {
+            assert_eq!(mask_kind, MaskKind::Polygon);
+            assert_eq!(
+                reason,
+                MaskParamsError::PolygonPointsOutOfRange { count: 2 }
+            );
+        }
+        other => panic!("expected InvalidMaskParams::PolygonPointsOutOfRange, got {other:?}"),
+    }
+}
+
+#[test]
+fn mask_polygon_257_points_rejected() {
+    let mut p = project_with_image_clip();
+    // 257 points — one past the upper bound.
+    let pts: Vec<[f64; 2]> = (0..257).map(|i| [f64::from(i), 0.0]).collect();
+    p.tracks[0].clips[0].mask = Some(mask_polygon(pts));
+    match check_mask_params(&p).unwrap_err() {
+        InvariantViolation::InvalidMaskParams { reason, .. } => {
+            assert_eq!(
+                reason,
+                MaskParamsError::PolygonPointsOutOfRange { count: 257 }
+            );
+        }
+        other => panic!("expected PolygonPointsOutOfRange{{count:257}}, got {other:?}"),
+    }
+}
+
+#[test]
+fn mask_asset_valid_image_passes() {
+    // project_with_image_clip's clip already references the image
+    // asset; set a mask on it that points at that same image asset.
+    let p_seed = project_with_image_clip();
+    let img_id = *p_seed.assets[0].id();
+    let mut p = p_seed;
+    p.tracks[0].clips[0].mask = Some(mask_asset(Some(&img_id.to_string()), None));
+    check_mask_params(&p).expect("asset mask pointing at image asset passes");
+}
+
+#[test]
+fn mask_asset_missing_asset_id_rejected() {
+    let mut p = project_with_image_clip();
+    p.tracks[0].clips[0].mask = Some(mask_asset(None, None));
+    match check_mask_params(&p).unwrap_err() {
+        InvariantViolation::InvalidMaskParams {
+            mask_kind, reason, ..
+        } => {
+            assert_eq!(mask_kind, MaskKind::Asset);
+            assert_eq!(reason, MaskParamsError::AssetMissingAssetId);
+        }
+        other => panic!("expected InvalidMaskParams::AssetMissingAssetId, got {other:?}"),
+    }
+}
+
+#[test]
+fn mask_asset_unresolvable_rejected() {
+    let mut p = project_with_image_clip();
+    let dangling = "0190b8d3-15e3-7000-bd00-00000000dead";
+    p.tracks[0].clips[0].mask = Some(mask_asset(Some(dangling), None));
+    match check_mask_params(&p).unwrap_err() {
+        InvariantViolation::InvalidMaskParams { reason, .. } => match reason {
+            MaskParamsError::AssetUnresolvable {
+                referenced_asset_id,
+            } => {
+                assert_eq!(referenced_asset_id.to_string(), dangling);
+            }
+            other => panic!("expected AssetUnresolvable, got {other:?}"),
+        },
+        other => panic!("expected InvalidMaskParams, got {other:?}"),
+    }
+}
+
+#[test]
+fn mask_asset_pointing_to_video_rejected() {
+    // load_three_track has a video clip on a video track referencing
+    // a video asset. Mutate the clip's mask to point at that same
+    // video asset. The asset resolves but isn't image-kind →
+    // AssetNotImageKind.
+    let mut p = load_three_track();
+    let video_asset_id = *p.assets[0].id();
+    p.tracks[0].clips[0].mask = Some(mask_asset(Some(&video_asset_id.to_string()), None));
+    match check_mask_params(&p).unwrap_err() {
+        InvariantViolation::InvalidMaskParams { reason, .. } => match reason {
+            MaskParamsError::AssetNotImageKind {
+                referenced_asset_id,
+                actual_kind,
+            } => {
+                assert_eq!(referenced_asset_id, video_asset_id);
+                assert_eq!(actual_kind, "video");
+            }
+            other => panic!("expected AssetNotImageKind, got {other:?}"),
+        },
+        other => panic!("expected InvalidMaskParams, got {other:?}"),
+    }
+}
+
+#[test]
+fn mask_asset_threshold_out_of_range_rejected() {
+    let p_seed = project_with_image_clip();
+    let img_id = *p_seed.assets[0].id();
+    let mut p = p_seed;
+    p.tracks[0].clips[0].mask = Some(mask_asset(Some(&img_id.to_string()), Some(1.5)));
+    match check_mask_params(&p).unwrap_err() {
+        InvariantViolation::InvalidMaskParams { reason, .. } => match reason {
+            MaskParamsError::AssetThresholdOutOfRange { threshold } => {
+                assert!((threshold - 1.5).abs() < 1e-9, "threshold={threshold}");
+            }
+            other => panic!("expected AssetThresholdOutOfRange, got {other:?}"),
+        },
+        other => panic!("expected InvalidMaskParams, got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_rejects_invalid_mask_params() {
+    // Patch attaches an invalid-shape rect mask to the keyframes
+    // fixture's video clip and confirms apply() rejects with
+    // InvalidMaskParams{Rect, RectInvalidWH}.
+    let p = load_three_track();
+    let bad_mask = json!({
+        "kind": "rect",
+        "params": {"x": 0.0, "y": 0.0, "w": 0.0, "h": 100.0},
+        "feather_px": 0.0,
+        "inverted": false
+    });
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op": "replace", "path": "/tracks/0/clips/0/mask", "value": bad_mask},
+    ]))
+    .unwrap();
+    let err = p
+        .apply(&patch)
+        .expect_err("rect mask with w=0 must reject at apply()");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::InvalidMaskParams {
+            mask_kind,
+            reason,
+            ..
+        }) => {
+            assert_eq!(mask_kind, MaskKind::Rect);
+            assert_eq!(reason, MaskParamsError::RectInvalidWH);
+        }
+        other => panic!("expected InvalidMaskParams, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// fixtures canary — all 5 fixtures still satisfy the three new
+// invariants (no fixture carries an effect-track clip, a misaligned
+// Clip.text field, or any Clip.mask at all).
+// ---------------------------------------------------------------------
+
+#[test]
+fn fixtures_satisfy_track_structure_invariants() {
+    let fixtures: [(&str, &str); 5] = [
+        ("empty", include_str!("fixtures/empty_project_create.json")),
+        ("assets", include_str!("fixtures/project_with_assets.json")),
+        ("clips", include_str!("fixtures/project_with_clips.json")),
+        (
+            "effects",
+            include_str!("fixtures/project_with_effects.json"),
+        ),
+        (
+            "keyframes",
+            include_str!("fixtures/project_with_keyframes.json"),
+        ),
+    ];
+    for (name, src) in fixtures {
+        let p: Project =
+            serde_json::from_str(src).unwrap_or_else(|e| panic!("fixture {name:?} parses: {e}"));
+        check_effect_track_empty(&p)
+            .unwrap_or_else(|e| panic!("fixture {name:?} effect-track-empty: {e}"));
+        check_text_clip_text_field(&p)
+            .unwrap_or_else(|e| panic!("fixture {name:?} text-clip-text-field: {e}"));
+        check_mask_params(&p).unwrap_or_else(|e| panic!("fixture {name:?} mask-params: {e}"));
     }
 }
