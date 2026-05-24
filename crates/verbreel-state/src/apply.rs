@@ -20,15 +20,15 @@
 //! ## §0.13 invariant enforcement
 //!
 //! After the deserialize step succeeds, `apply()` composes the
-//! [`crate::invariants`] `check_*` family. As of the fade-clamp
-//! slice:
+//! [`crate::invariants`] `check_*` family in a deterministic order:
 //!
-//! - `check_fade_clamp` — every clip satisfies
-//!   `fade_in_tk + fade_out_tk ≤ timeline_duration_tk`.
+//! 1. `check_fade_clamp` — every clip satisfies
+//!    `fade_in_tk + fade_out_tk ≤ timeline_duration_tk`.
+//! 2. `check_track_contiguity` — tracks of the same kind are grouped
+//!    in `Project.tracks[]`.
 //!
-//! Subsequent slices add more checks here, one invariant family per
-//! slice. Each violation surfaces as
-//! [`ApplyError::InvariantViolation`] wrapping the typed
+//! Subsequent slices add more checks here. Each violation surfaces
+//! as [`ApplyError::InvariantViolation`] wrapping the typed
 //! [`crate::invariants::InvariantViolation`] enum so callers can
 //! pattern-match on the specific failure.
 //!
@@ -42,7 +42,7 @@
 
 use thiserror::Error;
 
-use crate::invariants::{InvariantViolation, check_fade_clamp};
+use crate::invariants::{InvariantViolation, check_fade_clamp, check_track_contiguity};
 use crate::project::Project;
 
 // ---------------------------------------------------------------------
@@ -141,7 +141,10 @@ impl Project {
         let mut value = serde_json::to_value(self).map_err(ApplyError::SerializationFailed)?;
         json_patch::patch(&mut value, patch)?;
         let project: Self = serde_json::from_value(value).map_err(ApplyError::TypeViolation)?;
+        // §0.13 invariant chain — order matters for deterministic
+        // error reporting. See `crate::invariants` module docs.
         check_fade_clamp(&project)?;
+        check_track_contiguity(&project)?;
         Ok(project)
     }
 

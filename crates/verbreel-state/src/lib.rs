@@ -95,7 +95,9 @@ pub use clip::{BlendMode, Clip, ClipMask, FadeCurve, MaskKind, SpeedCurvePoint};
 pub use effect::{
     Effect, EffectKind, EffectNewtypeError, EffectWindow, EffectWindowDependencyError,
 };
-pub use invariants::{InvariantViolation, check_fade_clamp, timeline_duration_tk};
+pub use invariants::{
+    InvariantViolation, check_fade_clamp, check_track_contiguity, timeline_duration_tk,
+};
 pub use keyframe::{Easing, Keyframe, KeyframeNewtypeError, KeyframeProperty};
 #[cfg(feature = "native")]
 pub use lifecycle::{LifecycleError, ProjectStore, SaveInfo};
