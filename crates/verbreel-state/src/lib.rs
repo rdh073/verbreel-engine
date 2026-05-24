@@ -85,6 +85,7 @@ pub mod text_element;
 pub mod track;
 pub mod tracker;
 pub mod transform;
+pub mod verbs;
 
 pub use apply::ApplyError;
 pub use asset::{Asset, AudioAsset, ImageAsset, SubtitleAsset, VideoAsset};
@@ -126,6 +127,10 @@ pub use text_element::{TextAlign, TextElement};
 pub use track::{Track, TrackKind};
 pub use tracker::Tracker;
 pub use transform::Transform;
+pub use verbs::project_set_metadata::{
+    ProjectSetMetadataArgs, ProjectSetMetadataData, ProjectSetMetadataError,
+    ProjectSetMetadataReconstructor,
+};
 
 // Re-export the tick rate constant from verbreel-types so downstream
 // crates (verbreel-args, the verb implementations) can refer to it via
