@@ -67,6 +67,7 @@ pub mod project_rename;
 pub mod project_set_canvas;
 pub mod project_set_fps;
 pub mod project_set_metadata;
+pub mod track_add;
 
 /// Synthetic `UUIDv7` used as the `project_id` in [`default_fixtures`].
 /// Hard-coded so the fixture is deterministic — `ProjectId::now()` would
@@ -87,6 +88,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `marker.set` (§13.2)
 /// - `marker.remove` (§13.3)
 /// - `marker.list` (§13.4)
+/// - `track.add` (§4.1)
 ///
 /// Paired with [`default_fixtures`]: the two together clear the §0.8
 /// reconstructor-purity startup gate by construction.
@@ -150,6 +152,10 @@ pub fn default_registry() -> VerbRegistry {
             "MarkerListVerb is the eighth registration in \
              default_registry(); cannot collide with prior verbs",
         );
+    registry.register(Arc::new(track_add::TrackAddVerb)).expect(
+        "TrackAddVerb is the ninth registration in \
+             default_registry(); cannot collide with prior verbs",
+    );
     registry
 }
 
@@ -174,6 +180,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         marker_set_fixture(),
         marker_remove_fixture(),
         marker_list_fixture(),
+        track_add_fixture(),
     ]
 }
 
@@ -533,6 +540,47 @@ fn marker_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `track.add` fixture used by [`default_fixtures`].
+///
+/// Starts from an empty synthetic project, then inserts a first video
+/// track with auto-name `Video 1` at global index `0`.
+fn track_add_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+    let args = track_add::TrackAddArgs {
+        project_id,
+        kind: crate::track::TrackKind::Video,
+        name: None,
+        index: None,
+    };
+
+    let (patch_value, _warnings) = track_add::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid track.add patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("track.add fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("track.add fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        track_add::data_envelope_from_post_state(&patch_value, &post_state)
+            .expect("track.add fixture expected_data"),
+    )
+    .expect("track.add fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "track.add".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -591,7 +639,8 @@ mod tests {
                 "project.rename",
                 "project.set_canvas",
                 "project.set_fps",
-                "project.set_metadata"
+                "project.set_metadata",
+                "track.add",
             ]
         );
     }
