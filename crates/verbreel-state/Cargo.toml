@@ -29,6 +29,10 @@ thiserror.workspace = true
 tracing.workspace = true
 json-patch.workspace = true
 jsonptr.workspace = true
+# Phase 2 second-slice (#21): regex-validated asset newtypes Sha256,
+# AssetPath, AssetRef. Patterns mirror `spec/project-schema.json`
+# `$defs/Sha256` / `$defs/AssetPath` / `$defs/AssetRef`.
+regex.workspace = true
 
 # Dev-dependencies:
 #   - `jsonschema` is used by `tests/schema_validation.rs` to lock the

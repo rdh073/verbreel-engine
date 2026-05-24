@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 use verbreel_types::{EventId, ProjectId, TICK_RATE_HZ, Tick};
 
+use crate::asset::Asset;
 use crate::canvas::Canvas;
 use crate::marker::Marker;
 use crate::track::Track;
@@ -81,12 +82,9 @@ pub struct Project {
     /// and §0.13 will codify it).
     pub tracks: Vec<Track>,
 
-    /// Project-level asset registry. **Placeholder** until the asset
-    /// typing slice lands.
-    ///
-    // TODO(#19 follow-up): replace `Vec<serde_json::Value>` with
-    // `Vec<Asset>` once `Asset` variants are typed.
-    pub assets: Vec<Value>,
+    /// Project-level asset registry. See [`Asset`] for the tagged-union
+    /// variant shape.
+    pub assets: Vec<Asset>,
 
     /// Project-level time markers. Optional in schema; defaults to
     /// `[]` if absent. See [`Marker`].
