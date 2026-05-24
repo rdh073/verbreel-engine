@@ -452,7 +452,7 @@ impl Verb for ProjectSetMetadataVerb {
         &self,
         prior: &Project,
         args: &Value,
-    ) -> Result<(json_patch::Patch, Value), VerbError> {
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), VerbError> {
         // Deserialize the raw JSON args into the typed struct. A serde
         // failure here is a [`VerbError::BadArgs`] — the args payload
         // is malformed (wrong shape, missing required fields, wrong
@@ -492,7 +492,7 @@ impl Verb for ProjectSetMetadataVerb {
             ))
         })?;
 
-        Ok((patch, data))
+        Ok((patch, data, Vec::new()))
     }
 
     fn reconstruct(

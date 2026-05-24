@@ -546,7 +546,7 @@ impl Verb for ProjectSetFpsVerb {
         &self,
         prior: &Project,
         args: &Value,
-    ) -> Result<(json_patch::Patch, Value), VerbError> {
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), VerbError> {
         let typed: ProjectSetFpsArgs =
             serde_json::from_value(args.clone()).map_err(|e| VerbError::BadArgs {
                 detail: format!("project.set_fps: args deserialize failed: {e}"),
@@ -576,7 +576,7 @@ impl Verb for ProjectSetFpsVerb {
             ))
         })?;
 
-        Ok((patch, data))
+        Ok((patch, data, Vec::new()))
     }
 
     fn reconstruct(

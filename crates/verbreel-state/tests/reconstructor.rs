@@ -45,7 +45,7 @@ impl Verb for TestEchoVerb {
         &self,
         _prior: &Project,
         _args: &Value,
-    ) -> Result<(json_patch::Patch, Value), VerbError> {
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), VerbError> {
         Err(VerbError::Custom(
             "TestEchoVerb::compute_patch not implemented (gate-only test verb)".into(),
         ))
@@ -77,7 +77,7 @@ impl Verb for BrokenReconstructorVerb {
         &self,
         _prior: &Project,
         _args: &Value,
-    ) -> Result<(json_patch::Patch, Value), VerbError> {
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), VerbError> {
         Err(VerbError::Custom(
             "BrokenReconstructorVerb::compute_patch not implemented (gate-only test verb)".into(),
         ))
@@ -108,7 +108,7 @@ impl Verb for TestKeyOrderVerb {
         &self,
         _prior: &Project,
         _args: &Value,
-    ) -> Result<(json_patch::Patch, Value), VerbError> {
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), VerbError> {
         Err(VerbError::Custom(
             "TestKeyOrderVerb::compute_patch not implemented (gate-only test verb)".into(),
         ))

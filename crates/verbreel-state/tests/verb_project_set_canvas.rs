@@ -463,7 +463,12 @@ fn verb_routes_through_mutate_via_verb() {
         .mutate_via_verb("project.set_canvas", args, None)
         .expect("mutate_via_verb happy path");
 
-    let MutateOutcome::Applied { event_id, data } = outcome else {
+    let MutateOutcome::Applied {
+        event_id,
+        data,
+        warnings: _,
+    } = outcome
+    else {
         panic!("happy path must return Applied, got {outcome:?}");
     };
 

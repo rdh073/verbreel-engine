@@ -363,7 +363,11 @@ fn lifecycle_mutate_with_key_first_call_applied() {
         .expect("first keyed call must succeed");
 
     let event_id = match outcome {
-        MutateOutcome::Applied { event_id, data: _ } => event_id,
+        MutateOutcome::Applied {
+            event_id,
+            data: _,
+            warnings: _,
+        } => event_id,
         other => panic!("first call should be Applied, got {other:?}"),
     };
     assert_eq!(store.project().name, "renamed-via-idem");
@@ -393,6 +397,7 @@ fn lifecycle_mutate_with_key_replay_returns_replayed_outcome() {
     let MutateOutcome::Applied {
         event_id: first_id,
         data: _,
+        warnings: _,
     } = first
     else {
         panic!("first call should be Applied, got {first:?}");
@@ -404,6 +409,7 @@ fn lifecycle_mutate_with_key_replay_returns_replayed_outcome() {
     let MutateOutcome::Replayed {
         event_id: replay_id,
         data: _,
+        warnings: _,
     } = second
     else {
         panic!("second call should be Replayed, got {second:?}");
@@ -505,6 +511,7 @@ fn lifecycle_mutate_without_key_skips_dedup() {
     let MutateOutcome::Applied {
         event_id: id_one,
         data: _,
+        warnings: _,
     } = outcome_one
     else {
         panic!("first un-keyed call should be Applied");
@@ -512,6 +519,7 @@ fn lifecycle_mutate_without_key_skips_dedup() {
     let MutateOutcome::Applied {
         event_id: id_two,
         data: _,
+        warnings: _,
     } = outcome_two
     else {
         panic!("second un-keyed call should be Applied");
@@ -549,7 +557,12 @@ fn lifecycle_open_rebuilds_index_from_events() {
                 Some("persisted-key".into()),
             )
             .unwrap();
-        let MutateOutcome::Applied { event_id, data: _ } = outcome else {
+        let MutateOutcome::Applied {
+            event_id,
+            data: _,
+            warnings: _,
+        } = outcome
+        else {
             panic!("first call should be Applied");
         };
         original_event_id = event_id;
@@ -606,7 +619,7 @@ impl verbreel_state::Verb for BrokenReconstructorVerb {
         &self,
         _prior: &Project,
         _args: &Value,
-    ) -> Result<(json_patch::Patch, Value), verbreel_state::VerbError> {
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), verbreel_state::VerbError> {
         // These gate tests only exercise the reconstruct path; the
         // forward path is unreachable from them. Surface a clear
         // verb-side error if anything ever does call it.
@@ -643,7 +656,7 @@ impl verbreel_state::Verb for WrongDataReconstructor {
         &self,
         _prior: &Project,
         _args: &Value,
-    ) -> Result<(json_patch::Patch, Value), verbreel_state::VerbError> {
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), verbreel_state::VerbError> {
         Err(verbreel_state::VerbError::Custom(
             "WrongDataReconstructor::compute_patch not implemented (gate-only test verb)".into(),
         ))
