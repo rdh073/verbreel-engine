@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use verbreel_types::{ClipId, LinkGroupId, Tick};
 
+use crate::effect::Effect;
 use crate::newtypes::AssetRef;
 use crate::text_element::TextElement;
 use crate::transform::Transform;
@@ -199,13 +200,10 @@ pub struct Clip {
     /// Fade-out interpolation curve. Default [`FadeCurve::Linear`].
     #[serde(default)]
     pub fade_out_curve: FadeCurve,
-    /// Clip-level effects. **Placeholder** — typing lands in the
-    /// Effect slice.
-    ///
-    // TODO(slice-4 follow-up): replace `Vec<serde_json::Value>` with
-    // `Vec<Effect>` once `Effect` is typed.
+    /// Clip-level effects (Phase 2 fourth slice — typed). See
+    /// [`Effect`].
     #[serde(default)]
-    pub effects: Vec<Value>,
+    pub effects: Vec<Effect>,
     /// Clip-level keyframes. **Placeholder** — typing lands in the
     /// Keyframe slice.
     ///

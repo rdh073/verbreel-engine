@@ -25,11 +25,15 @@
 //! - [`Clip`] + [`Transform`] + [`Shadow`] + [`TextElement`] +
 //!   [`FadeCurve`] / [`BlendMode`] / [`MaskKind`] enums +
 //!   [`ClipMask`] / [`SpeedCurvePoint`] (Phase 2 third slice).
+//! - [`Effect`] + [`EffectKind`] + [`EffectWindow`] (Phase 2 fourth
+//!   slice). [`Clip::effects`] is now `Vec<Effect>`.
 //!
 //! ## What's deferred (follow-up slices)
 //!
-//! - `Effect` typing (currently `Vec<serde_json::Value>` placeholder
-//!   on [`Track::effects`] and [`Clip::effects`]). Next slice.
+//! - `Effect` typing on tracks (currently `Vec<serde_json::Value>`
+//!   placeholder on [`Track::effects`] — replacement coupled with
+//!   track-level effects work in a future slice; this slice only
+//!   replaced [`Clip::effects`] per task scope).
 //! - `Keyframe` typing (currently `Vec<serde_json::Value>`
 //!   placeholder on [`Clip::keyframes`]).
 //! - `apply(patch) -> Result<Project>` — the json-patch consumer.
@@ -62,6 +66,7 @@ pub mod asset;
 pub mod asset_meta;
 pub mod canvas;
 pub mod clip;
+pub mod effect;
 pub mod marker;
 pub mod newtypes;
 pub mod project;
@@ -78,6 +83,9 @@ pub use asset_meta::{
 };
 pub use canvas::Canvas;
 pub use clip::{BlendMode, Clip, ClipMask, FadeCurve, MaskKind, SpeedCurvePoint};
+pub use effect::{
+    Effect, EffectKind, EffectNewtypeError, EffectWindow, EffectWindowDependencyError,
+};
 pub use marker::Marker;
 pub use newtypes::{AssetNewtypeError, AssetPath, AssetRef, Color, Sha256};
 pub use project::{Project, SCHEMA_VERSION};

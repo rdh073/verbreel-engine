@@ -1,0 +1,188 @@
+{
+  "id": "0190b8d3-15e3-7000-bd00-000000000001",
+  "schema_version": "1.0.0",
+  "tick_rate_hz": 240000,
+  "name": "with-effects",
+  "created_at": "2026-05-24T00:00:00Z",
+  "updated_at": "2026-05-24T00:00:00Z",
+  "canvas": {
+    "width": 1080,
+    "height": 1920,
+    "background": "#000000ff",
+    "pixel_aspect_num": 1,
+    "pixel_aspect_den": 1
+  },
+  "fps_num": 30,
+  "fps_den": 1,
+  "duration_tk": 2400000,
+  "tracks": [
+    {
+      "id": "0190b8d3-15e3-7000-bd00-000000000002",
+      "kind": "video",
+      "name": "Video 1",
+      "clips": [
+        {
+          "id": "0190b8d3-15e3-7000-bd00-000000000c01",
+          "name": "video clip 1",
+          "asset_id": "0190b8d3-15e3-7000-bd00-0000000000a1",
+          "track_position_tk": 0,
+          "source_in_tk": 0,
+          "source_out_tk": 2400000,
+          "speed": 1.0,
+          "reversed": false,
+          "transform": {
+            "x": 100.0,
+            "y": 200.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation_deg": 0.0,
+            "anchor_x": 0.5,
+            "anchor_y": 0.5,
+            "skew_x_deg": 0.0,
+            "skew_y_deg": 0.0,
+            "flip_h": false,
+            "flip_v": false
+          },
+          "opacity": 0.8,
+          "volume": 1.0,
+          "fade_in_tk": 24000,
+          "fade_out_tk": 0,
+          "fade_in_curve": "exp",
+          "fade_out_curve": "linear",
+          "effects": [
+            {
+              "id": "01890000-0000-7000-8000-000000000010",
+              "kind": "blur",
+              "enabled": true,
+              "params": {
+                "radius_px": 8
+              }
+            },
+            {
+              "id": "01890000-0000-7000-8000-000000000011",
+              "kind": "lut",
+              "enabled": false,
+              "params": {
+                "lut_id": "cinematic_warm"
+              },
+              "in_tk": 240000,
+              "out_tk": 720000
+            }
+          ],
+          "keyframes": [],
+          "locked": false,
+          "blend_mode": "multiply",
+          "mask": null
+        }
+      ],
+      "muted": false,
+      "solo": false,
+      "locked": false,
+      "hidden": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "effects": []
+    },
+    {
+      "id": "0190b8d3-15e3-7000-bd00-000000000003",
+      "kind": "audio",
+      "name": "Audio 1",
+      "clips": [],
+      "muted": false,
+      "solo": false,
+      "locked": false,
+      "hidden": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "effects": []
+    },
+    {
+      "id": "0190b8d3-15e3-7000-bd00-000000000004",
+      "kind": "text",
+      "name": "Text 1",
+      "clips": [
+        {
+          "id": "0190b8d3-15e3-7000-bd00-000000000c02",
+          "name": "text clip 1",
+          "asset_id": "00000000-0000-0000-0000-000000000000",
+          "track_position_tk": 0,
+          "source_in_tk": 0,
+          "source_out_tk": 480000,
+          "speed": 1.0,
+          "reversed": false,
+          "transform": {
+            "x": 0.0,
+            "y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation_deg": 0.0,
+            "anchor_x": 0.5,
+            "anchor_y": 0.5,
+            "skew_x_deg": 0.0,
+            "skew_y_deg": 0.0,
+            "flip_h": false,
+            "flip_v": false
+          },
+          "opacity": 1.0,
+          "volume": 1.0,
+          "fade_in_tk": 0,
+          "fade_out_tk": 0,
+          "fade_in_curve": "linear",
+          "fade_out_curve": "linear",
+          "effects": [],
+          "keyframes": [],
+          "text": {
+            "content": "Hello",
+            "font_family": "Inter",
+            "font_size_px": 96.0,
+            "font_weight": 700,
+            "italic": false,
+            "color": "#ffaa00ff",
+            "stroke_px": 0.0,
+            "align": "center",
+            "letter_spacing": 0.0,
+            "line_height": 1.2,
+            "padding_px": 0.0
+          },
+          "locked": false,
+          "blend_mode": "normal",
+          "mask": null
+        }
+      ],
+      "muted": false,
+      "solo": false,
+      "locked": false,
+      "hidden": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "effects": []
+    }
+  ],
+  "assets": [
+    {
+      "id": "0190b8d3-15e3-7000-bd00-0000000000a1",
+      "kind": "video",
+      "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+      "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.mp4",
+      "original_filename": "video1.mp4",
+      "imported_at": "2026-05-24T00:00:00Z",
+      "metadata": {
+        "duration_tk": 2400000,
+        "width": 1920,
+        "height": 1080,
+        "fps_num": 30,
+        "fps_den": 1,
+        "video_codec": "h264",
+        "container": "mp4",
+        "fingerprint": {
+          "mtime_ms": 1700000000000,
+          "size_bytes": 1048576
+        }
+      }
+    }
+  ],
+  "markers": [],
+  "metadata": {},
+  "last_saved_event_id": null,
+  "trackers": []
+}
