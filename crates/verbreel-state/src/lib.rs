@@ -72,6 +72,8 @@ pub mod canvas;
 pub mod clip;
 pub mod effect;
 pub mod keyframe;
+#[cfg(feature = "native")]
+pub mod lifecycle;
 pub mod marker;
 pub mod newtypes;
 pub mod project;
@@ -93,6 +95,8 @@ pub use effect::{
     Effect, EffectKind, EffectNewtypeError, EffectWindow, EffectWindowDependencyError,
 };
 pub use keyframe::{Easing, Keyframe, KeyframeNewtypeError, KeyframeProperty};
+#[cfg(feature = "native")]
+pub use lifecycle::{LifecycleError, ProjectStore, SaveInfo};
 pub use marker::Marker;
 pub use newtypes::{AssetNewtypeError, AssetPath, AssetRef, Color, Sha256};
 pub use project::{Project, SCHEMA_VERSION};
