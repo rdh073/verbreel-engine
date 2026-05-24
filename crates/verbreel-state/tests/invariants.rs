@@ -7,10 +7,10 @@
 use serde_json::json;
 use verbreel_state::{
     ApplyError, AssetRef, BlendMode, Clip, Effect, EffectKind, FadeCurve, InvariantViolation,
-    Keyframe, KeyframeProperty, Project, SourceInTkKind, Track, TrackKind, Transform,
-    check_dangling_keyframes, check_duration_tk, check_fade_clamp, check_no_overlap,
-    check_source_in_tk, check_track_contiguity, extract_effect_id_from_property,
-    timeline_duration_tk,
+    Keyframe, KeyframeProperty, Project, SourceInTkKind, SpeedCurvePoint, Track, TrackKind,
+    Transform, check_dangling_keyframes, check_duration_tk, check_fade_clamp, check_no_overlap,
+    check_source_in_tk, check_speed_curve_on_image_text, check_speed_on_image_text,
+    check_track_contiguity, extract_effect_id_from_property, timeline_duration_tk,
 };
 use verbreel_types::{AssetId, ClipId, EffectId, KeyframeId, Tick, TrackId, UuidV7};
 
@@ -1586,4 +1586,336 @@ fn fixtures_satisfy_source_in_tk() {
         });
     }
     let _ = AssetId::now(); // silence unused-import warning if any
+}
+
+// ---------------------------------------------------------------------
+// check_speed_on_image_text — direct walks
+// ---------------------------------------------------------------------
+
+#[test]
+fn speed_text_clip_one_passes() {
+    // Three-track keyframes fixture: text clip on text track with
+    // speed = 1.0 (fixture default).
+    let p = load_three_track();
+    check_speed_on_image_text(&p).expect("text clip with speed=1.0 passes");
+}
+
+#[test]
+fn speed_text_clip_non_one_rejected() {
+    let mut p = load_three_track();
+    p.tracks[2].clips[0].speed = 1.5;
+    let err = check_speed_on_image_text(&p).expect_err("text clip speed != 1.0 must reject");
+    if let InvariantViolation::InvalidSpeedOnDisplayClip {
+        clip_kind_indicator,
+        speed,
+        ..
+    } = err
+    {
+        assert_eq!(clip_kind_indicator, SourceInTkKind::Text);
+        assert!(
+            (speed - 1.5).abs() < f64::EPSILON,
+            "speed surfaced: {speed}"
+        );
+    } else {
+        panic!("expected InvalidSpeedOnDisplayClip, got {err:?}");
+    }
+}
+
+#[test]
+fn speed_image_clip_one_passes() {
+    let p = project_with_image_clip();
+    check_speed_on_image_text(&p).expect("image clip with speed=1.0 passes");
+}
+
+#[test]
+fn speed_image_clip_non_one_rejected() {
+    let mut p = project_with_image_clip();
+    p.tracks[0].clips[0].speed = 2.0;
+    let err = check_speed_on_image_text(&p).expect_err("image clip speed != 1.0 must reject");
+    if let InvariantViolation::InvalidSpeedOnDisplayClip {
+        clip_kind_indicator,
+        speed,
+        ..
+    } = err
+    {
+        assert_eq!(clip_kind_indicator, SourceInTkKind::Image);
+        assert!((speed - 2.0).abs() < f64::EPSILON);
+    } else {
+        panic!("expected InvalidSpeedOnDisplayClip, got {err:?}");
+    }
+}
+
+#[test]
+fn speed_video_clip_any_value_passes() {
+    // Video clip on a video track referencing a video asset — speed
+    // is meaningful here. Any value passes the display-kind invariant.
+    let mut p = load_three_track();
+    p.tracks[0].clips[0].speed = 2.5;
+    check_speed_on_image_text(&p).expect("video clip speed=2.5 passes — not display kind");
+}
+
+#[test]
+fn speed_audio_clip_any_value_passes() {
+    // Reshape the keyframes fixture's video asset → audio asset
+    // (same trick as `source_in_audio_clip_any_value_passes`).
+    let mut p = load_three_track();
+    let mut v = serde_json::to_value(&p).unwrap();
+    v["assets"][0]["kind"] = serde_json::json!("audio");
+    v["assets"][0]["metadata"] = serde_json::json!({
+        "duration_tk": 2_400_000,
+        "audio_codec": "aac",
+        "audio_channels": 2,
+        "audio_sample_rate_hz": 48_000,
+        "container": "mp4",
+        "fingerprint": {
+            "mtime_ms": 1_700_000_000_000_i64,
+            "size_bytes": 1_048_576
+        }
+    });
+    p = serde_json::from_value(v).expect("audio-asset reshape parses");
+    p.tracks[0].clips[0].speed = 0.5;
+    check_speed_on_image_text(&p).expect("audio clip speed=0.5 passes — not display kind");
+}
+
+// ---------------------------------------------------------------------
+// check_speed_curve_on_image_text — direct walks
+// ---------------------------------------------------------------------
+
+/// Build a minimal 2-point `speed_curve` for tests. Internal validity
+/// (bounds, monotonicity) is enforced by a future slice; here we just
+/// need `Some(...)`-ness.
+fn two_point_curve() -> Vec<SpeedCurvePoint> {
+    vec![
+        SpeedCurvePoint {
+            time_tk: Tick::new(0),
+            factor: 1.0,
+        },
+        SpeedCurvePoint {
+            time_tk: Tick::new(1000),
+            factor: 1.0,
+        },
+    ]
+}
+
+#[test]
+fn speed_curve_text_clip_none_passes() {
+    let p = load_three_track();
+    // Fixture default has no `speed_curve` field → None.
+    assert!(p.tracks[2].clips[0].speed_curve.is_none());
+    check_speed_curve_on_image_text(&p).expect("text clip with speed_curve=None passes");
+}
+
+#[test]
+fn speed_curve_text_clip_some_rejected() {
+    let mut p = load_three_track();
+    p.tracks[2].clips[0].speed_curve = Some(two_point_curve());
+    let err =
+        check_speed_curve_on_image_text(&p).expect_err("text clip speed_curve Some must reject");
+    if let InvariantViolation::InvalidSpeedCurveOnDisplayClip {
+        clip_kind_indicator,
+        point_count,
+        ..
+    } = err
+    {
+        assert_eq!(clip_kind_indicator, SourceInTkKind::Text);
+        assert_eq!(point_count, 2);
+    } else {
+        panic!("expected InvalidSpeedCurveOnDisplayClip, got {err:?}");
+    }
+}
+
+#[test]
+fn speed_curve_image_clip_none_passes() {
+    let p = project_with_image_clip();
+    assert!(p.tracks[0].clips[0].speed_curve.is_none());
+    check_speed_curve_on_image_text(&p).expect("image clip with speed_curve=None passes");
+}
+
+#[test]
+fn speed_curve_image_clip_some_rejected() {
+    let mut p = project_with_image_clip();
+    p.tracks[0].clips[0].speed_curve = Some(two_point_curve());
+    let err =
+        check_speed_curve_on_image_text(&p).expect_err("image clip speed_curve Some must reject");
+    if let InvariantViolation::InvalidSpeedCurveOnDisplayClip {
+        clip_kind_indicator,
+        point_count,
+        ..
+    } = err
+    {
+        assert_eq!(clip_kind_indicator, SourceInTkKind::Image);
+        assert_eq!(point_count, 2);
+    } else {
+        panic!("expected InvalidSpeedCurveOnDisplayClip, got {err:?}");
+    }
+}
+
+#[test]
+fn speed_curve_video_clip_some_passes() {
+    // Video clip on a video track referencing a video asset —
+    // speed_curve is meaningful here. Setting Some must pass the
+    // display-kind invariant.
+    let mut p = load_three_track();
+    p.tracks[0].clips[0].speed_curve = Some(two_point_curve());
+    check_speed_curve_on_image_text(&p)
+        .expect("video clip speed_curve Some passes — not display kind");
+}
+
+// ---------------------------------------------------------------------
+// apply() integration — speed / speed_curve
+// ---------------------------------------------------------------------
+
+#[test]
+fn apply_rejects_text_clip_non_one_speed() {
+    // Patch the text clip's speed to 2.0. apply() must reject with
+    // InvalidSpeedOnDisplayClip(Text).
+    let p = load_three_track();
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op":"replace","path":"/tracks/2/clips/0/speed","value": 2.0},
+    ]))
+    .unwrap();
+    let err = p
+        .apply(&patch)
+        .expect_err("text clip speed != 1.0 must reject");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::InvalidSpeedOnDisplayClip {
+            clip_kind_indicator,
+            ..
+        }) => assert_eq!(clip_kind_indicator, SourceInTkKind::Text),
+        other => panic!("expected InvalidSpeedOnDisplayClip(Text), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_rejects_text_clip_speed_curve_some() {
+    // Patch the text clip's speed_curve to a 2-point curve. apply()
+    // must reject with InvalidSpeedCurveOnDisplayClip(Text).
+    let p = load_three_track();
+    let curve_json = serde_json::to_value(two_point_curve()).unwrap();
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op":"add","path":"/tracks/2/clips/0/speed_curve","value": curve_json},
+    ]))
+    .unwrap();
+    let err = p
+        .apply(&patch)
+        .expect_err("text clip speed_curve Some must reject");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::InvalidSpeedCurveOnDisplayClip {
+            clip_kind_indicator,
+            point_count,
+            ..
+        }) => {
+            assert_eq!(clip_kind_indicator, SourceInTkKind::Text);
+            assert_eq!(point_count, 2);
+        }
+        other => panic!("expected InvalidSpeedCurveOnDisplayClip(Text), got {other:?}"),
+    }
+}
+
+#[test]
+fn invalid_speed_on_display_clip_error_carries_info() {
+    // Verify clip_id + indicator + speed reach the caller intact.
+    let mut p = load_three_track();
+    let expected_clip_id = p.tracks[2].clips[0].id;
+    p.tracks[2].clips[0].speed = 0.75;
+
+    let err = p.apply(&json_patch::Patch(vec![])).unwrap_err();
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::InvalidSpeedOnDisplayClip {
+            clip_id,
+            clip_kind_indicator,
+            speed,
+        }) => {
+            assert_eq!(clip_id, expected_clip_id);
+            assert_eq!(clip_kind_indicator, SourceInTkKind::Text);
+            assert!((speed - 0.75).abs() < f64::EPSILON);
+        }
+        other => panic!("expected InvalidSpeedOnDisplayClip, got {other:?}"),
+    }
+
+    // Also verify Display impl carries the human-readable info.
+    let msg = format!(
+        "§0.13 invariant violation: {}",
+        InvariantViolation::InvalidSpeedOnDisplayClip {
+            clip_id: expected_clip_id,
+            clip_kind_indicator: SourceInTkKind::Text,
+            speed: 0.75,
+        }
+    );
+    assert!(msg.contains("0.75"), "msg must mention speed: {msg}");
+    assert!(msg.contains("text"), "msg must mention kind: {msg}");
+    assert!(
+        msg.contains("must be 1.0"),
+        "msg must mention target: {msg}"
+    );
+}
+
+#[test]
+fn invalid_speed_curve_on_display_clip_error_carries_info() {
+    // Verify clip_id + indicator + point_count reach the caller.
+    let mut p = project_with_image_clip();
+    let expected_clip_id = p.tracks[0].clips[0].id;
+    p.tracks[0].clips[0].speed_curve = Some(two_point_curve());
+
+    let err = p.apply(&json_patch::Patch(vec![])).unwrap_err();
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::InvalidSpeedCurveOnDisplayClip {
+            clip_id,
+            clip_kind_indicator,
+            point_count,
+        }) => {
+            assert_eq!(clip_id, expected_clip_id);
+            assert_eq!(clip_kind_indicator, SourceInTkKind::Image);
+            assert_eq!(point_count, 2);
+        }
+        other => panic!("expected InvalidSpeedCurveOnDisplayClip, got {other:?}"),
+    }
+
+    // Display impl carries the human-readable info.
+    let msg = format!(
+        "§0.13 invariant violation: {}",
+        InvariantViolation::InvalidSpeedCurveOnDisplayClip {
+            clip_id: expected_clip_id,
+            clip_kind_indicator: SourceInTkKind::Image,
+            point_count: 2,
+        }
+    );
+    assert!(
+        msg.contains("2 points"),
+        "msg must mention point count: {msg}"
+    );
+    assert!(msg.contains("image"), "msg must mention kind: {msg}");
+    assert!(
+        msg.contains("must be None"),
+        "msg must mention target: {msg}"
+    );
+}
+
+#[test]
+fn fixtures_satisfy_speed_and_speed_curve_invariants() {
+    // Regression canary. All Phase 0 fixtures' text/image clips
+    // satisfy speed=1.0 and speed_curve=None (the spec defaults).
+    let fixtures: [(&str, &str); 5] = [
+        ("empty", include_str!("fixtures/empty_project_create.json")),
+        ("assets", include_str!("fixtures/project_with_assets.json")),
+        ("clips", include_str!("fixtures/project_with_clips.json")),
+        (
+            "effects",
+            include_str!("fixtures/project_with_effects.json"),
+        ),
+        (
+            "keyframes",
+            include_str!("fixtures/project_with_keyframes.json"),
+        ),
+    ];
+    for (name, src) in fixtures {
+        let p: Project =
+            serde_json::from_str(src).unwrap_or_else(|e| panic!("fixture {name:?} parses: {e}"));
+        check_speed_on_image_text(&p).unwrap_or_else(|e| {
+            panic!("fixture {name:?} must satisfy speed-on-image-text: {e}");
+        });
+        check_speed_curve_on_image_text(&p).unwrap_or_else(|e| {
+            panic!("fixture {name:?} must satisfy speed_curve-on-image-text: {e}");
+        });
+    }
 }

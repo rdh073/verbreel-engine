@@ -30,6 +30,12 @@
 //!   `Asset` is `Image`). Hard-rejects; the `project.open` silent-
 //!   normalization behavior with `W_CLIP_SOURCE_IN_NORMALIZED`
 //!   warning is a separate reconciliation slice.
+//! - [`check_speed_on_image_text`] — `Clip.speed == 1.0` on text /
+//!   image clips. `speed` is a source-slice playback-rate concept
+//!   that has no meaning for display-duration kinds.
+//! - [`check_speed_curve_on_image_text`] — `Clip.speed_curve == None`
+//!   on text / image clips. Same source-time-semantics rationale as
+//!   the scalar `speed` invariant (v1.1-additive companion).
 //!
 //! ## `apply()` check order
 //!
@@ -44,13 +50,13 @@
 //! 5. [`check_dangling_keyframes`] — per-clip keyframe → effect-id
 //!    referential integrity.
 //! 6. [`check_source_in_tk`] — text/image clip `source_in_tk == 0`.
-//! 7. (future slices append here)
+//! 7. [`check_speed_on_image_text`] — text/image clip `speed == 1.0`.
+//! 8. [`check_speed_curve_on_image_text`] — text/image clip
+//!    `speed_curve == None`.
+//! 9. (future slices append here)
 //!
 //! ## Planned future invariant slices
 //!
-//! - `check_source_in_tk_normalized_for_text_image` —
-//!   `source_in_tk == 0` on text/image clips.
-//! - `check_speed_curve_forbidden_for_text_image`.
 //! - `check_mask_per_kind_params` — `mask.params.<leaf>` matches the
 //!   `mask.kind`'s expected leaf set.
 //! - `check_asset_id_text_track_biconditional` —
@@ -59,6 +65,8 @@
 //! - `check_effect_params_size_caps` — `Effect.params` ≤ 64 keys / 16 KiB.
 //! - `check_effect_track_empty_clips` — `Track.kind == "effect"`
 //!   ⇒ `Track.clips.is_empty()`.
+//! - `check_speed_curve_internal_validity` — `speed_curve` bounds
+//!   (`2 ≤ len ≤ 256`, monotonic `time_tk`, factor `[0.001, 100]`).
 //!
 //! ## Spec references
 //!
@@ -92,10 +100,15 @@ enum AssetKind {
     Subtitle,
 }
 
-/// Indicator carried by [`InvariantViolation::InvalidSourceInTk`] so
-/// callers can tell whether the offending clip was flagged via its
-/// parent `Track.kind` (text) or via its referenced
-/// `Asset.kind` (image).
+/// Display-clip kind discriminator. Originally carried by
+/// [`InvariantViolation::InvalidSourceInTk`]; subsequently reused as
+/// the shared "why was this clip flagged" indicator across the
+/// text/image display-duration invariant family
+/// ([`InvariantViolation::InvalidSpeedOnDisplayClip`],
+/// [`InvariantViolation::InvalidSpeedCurveOnDisplayClip`], and any
+/// future invariants that target the same predicate). The name was
+/// minted before the reuse — kept as-is for type-stability across
+/// downstream callers; conceptually it is a display-clip-kind tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceInTkKind {
     /// Parent `Track.kind == Text`.
@@ -137,6 +150,48 @@ fn resolve_asset_kind(project: &Project, asset_id: &AssetRef) -> Option<AssetKin
             None
         }
     })
+}
+
+/// Centralized "is this clip a display-duration (text or image) clip"
+/// predicate. Returns:
+///
+/// - `Some(SourceInTkKind::Text)` if `track_kind == TrackKind::Text`
+///   (text clip — regardless of `asset_id`).
+/// - `Some(SourceInTkKind::Image)` if the clip's `asset_id` resolves
+///   to `Asset::Image(_)` in `project.assets[]` (image clip on a
+///   non-text track).
+/// - `None` otherwise: video / audio / subtitle assets, or
+///   unresolvable `asset_id` (let the asset-existence invariant —
+///   future slice — surface that separately).
+///
+/// Used by every §0.13 invariant whose semantic boundary is
+/// "display-duration clip" — currently [`check_source_in_tk`],
+/// [`check_speed_on_image_text`], and
+/// [`check_speed_curve_on_image_text`]. Factoring it out keeps the
+/// "which clips count as display-kind" answer in one place so future
+/// invariants (e.g. the `asset_id` ↔ `Track.kind` biconditional) extend
+/// or query the same predicate instead of re-deriving it.
+///
+/// Note: precedence is `Track.kind == Text` first — the text-track
+/// branch wins even if a text-track clip happens to reference an
+/// image asset id (which would itself be a separate invariant
+/// violation surfaced elsewhere). This matches the existing
+/// `check_source_in_tk` behavior verbatim.
+fn clip_is_display_kind(
+    project: &Project,
+    track_kind: TrackKind,
+    asset_id: &AssetRef,
+) -> Option<SourceInTkKind> {
+    if track_kind == TrackKind::Text {
+        return Some(SourceInTkKind::Text);
+    }
+    if matches!(
+        resolve_asset_kind(project, asset_id),
+        Some(AssetKind::Image)
+    ) {
+        return Some(SourceInTkKind::Image);
+    }
+    None
 }
 
 // ---------------------------------------------------------------------
@@ -306,6 +361,60 @@ pub enum InvariantViolation {
         referenced_effect_id: String,
         /// Full property string, surfaced for caller-side debugging.
         property: String,
+    },
+
+    /// `Clip.speed != 1.0` on a clip that the spec requires to be
+    /// `1.0` — text clips (parent `Track.kind == Text`) or image
+    /// clips (referenced `Asset` is `Image`). Spec §0.13 — *"source-
+    /// slice playback rate has no meaning for display-duration kinds;
+    /// `clip.set_speed` rejects text/image clips with
+    /// `E_CLIP_KIND_MISMATCH`."*
+    ///
+    /// `project.open` surfaces this with `E_SCHEMA_VIOLATION`;
+    /// `apply()` hard-rejects to surface verb-layer bugs loudly.
+    /// Equality is exact (`!= 1.0`) on the `f64` — schema default is
+    /// integer `1` and verb-layer is forbidden from writing other
+    /// values; a hand-edit landing `1.0000000001` should still fail.
+    #[error(
+        "§0.13 speed invariant: Clip.speed = {speed} on {clip_kind_indicator} clip {clip_id}, \
+         must be 1.0"
+    )]
+    InvalidSpeedOnDisplayClip {
+        /// Offending clip id.
+        clip_id: ClipId,
+        /// Why the clip is required to have `speed == 1.0` —
+        /// `Text` (parent Track.kind) or `Image` (referenced Asset).
+        clip_kind_indicator: SourceInTkKind,
+        /// The actual non-1.0 value found.
+        speed: f64,
+    },
+
+    /// `Clip.speed_curve` is `Some(_)` on a clip that the spec
+    /// requires to be `None` — text clips (parent `Track.kind ==
+    /// Text`) or image clips (referenced `Asset` is `Image`). Spec
+    /// §0.13 / §0.16 — *"`speed_curve` is forbidden on text and image
+    /// clips; `clip.set_speed_curve` rejects with
+    /// `E_CLIP_KIND_MISMATCH`."*
+    ///
+    /// `project.open` surfaces this with `E_SCHEMA_VIOLATION`;
+    /// `apply()` hard-rejects. The `point_count` is surfaced for
+    /// caller-side debugging (so logs can tell whether the
+    /// violating curve is empty / minimal / suspicious-shape without
+    /// re-walking the project tree).
+    #[error(
+        "§0.13 speed_curve invariant: Clip.speed_curve = [{point_count} points] on \
+         {clip_kind_indicator} clip {clip_id}, must be None"
+    )]
+    InvalidSpeedCurveOnDisplayClip {
+        /// Offending clip id.
+        clip_id: ClipId,
+        /// Why the clip is required to have `speed_curve == None` —
+        /// `Text` (parent Track.kind) or `Image` (referenced Asset).
+        clip_kind_indicator: SourceInTkKind,
+        /// Number of points in the offending `speed_curve`.
+        /// Diagnostic only — even `0` points is a violation
+        /// (the field is `Some(Vec<...>)`, not `None`).
+        point_count: usize,
     },
 }
 
@@ -620,14 +729,9 @@ pub fn check_dangling_keyframes(project: &Project) -> Result<(), InvariantViolat
 /// `Track.kind == Text`) and every image clip (referenced `Asset` is
 /// `Image`). Spec §0.13.
 ///
-/// Two-tier check per clip:
-/// - If `Track.kind == Text` → must be `Tick::ZERO`.
-/// - Else if [`resolve_asset_kind`] returns `Some(AssetKind::Image)` →
-///   must be `Tick::ZERO`.
-/// - Else (video/audio/subtitle assets, or unresolvable `asset_id`) →
-///   no constraint here. Unresolvable `asset_id` is a separate
-///   invariant (asset-existence — future slice); skip silently to
-///   avoid double-reporting.
+/// Uses [`clip_is_display_kind`] to compute the predicate so every
+/// invariant in the display-kind family shares the same "which clips
+/// count" answer.
 ///
 /// **Layer note**: `project.open` reconciliation silently normalizes
 /// non-zero values with a `W_CLIP_SOURCE_IN_NORMALIZED` warning;
@@ -643,23 +747,104 @@ pub fn check_source_in_tk(project: &Project) -> Result<(), InvariantViolation> {
     for track in &project.tracks {
         let track_kind = track.kind;
         for clip in &track.clips {
-            let must_be_zero_because = if track_kind == TrackKind::Text {
-                Some(SourceInTkKind::Text)
-            } else if matches!(
-                resolve_asset_kind(project, &clip.asset_id),
-                Some(AssetKind::Image)
-            ) {
-                Some(SourceInTkKind::Image)
-            } else {
-                None
-            };
-            if let Some(kind) = must_be_zero_because
+            if let Some(kind) = clip_is_display_kind(project, track_kind, &clip.asset_id)
                 && clip.source_in_tk != Tick::ZERO
             {
                 return Err(InvariantViolation::InvalidSourceInTk {
                     clip_id: clip.id,
                     clip_kind_indicator: kind,
                     source_in_tk: clip.source_in_tk,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_speed_on_image_text
+// ---------------------------------------------------------------------
+
+/// Verify `Clip.speed == 1.0` on every text clip (parent
+/// `Track.kind == Text`) and every image clip (referenced `Asset` is
+/// `Image`). Spec §0.13.
+///
+/// Uses [`clip_is_display_kind`] to compute the predicate so every
+/// invariant in the display-kind family shares the same "which clips
+/// count" answer.
+///
+/// Equality is **exact** on the underlying `f64` (`!= 1.0`). The
+/// schema default is the integer literal `1`, and the verb-layer
+/// (`clip.set_speed`) is forbidden from writing other values on
+/// text/image clips. A hand-edit that lands `1.0000000001` would
+/// still fail this check — that's intentional; the verb-layer is the
+/// only legitimate writer of `speed`, and any drift past exact `1.0`
+/// indicates a bypass.
+///
+/// **Layer note**: `project.open` surfaces this with
+/// `E_SCHEMA_VIOLATION`; the verb `clip.set_speed` rejects with
+/// `E_CLIP_KIND_MISMATCH`. `apply()` hard-rejects.
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::InvalidSpeedOnDisplayClip`] for the
+/// first text or image clip whose `speed != 1.0`.
+#[allow(clippy::float_cmp)]
+pub fn check_speed_on_image_text(project: &Project) -> Result<(), InvariantViolation> {
+    for track in &project.tracks {
+        let track_kind = track.kind;
+        for clip in &track.clips {
+            if let Some(kind) = clip_is_display_kind(project, track_kind, &clip.asset_id)
+                && clip.speed != 1.0
+            {
+                return Err(InvariantViolation::InvalidSpeedOnDisplayClip {
+                    clip_id: clip.id,
+                    clip_kind_indicator: kind,
+                    speed: clip.speed,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_speed_curve_on_image_text
+// ---------------------------------------------------------------------
+
+/// Verify `Clip.speed_curve == None` on every text clip (parent
+/// `Track.kind == Text`) and every image clip (referenced `Asset` is
+/// `Image`). Spec §0.13 / §0.16 (v1.1-additive).
+///
+/// Uses [`clip_is_display_kind`] to compute the predicate so every
+/// invariant in the display-kind family shares the same "which clips
+/// count" answer.
+///
+/// The check is on **presence** alone (`Option::is_some`); the
+/// curve's internal validity (`2 ≤ len ≤ 256`, monotonic `time_tk`,
+/// factor bounds) is a separate slice. Even a zero-point
+/// `Some(vec![])` is a violation here — the field's `None`-ness is
+/// the spec-mandated state.
+///
+/// **Layer note**: `project.open` surfaces this with
+/// `E_SCHEMA_VIOLATION`; the verb `clip.set_speed_curve` rejects with
+/// `E_CLIP_KIND_MISMATCH`. `apply()` hard-rejects.
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::InvalidSpeedCurveOnDisplayClip`]
+/// for the first text or image clip whose `speed_curve != None`.
+pub fn check_speed_curve_on_image_text(project: &Project) -> Result<(), InvariantViolation> {
+    for track in &project.tracks {
+        let track_kind = track.kind;
+        for clip in &track.clips {
+            if let Some(kind) = clip_is_display_kind(project, track_kind, &clip.asset_id)
+                && let Some(curve) = clip.speed_curve.as_ref()
+            {
+                return Err(InvariantViolation::InvalidSpeedCurveOnDisplayClip {
+                    clip_id: clip.id,
+                    clip_kind_indicator: kind,
+                    point_count: curve.len(),
                 });
             }
         }
