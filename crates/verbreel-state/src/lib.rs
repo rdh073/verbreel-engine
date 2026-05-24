@@ -136,6 +136,7 @@ pub use verbs::marker_add::{
     DEFAULT_MARKER_COLOR, LABEL_MAX as MARKER_LABEL_MAX, MarkerAddArgs, MarkerAddData,
     MarkerAddError, MarkerAddVerb, NOTE_MAX as MARKER_NOTE_MAX,
 };
+pub use verbs::marker_list::{MarkerListArgs, MarkerListData, MarkerListVerb};
 pub use verbs::marker_remove::{
     MARKERS_MAX_BATCH, MarkerRemoveArgs, MarkerRemoveData, MarkerRemoveError, MarkerRemoveVerb,
 };
