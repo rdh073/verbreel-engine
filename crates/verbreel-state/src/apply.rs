@@ -30,6 +30,8 @@
 //! 4. `check_duration_tk` — `Project.duration_tk` equals the
 //!    max of `track_position_tk + timeline_duration_tk` across all
 //!    clips.
+//! 5. `check_dangling_keyframes` — every effect-targeting keyframe
+//!    references an effect that exists on the parent clip.
 //!
 //! Subsequent slices add more checks here. Each violation surfaces
 //! as [`ApplyError::InvariantViolation`] wrapping the typed
@@ -47,8 +49,8 @@
 use thiserror::Error;
 
 use crate::invariants::{
-    InvariantViolation, check_duration_tk, check_fade_clamp, check_no_overlap,
-    check_track_contiguity,
+    InvariantViolation, check_dangling_keyframes, check_duration_tk, check_fade_clamp,
+    check_no_overlap, check_track_contiguity,
 };
 use crate::project::Project;
 
@@ -154,6 +156,7 @@ impl Project {
         check_track_contiguity(&project)?;
         check_no_overlap(&project)?;
         check_duration_tk(&project)?;
+        check_dangling_keyframes(&project)?;
         Ok(project)
     }
 

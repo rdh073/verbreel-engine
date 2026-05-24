@@ -21,6 +21,10 @@
 //!   `max(track_position_tk + timeline_duration_tk)` across all
 //!   clips. Post-condition only — verbs are responsible for the
 //!   `/duration_tk` replace op in their patches.
+//! - [`check_dangling_keyframes`] — every `Keyframe.property` of the
+//!   form `effects[<uuid>].params.<…>` references an effect that
+//!   exists on the parent clip. Non-effect-targeting properties
+//!   (`transform.*`, `opacity`, `volume`, `mask.*`) skip the check.
 //!
 //! ## `apply()` check order
 //!
@@ -32,11 +36,12 @@
 //! 2. [`check_track_contiguity`] — per-project structure.
 //! 3. [`check_no_overlap`] — per-track clip intervals.
 //! 4. [`check_duration_tk`] — project-level extent.
-//! 5. (future slices append here)
-//! - `check_duration_tk_maintenance` —
-//!   `Project.duration_tk == max(end_of_last_clip per track)`.
-//! - `check_dangling_keyframe` — every keyframe's `effects[<uuid>]`
-//!   path references an actual effect on the parent clip.
+//! 5. [`check_dangling_keyframes`] — per-clip keyframe → effect-id
+//!    referential integrity.
+//! 6. (future slices append here)
+//!
+//! ## Planned future invariant slices
+//!
 //! - `check_source_in_tk_normalized_for_text_image` —
 //!   `source_in_tk == 0` on text/image clips.
 //! - `check_speed_curve_forbidden_for_text_image`.
@@ -46,13 +51,19 @@
 //!   `Clip.asset_id == nil-UUID ⇔ Track.kind == "text"`.
 //! - `check_metadata_size_caps` — `Project.metadata` ≤ 256 keys / 64 KiB.
 //! - `check_effect_params_size_caps` — `Effect.params` ≤ 64 keys / 16 KiB.
+//! - `check_effect_track_empty_clips` — `Track.kind == "effect"`
+//!   ⇒ `Track.clips.is_empty()`.
 //!
 //! ## Spec references
 //!
 //! - §0.13 — full invariants list.
 
+use std::collections::HashSet;
+use std::sync::OnceLock;
+
+use regex::Regex;
 use thiserror::Error;
-use verbreel_types::{ClipId, Tick};
+use verbreel_types::{ClipId, KeyframeId, Tick};
 
 use crate::project::Project;
 use crate::track::TrackKind;
@@ -173,6 +184,32 @@ pub enum InvariantViolation {
         stored_duration_tk: Tick,
         /// Value computed from a fresh walk over every clip.
         computed_duration_tk: Tick,
+    },
+
+    /// A keyframe targets `effects[<uuid>].params.<…>` but the
+    /// referenced `<uuid>` is not present on the parent clip's
+    /// `Effect` list. Spec §0.13 — *"No dangling keyframe property
+    /// references."*
+    ///
+    /// Cascade-delete behavior on `effect.remove` and the
+    /// `W_KEYFRAMES_ORPHANED` reconciliation warning are verb-layer /
+    /// `project.open` territory; this variant is the rejection path
+    /// when a patch tries to bypass them.
+    #[error(
+        "§0.13 dangling-keyframe invariant: keyframe {keyframe_id} on clip {clip_id} targets \
+         effect {referenced_effect_id} which does not exist on this clip (property: {property:?})"
+    )]
+    DanglingKeyframe {
+        /// Parent clip carrying the dangling keyframe.
+        clip_id: ClipId,
+        /// The keyframe with the unresolved effect reference.
+        keyframe_id: KeyframeId,
+        /// Raw effect-id string extracted from the property path.
+        /// Kept as `String` (not `EffectId`) because the value came
+        /// from a regex-validated property string, not a typed lookup.
+        referenced_effect_id: String,
+        /// Full property string, surfaced for caller-side debugging.
+        property: String,
     },
 }
 
@@ -403,6 +440,78 @@ pub fn check_duration_tk(project: &Project) -> Result<(), InvariantViolation> {
             stored_duration_tk: project.duration_tk,
             computed_duration_tk: computed,
         });
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_dangling_keyframes
+// ---------------------------------------------------------------------
+
+/// Schema-derived regex matching `effects[<uuidv7>].params.<…>`
+/// shape. The `Keyframe.property` newtype already validates the full
+/// property pattern at deserialize (PR #28), so this regex assumes
+/// well-formed input — it only needs to extract the effect-id
+/// capture group on properties of the third category.
+const EFFECT_PROPERTY_PATTERN: &str =
+    r"^effects\[([0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\]\.params\.";
+
+fn effect_property_regex() -> &'static Regex {
+    static EFFECT_RE: OnceLock<Regex> = OnceLock::new();
+    EFFECT_RE.get_or_init(|| {
+        Regex::new(EFFECT_PROPERTY_PATTERN).expect("EFFECT_PROPERTY_PATTERN compiles")
+    })
+}
+
+/// Extract the effect-id from a `Keyframe.property` string. Returns
+/// `Some(uuid_str)` if `property` starts with
+/// `effects[<uuidv7>].params.<…>`; `None` for non-effect-targeting
+/// properties (`transform.*`, `opacity`, `volume`, `mask.*`).
+///
+/// The returned `&str` borrows from the input — the caller can use
+/// it for `HashSet<String>::contains(&str)` lookups without
+/// allocating.
+#[must_use]
+pub fn extract_effect_id_from_property(property: &str) -> Option<&str> {
+    effect_property_regex()
+        .captures(property)
+        .and_then(|c| c.get(1).map(|m| m.as_str()))
+}
+
+/// Verify every effect-targeting keyframe references an effect that
+/// exists on the parent clip.
+///
+/// Walks every clip on every track in declared order. For each clip,
+/// builds a `HashSet<String>` of effect-id strings (allocated once
+/// per clip, dropped before moving on), then iterates the clip's
+/// keyframes. Non-effect-targeting keyframes are skipped trivially
+/// (by `extract_effect_id_from_property` returning `None`).
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::DanglingKeyframe`] for the first
+/// effect-targeting keyframe whose effect-id is not in its parent
+/// clip's effect list.
+pub fn check_dangling_keyframes(project: &Project) -> Result<(), InvariantViolation> {
+    for track in &project.tracks {
+        for clip in &track.clips {
+            // Per-clip effect-id index. Allocated only once per clip.
+            let effect_ids: HashSet<String> =
+                clip.effects.iter().map(|e| e.id.to_string()).collect();
+            for kf in &clip.keyframes {
+                let property = kf.property.as_str();
+                if let Some(target) = extract_effect_id_from_property(property)
+                    && !effect_ids.contains(target)
+                {
+                    return Err(InvariantViolation::DanglingKeyframe {
+                        clip_id: clip.id,
+                        keyframe_id: kf.id,
+                        referenced_effect_id: target.to_string(),
+                        property: property.to_string(),
+                    });
+                }
+            }
+        }
     }
     Ok(())
 }

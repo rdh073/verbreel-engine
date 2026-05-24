@@ -6,11 +6,12 @@
 
 use serde_json::json;
 use verbreel_state::{
-    ApplyError, AssetRef, BlendMode, Clip, FadeCurve, InvariantViolation, Project, Track,
-    TrackKind, Transform, check_duration_tk, check_fade_clamp, check_no_overlap,
-    check_track_contiguity, timeline_duration_tk,
+    ApplyError, AssetRef, BlendMode, Clip, Effect, EffectKind, FadeCurve, InvariantViolation,
+    Keyframe, KeyframeProperty, Project, Track, TrackKind, Transform, check_dangling_keyframes,
+    check_duration_tk, check_fade_clamp, check_no_overlap, check_track_contiguity,
+    extract_effect_id_from_property, timeline_duration_tk,
 };
-use verbreel_types::{ClipId, Tick, TrackId, UuidV7};
+use verbreel_types::{ClipId, EffectId, KeyframeId, Tick, TrackId, UuidV7};
 
 const THREE_TRACK_FIXTURE: &str = include_str!("fixtures/project_with_keyframes.json");
 
@@ -993,6 +994,313 @@ fn fixtures_satisfy_duration_tk() {
             serde_json::from_str(src).unwrap_or_else(|e| panic!("fixture {name:?} parses: {e}"));
         check_duration_tk(&p).unwrap_or_else(|e| {
             panic!("fixture {name:?} must satisfy duration_tk: {e}");
+        });
+    }
+}
+
+// ---------------------------------------------------------------------
+// check_dangling_keyframes
+// ---------------------------------------------------------------------
+
+fn make_effect(id_suffix: &str, kind: &str) -> Effect {
+    let raw = format!("01890000-0000-7000-8000-{id_suffix}");
+    let id: EffectId = raw.parse::<UuidV7>().map(EffectId::from_uuid_v7).unwrap();
+    Effect::new(id, EffectKind::new(kind.to_string()).unwrap())
+}
+
+fn make_keyframe(id_suffix: &str, property: &str) -> Keyframe {
+    let raw = format!("01890000-0000-7000-8000-{id_suffix}");
+    let id: KeyframeId = raw.parse::<UuidV7>().map(KeyframeId::from_uuid_v7).unwrap();
+    Keyframe::new(
+        id,
+        KeyframeProperty::new(property.to_string()).unwrap(),
+        Tick::new(0),
+        json!(0),
+    )
+}
+
+/// Build a clip-with-effects-and-keyframes for the dangling tests.
+/// Set the effect/keyframe collections atop a vanilla `clip_at`.
+fn clip_with_kf_effects(
+    start: i64,
+    dur: i64,
+    effects: Vec<Effect>,
+    keyframes: Vec<Keyframe>,
+) -> Clip {
+    let mut c = clip_at(start, dur, 1.0);
+    c.effects = effects;
+    c.keyframes = keyframes;
+    c
+}
+
+#[test]
+fn dangling_kf_extract_uuid_from_property_test() {
+    // Effect-targeting properties: extract the uuid.
+    let uuid = "01890000-0000-7000-8000-0000000000a1";
+    let prop = format!("effects[{uuid}].params.radius_px");
+    assert_eq!(extract_effect_id_from_property(&prop), Some(uuid));
+
+    let prop = format!("effects[{uuid}].params.foo.bar");
+    assert_eq!(extract_effect_id_from_property(&prop), Some(uuid));
+
+    // Non-effect-targeting properties → None.
+    assert_eq!(extract_effect_id_from_property("transform.x"), None);
+    assert_eq!(
+        extract_effect_id_from_property("transform.rotation_deg"),
+        None
+    );
+    assert_eq!(extract_effect_id_from_property("opacity"), None);
+    assert_eq!(extract_effect_id_from_property("volume"), None);
+    assert_eq!(extract_effect_id_from_property("mask.feather_px"), None);
+    assert_eq!(extract_effect_id_from_property("mask.params.cx"), None);
+}
+
+#[test]
+fn dangling_kf_no_keyframes_passes() {
+    // Clip with no keyframes — trivially overlap-free.
+    let p = project_with_single_track_clips(TrackKind::Video, vec![clip_at(0, 100, 1.0)]);
+    let mut p = p;
+    p.duration_tk = Tick::new(100);
+    check_dangling_keyframes(&p).expect("no keyframes → no dangling possible");
+}
+
+#[test]
+fn dangling_kf_transform_property_passes() {
+    let mut p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_with_kf_effects(
+            0,
+            100,
+            vec![],
+            vec![make_keyframe("0000000000c1", "transform.x")],
+        )],
+    );
+    p.duration_tk = Tick::new(100);
+    check_dangling_keyframes(&p).expect("transform-targeting keyframe skips the effect check");
+}
+
+#[test]
+fn dangling_kf_opacity_passes() {
+    let mut p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_with_kf_effects(
+            0,
+            100,
+            vec![],
+            vec![make_keyframe("0000000000c2", "opacity")],
+        )],
+    );
+    p.duration_tk = Tick::new(100);
+    check_dangling_keyframes(&p).expect("opacity keyframe is Clip-direct");
+}
+
+#[test]
+fn dangling_kf_volume_passes() {
+    let mut p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_with_kf_effects(
+            0,
+            100,
+            vec![],
+            vec![make_keyframe("0000000000c3", "volume")],
+        )],
+    );
+    p.duration_tk = Tick::new(100);
+    check_dangling_keyframes(&p).expect("volume keyframe is Clip-direct");
+}
+
+#[test]
+fn dangling_kf_mask_passes() {
+    let mut p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_with_kf_effects(
+            0,
+            100,
+            vec![],
+            vec![
+                make_keyframe("0000000000c4", "mask.feather_px"),
+                make_keyframe("0000000000c5", "mask.params.cx"),
+            ],
+        )],
+    );
+    p.duration_tk = Tick::new(100);
+    check_dangling_keyframes(&p).expect("mask keyframes are Clip-direct");
+}
+
+#[test]
+fn dangling_kf_valid_effect_ref_passes() {
+    // Clip carries a blur effect with id <X>; keyframe property
+    // refers to `effects[X].params.radius_px`. Must pass.
+    let eff = make_effect("0000000000d0", "blur");
+    let eff_id_str = eff.id.to_string();
+    let prop = format!("effects[{eff_id_str}].params.radius_px");
+    let kf = make_keyframe("0000000000d1", &prop);
+
+    let mut p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_with_kf_effects(0, 100, vec![eff], vec![kf])],
+    );
+    p.duration_tk = Tick::new(100);
+    check_dangling_keyframes(&p).expect("valid effect-id ref must pass");
+}
+
+#[test]
+fn dangling_kf_invalid_effect_ref_rejected() {
+    // Clip carries blur effect <X>; keyframe targets `effects[<Y>]…`
+    // where Y is a different valid v7. Must reject.
+    let eff = make_effect("0000000000e0", "blur");
+    let other_uuid = "01890000-0000-7000-8000-0000000000ff";
+    let prop = format!("effects[{other_uuid}].params.x");
+    let kf = make_keyframe("0000000000e1", &prop);
+
+    let mut p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_with_kf_effects(0, 100, vec![eff], vec![kf])],
+    );
+    p.duration_tk = Tick::new(100);
+    let err = check_dangling_keyframes(&p).expect_err("dangling ref must reject");
+    if let InvariantViolation::DanglingKeyframe {
+        referenced_effect_id,
+        property,
+        ..
+    } = err
+    {
+        assert_eq!(referenced_effect_id, other_uuid);
+        assert!(property.contains("effects[01890000-0000-7000-8000-0000000000ff]"));
+    } else {
+        panic!("expected DanglingKeyframe, got {err:?}");
+    }
+}
+
+#[test]
+fn dangling_kf_no_effects_but_effect_ref_rejected() {
+    // Clip carries NO effects; keyframe still points at one.
+    let ref_uuid = "01890000-0000-7000-8000-0000000000f0";
+    let prop = format!("effects[{ref_uuid}].params.x");
+    let kf = make_keyframe("0000000000f1", &prop);
+
+    let mut p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_with_kf_effects(0, 100, vec![], vec![kf])],
+    );
+    p.duration_tk = Tick::new(100);
+    let err = check_dangling_keyframes(&p).expect_err("ref to no-effects clip must reject");
+    assert!(matches!(err, InvariantViolation::DanglingKeyframe { .. }));
+}
+
+#[test]
+fn apply_rejects_dangling_keyframe_violation() {
+    // Start from the three-track fixture (video clip with blur
+    // effect + a keyframe targeting that blur). Patch the keyframe
+    // property to target a different effect-id that doesn't exist.
+    let p = load_three_track();
+    let bogus_uuid = "01890000-0000-7000-8000-0000000000be";
+    let new_prop = format!("effects[{bogus_uuid}].params.radius_px");
+    // The clip has 4 keyframes, the 4th (index 3) targets the blur
+    // effect — flip it to the bogus uuid.
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op":"replace","path":"/tracks/0/clips/0/keyframes/3/property","value": new_prop},
+    ]))
+    .unwrap();
+    let err = p
+        .apply(&patch)
+        .expect_err("dangling effect ref must reject");
+    assert!(matches!(
+        err,
+        ApplyError::InvariantViolation(InvariantViolation::DanglingKeyframe { .. })
+    ));
+}
+
+#[test]
+fn apply_accepts_patch_with_consistent_effect_keyframe_pair() {
+    // Add an effect AND a keyframe targeting that effect, in the
+    // same patch. The Project must accept (effect exists on the
+    // parent clip when the post-state is evaluated).
+    let p = load_three_track();
+    let new_eff_id = "01890000-0000-7000-8000-0000000000ab";
+    let new_eff = json!({
+        "id": new_eff_id,
+        "kind": "blur",
+        "enabled": true,
+        "params": {"radius_px": 4}
+    });
+    let new_kf_property = format!("effects[{new_eff_id}].params.radius_px");
+    let new_kf = json!({
+        "id": "01890000-0000-7000-8000-0000000000ac",
+        "property": new_kf_property,
+        "time_tk": 1,
+        "value": 8.0,
+        "easing": "linear",
+    });
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op":"add","path":"/tracks/0/clips/0/effects/-","value": new_eff},
+        {"op":"add","path":"/tracks/0/clips/0/keyframes/-","value": new_kf},
+    ]))
+    .unwrap();
+    let out = p
+        .apply(&patch)
+        .expect("consistent effect+keyframe pair must succeed");
+    assert_eq!(out.tracks[0].clips[0].effects.len(), 3);
+    assert_eq!(out.tracks[0].clips[0].keyframes.len(), 5);
+}
+
+#[test]
+fn dangling_keyframe_error_carries_clip_keyframe_effect_ids() {
+    let eff = make_effect("0000000000a0", "blur");
+    let kf_id_suffix = "0000000000a2";
+    let bogus_uuid = "01890000-0000-7000-8000-0000000000a3";
+    let prop = format!("effects[{bogus_uuid}].params.radius_px");
+    let kf = make_keyframe(kf_id_suffix, &prop);
+    let kf_id = kf.id;
+
+    let mut p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_with_kf_effects(0, 100, vec![eff], vec![kf])],
+    );
+    p.duration_tk = Tick::new(100);
+    let expected_clip_id = p.tracks[0].clips[0].id;
+
+    let err = p.apply(&json_patch::Patch(vec![])).unwrap_err();
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::DanglingKeyframe {
+            clip_id,
+            keyframe_id,
+            referenced_effect_id,
+            property,
+        }) => {
+            assert_eq!(clip_id, expected_clip_id);
+            assert_eq!(keyframe_id, kf_id);
+            assert_eq!(referenced_effect_id, bogus_uuid);
+            assert!(property.contains(bogus_uuid));
+        }
+        other => panic!("expected DanglingKeyframe, got {other:?}"),
+    }
+}
+
+#[test]
+fn fixtures_satisfy_dangling_keyframes() {
+    // Regression canary. project_with_keyframes.json has both a
+    // blur effect (id 01890000-…-000000000010) and a keyframe
+    // targeting `effects[01890000-…-000000000010].params.radius_px`
+    // — they pair correctly per the keyframe slice (PR #28).
+    let fixtures: [(&str, &str); 5] = [
+        ("empty", include_str!("fixtures/empty_project_create.json")),
+        ("assets", include_str!("fixtures/project_with_assets.json")),
+        ("clips", include_str!("fixtures/project_with_clips.json")),
+        (
+            "effects",
+            include_str!("fixtures/project_with_effects.json"),
+        ),
+        (
+            "keyframes",
+            include_str!("fixtures/project_with_keyframes.json"),
+        ),
+    ];
+    for (name, src) in fixtures {
+        let p: Project =
+            serde_json::from_str(src).unwrap_or_else(|e| panic!("fixture {name:?} parses: {e}"));
+        check_dangling_keyframes(&p).unwrap_or_else(|e| {
+            panic!("fixture {name:?} must satisfy dangling-keyframes: {e}");
         });
     }
 }
