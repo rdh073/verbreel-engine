@@ -48,6 +48,16 @@
 //!     `Clip.text == None`.
 //! 13. `check_mask_params` — when `Clip.mask` is present, the
 //!     per-kind `params` shape matches the `mask.kind` discriminant.
+//! 14. `check_effect_window_within_parent` — each clip-attached
+//!     `Effect.window` (when present) lies within
+//!     `0..=parent_clip.timeline_duration_tk`.
+//! 15. `check_effect_params_caps` — each clip-attached
+//!     `Effect.params` satisfies the key-count + serialized-byte
+//!     caps.
+//! 16. `check_metadata_caps` — `Project.metadata` satisfies the
+//!     key-count + serialized-byte caps.
+//! 17. `check_asset_id_uniqueness` — `Asset.id` collisions across
+//!     `Project.assets[]`.
 //!
 //! Subsequent slices add more checks here. Each violation surfaces
 //! as [`ApplyError::InvariantViolation`] wrapping the typed
@@ -66,9 +76,11 @@ use thiserror::Error;
 
 use crate::invariants::{
     InvariantViolation, check_asset_existence, check_asset_id_biconditional,
-    check_dangling_keyframes, check_duration_tk, check_effect_track_empty, check_fade_clamp,
-    check_mask_params, check_no_overlap, check_source_in_tk, check_speed_curve_on_image_text,
-    check_speed_on_image_text, check_text_clip_text_field, check_track_contiguity,
+    check_asset_id_uniqueness, check_dangling_keyframes, check_duration_tk,
+    check_effect_params_caps, check_effect_track_empty, check_effect_window_within_parent,
+    check_fade_clamp, check_mask_params, check_metadata_caps, check_no_overlap, check_source_in_tk,
+    check_speed_curve_on_image_text, check_speed_on_image_text, check_text_clip_text_field,
+    check_track_contiguity,
 };
 use crate::project::Project;
 
@@ -183,6 +195,10 @@ impl Project {
         check_effect_track_empty(&project)?;
         check_text_clip_text_field(&project)?;
         check_mask_params(&project)?;
+        check_effect_window_within_parent(&project)?;
+        check_effect_params_caps(&project)?;
+        check_metadata_caps(&project)?;
+        check_asset_id_uniqueness(&project)?;
         Ok(project)
     }
 
