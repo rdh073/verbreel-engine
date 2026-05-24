@@ -6,10 +6,11 @@
 
 use serde_json::json;
 use verbreel_state::{
-    ApplyError, InvariantViolation, Project, Track, TrackKind, check_fade_clamp,
-    check_track_contiguity, timeline_duration_tk,
+    ApplyError, AssetRef, BlendMode, Clip, FadeCurve, InvariantViolation, Project, Track,
+    TrackKind, Transform, check_fade_clamp, check_no_overlap, check_track_contiguity,
+    timeline_duration_tk,
 };
-use verbreel_types::{Tick, TrackId};
+use verbreel_types::{ClipId, Tick, TrackId, UuidV7};
 
 const THREE_TRACK_FIXTURE: &str = include_str!("fixtures/project_with_keyframes.json");
 
@@ -464,6 +465,306 @@ fn fixtures_satisfy_track_contiguity() {
             serde_json::from_str(src).unwrap_or_else(|e| panic!("fixture {name:?} parses: {e}"));
         check_track_contiguity(&p).unwrap_or_else(|e| {
             panic!("fixture {name:?} must satisfy track contiguity: {e}");
+        });
+    }
+}
+
+// ---------------------------------------------------------------------
+// check_no_overlap — synthetic projects
+// ---------------------------------------------------------------------
+
+/// Build a minimal Clip for the no-overlap tests. `start` is
+/// `track_position_tk`; `dur` is the source duration (with `speed`
+/// passed separately so callers can exercise the speed-affected
+/// duration codepath).
+fn clip_at(start: i64, dur: i64, speed: f64) -> Clip {
+    Clip {
+        id: ClipId::now(),
+        name: "test".to_string(),
+        asset_id: AssetRef::nil(),
+        track_position_tk: Tick::new(start),
+        source_in_tk: Tick::new(0),
+        source_out_tk: Tick::new(dur),
+        speed,
+        reversed: false,
+        transform: Transform::default(),
+        opacity: 1.0,
+        volume: 1.0,
+        fade_in_tk: Tick::ZERO,
+        fade_out_tk: Tick::ZERO,
+        fade_in_curve: FadeCurve::Linear,
+        fade_out_curve: FadeCurve::Linear,
+        effects: vec![],
+        keyframes: vec![],
+        text: None,
+        locked: false,
+        link_group: None,
+        blend_mode: BlendMode::Normal,
+        mask: None,
+        speed_curve: None,
+    }
+}
+
+/// Build a clip with an explicit id (for tests that need to assert
+/// which clip appears as `earlier` / `later` in the error).
+fn clip_at_with_id(id: ClipId, start: i64, dur: i64, speed: f64) -> Clip {
+    let mut c = clip_at(start, dur, speed);
+    c.id = id;
+    c
+}
+
+/// Build a Project with a single track populated by the given clips.
+/// Starts from the empty-fixture snapshot and substitutes the first
+/// track's clips outright.
+fn project_with_single_track_clips(kind: TrackKind, clips: Vec<Clip>) -> Project {
+    let mut p: Project =
+        serde_json::from_str(include_str!("fixtures/empty_project_create.json")).unwrap();
+    p.tracks = vec![Track {
+        id: TrackId::now(),
+        kind,
+        name: "t0".to_string(),
+        clips,
+        muted: false,
+        solo: false,
+        locked: false,
+        hidden: false,
+        volume: 1.0,
+        pan: 0.0,
+        effects: vec![],
+    }];
+    p
+}
+
+#[test]
+fn no_overlap_empty_track_passes() {
+    let p = project_with_single_track_clips(TrackKind::Video, vec![]);
+    check_no_overlap(&p).expect("empty track is trivially overlap-free");
+}
+
+#[test]
+fn no_overlap_single_clip_passes() {
+    let p = project_with_single_track_clips(TrackKind::Video, vec![clip_at(0, 100, 1.0)]);
+    check_no_overlap(&p).expect("single clip is trivially overlap-free");
+}
+
+#[test]
+fn no_overlap_two_adjacent_clips_pass() {
+    // [0,100) and [100,200) — sharing endpoint is NOT overlap.
+    let p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_at(0, 100, 1.0), clip_at(100, 100, 1.0)],
+    );
+    check_no_overlap(&p).expect("adjacent half-open intervals must pass");
+}
+
+#[test]
+fn no_overlap_two_separated_clips_pass() {
+    // [0,100) and [200,300) — clear gap.
+    let p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_at(0, 100, 1.0), clip_at(200, 100, 1.0)],
+    );
+    check_no_overlap(&p).expect("separated clips must pass");
+}
+
+#[test]
+fn no_overlap_overlapping_clips_rejected() {
+    // [0,100) and [50,150) — overlap on [50,100).
+    let p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_at(0, 100, 1.0), clip_at(50, 100, 1.0)],
+    );
+    let err = check_no_overlap(&p).expect_err("overlap must reject");
+    assert!(matches!(err, InvariantViolation::ClipOverlap { .. }));
+}
+
+#[test]
+fn no_overlap_contained_clip_rejected() {
+    // [0,100) and [20,80) — second fully contained in first.
+    let p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_at(0, 100, 1.0), clip_at(20, 60, 1.0)],
+    );
+    let err = check_no_overlap(&p).expect_err("contained clip must reject");
+    if let InvariantViolation::ClipOverlap {
+        earlier_end_tk,
+        later_start_tk,
+        ..
+    } = err
+    {
+        assert_eq!(earlier_end_tk.get(), 100);
+        assert_eq!(later_start_tk.get(), 20);
+    } else {
+        panic!("expected ClipOverlap, got {err:?}");
+    }
+}
+
+#[test]
+fn no_overlap_identical_clips_rejected() {
+    // Two clips both at [0,100). Construct with explicit ids so we
+    // can assert which one appears as `earlier`. Stable sort
+    // preserves input order on ties — `id_a` was pushed first.
+    let id_a: ClipId = "01890000-0000-7000-8000-0000000000a1"
+        .parse::<UuidV7>()
+        .map(ClipId::from_uuid_v7)
+        .unwrap();
+    let id_b: ClipId = "01890000-0000-7000-8000-0000000000a2"
+        .parse::<UuidV7>()
+        .map(ClipId::from_uuid_v7)
+        .unwrap();
+    let p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![
+            clip_at_with_id(id_a, 0, 100, 1.0),
+            clip_at_with_id(id_b, 0, 100, 1.0),
+        ],
+    );
+    let err = check_no_overlap(&p).expect_err("identical intervals must reject");
+    if let InvariantViolation::ClipOverlap {
+        earlier_clip_id,
+        later_clip_id,
+        ..
+    } = err
+    {
+        assert_eq!(
+            earlier_clip_id, id_a,
+            "stable sort: id_a (input order) is earlier"
+        );
+        assert_eq!(later_clip_id, id_b);
+    } else {
+        panic!("expected ClipOverlap, got {err:?}");
+    }
+}
+
+#[test]
+fn no_overlap_unsorted_input_passes_if_actually_non_overlapping() {
+    // Array order [200,300) then [100,200) — the algorithm sorts
+    // by position before pairwise scan, so this is contiguous and
+    // must pass.
+    let p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_at(200, 100, 1.0), clip_at(100, 100, 1.0)],
+    );
+    check_no_overlap(&p).expect("unsorted but non-overlapping must pass");
+}
+
+#[test]
+fn no_overlap_speed_affected_duration_used_correctly() {
+    // speed=2 halves the timeline duration. A clip with source
+    // duration 200 at speed 2 has timeline duration 100. So:
+    // clip A: [0, 100) (source dur 200, speed 2 → timeline 100)
+    // clip B: [100, 300) (source dur 200, speed 1 → timeline 200)
+    // No overlap.
+    let p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_at(0, 200, 2.0), clip_at(100, 200, 1.0)],
+    );
+    check_no_overlap(&p).expect("speed-affected duration must be used");
+
+    // Now make them overlap: clip A speed=1 (timeline 200), clip B at 100.
+    // A: [0, 200), B: [100, 300) → overlap on [100,200).
+    let p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![clip_at(0, 200, 1.0), clip_at(100, 200, 1.0)],
+    );
+    check_no_overlap(&p).expect_err("speed=1 changes timeline duration, overlap appears");
+}
+
+// ---------------------------------------------------------------------
+// check_no_overlap — apply() integration
+// ---------------------------------------------------------------------
+
+#[test]
+fn apply_rejects_no_overlap_violation() {
+    // Start from the keyframes fixture (3 tracks, video clip
+    // [0, 2_400_000)). Append a second video clip overlapping at
+    // [1_000_000, 2_400_000) by patching it onto the same track.
+    let p = load_three_track();
+    let new_clip = clip_at(1_000_000, 1_400_000, 1.0);
+    let new_clip_json = serde_json::to_value(&new_clip).unwrap();
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op":"add","path":"/tracks/0/clips/-","value": new_clip_json},
+    ]))
+    .unwrap();
+    let err = p.apply(&patch).expect_err("overlap must reject");
+    assert!(matches!(
+        err,
+        ApplyError::InvariantViolation(InvariantViolation::ClipOverlap { track_index: 0, .. })
+    ));
+}
+
+#[test]
+fn apply_accepts_adjacent_non_overlapping_patch() {
+    // Same setup — append a second video clip starting RIGHT WHERE
+    // the first ends (2_400_000). Half-open intervals → adjacent,
+    // not overlapping.
+    let p = load_three_track();
+    let new_clip = clip_at(2_400_000, 480_000, 1.0);
+    let new_clip_json = serde_json::to_value(&new_clip).unwrap();
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op":"add","path":"/tracks/0/clips/-","value": new_clip_json},
+    ]))
+    .unwrap();
+    let out = p.apply(&patch).expect("adjacent clips must succeed");
+    assert_eq!(out.tracks[0].clips.len(), 2);
+    assert_eq!(out.tracks[0].clips[1].track_position_tk.get(), 2_400_000);
+}
+
+#[test]
+fn clip_overlap_error_carries_both_clip_ids_and_tk_values() {
+    let id_a: ClipId = "01890000-0000-7000-8000-0000000000b1"
+        .parse::<UuidV7>()
+        .map(ClipId::from_uuid_v7)
+        .unwrap();
+    let id_b: ClipId = "01890000-0000-7000-8000-0000000000b2"
+        .parse::<UuidV7>()
+        .map(ClipId::from_uuid_v7)
+        .unwrap();
+    let p = project_with_single_track_clips(
+        TrackKind::Video,
+        vec![
+            clip_at_with_id(id_a, 0, 100, 1.0),
+            clip_at_with_id(id_b, 50, 100, 1.0),
+        ],
+    );
+    let err = p.apply(&json_patch::Patch(vec![])).unwrap_err();
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::ClipOverlap {
+            track_index,
+            earlier_clip_id,
+            earlier_end_tk,
+            later_clip_id,
+            later_start_tk,
+        }) => {
+            assert_eq!(track_index, 0);
+            assert_eq!(earlier_clip_id, id_a);
+            assert_eq!(later_clip_id, id_b);
+            assert_eq!(earlier_end_tk.get(), 100);
+            assert_eq!(later_start_tk.get(), 50);
+        }
+        other => panic!("expected ClipOverlap, got {other:?}"),
+    }
+}
+
+#[test]
+fn fixtures_satisfy_no_overlap() {
+    // Regression canary against the 3 existing fixtures.
+    let fixtures: [(&str, &str); 3] = [
+        ("clips", include_str!("fixtures/project_with_clips.json")),
+        (
+            "effects",
+            include_str!("fixtures/project_with_effects.json"),
+        ),
+        (
+            "keyframes",
+            include_str!("fixtures/project_with_keyframes.json"),
+        ),
+    ];
+    for (name, src) in fixtures {
+        let p: Project =
+            serde_json::from_str(src).unwrap_or_else(|e| panic!("fixture {name:?} parses: {e}"));
+        check_no_overlap(&p).unwrap_or_else(|e| {
+            panic!("fixture {name:?} must satisfy no-overlap: {e}");
         });
     }
 }

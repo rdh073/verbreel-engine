@@ -14,6 +14,9 @@
 //!   grouped together in `Project.tracks[]` (no interleaving).
 //!   Specifically does NOT enforce a block ORDER across kinds —
 //!   that's `project.open` reconciliation territory.
+//! - [`check_no_overlap`] — clips on the same track don't overlap.
+//!   Half-open intervals; adjacent clips sharing an endpoint are
+//!   not considered overlapping.
 //!
 //! ## `apply()` check order
 //!
@@ -23,10 +26,8 @@
 //!
 //! 1. [`check_fade_clamp`] — per-clip.
 //! 2. [`check_track_contiguity`] — per-project structure.
-//! 3. (future slices append here)
-//!
-//! Planned (each its own slice + variant):
-//! - `check_no_overlap` — clips on the same track don't overlap.
+//! 3. [`check_no_overlap`] — per-track clip intervals.
+//! 4. (future slices append here)
 //! - `check_duration_tk_maintenance` —
 //!   `Project.duration_tk == max(end_of_last_clip per track)`.
 //! - `check_dangling_keyframe` — every keyframe's `effects[<uuid>]`
@@ -120,6 +121,33 @@ pub enum InvariantViolation {
         /// violation.
         expected_kind_block: TrackKind,
     },
+
+    /// Two clips on the same track have overlapping intervals. Spec
+    /// §0.13 — *"Engine enforces that clip intervals on the same
+    /// track do not overlap."* Half-open intervals
+    /// `[track_position_tk, track_position_tk + timeline_duration_tk)`
+    /// — adjacent clips sharing an endpoint are NOT considered
+    /// overlapping. Sort-by-position then pairwise scan makes the
+    /// reported `earlier` / `later` deterministic.
+    #[error(
+        "§0.13 no-overlap invariant: clip {later_clip_id} starts at {} on track #{track_index}, \
+         before earlier clip {earlier_clip_id} ends at {} (overlap detected)",
+        later_start_tk.get(), earlier_end_tk.get()
+    )]
+    ClipOverlap {
+        /// Index in `tracks[]` of the affected track.
+        track_index: usize,
+        /// `id` of the clip whose interval started first (lower
+        /// `track_position_tk`; ties broken by stable sort).
+        earlier_clip_id: ClipId,
+        /// Computed end of the earlier clip's interval (exclusive
+        /// upper bound).
+        earlier_end_tk: Tick,
+        /// `id` of the clip whose interval started second.
+        later_clip_id: ClipId,
+        /// The later clip's `track_position_tk`.
+        later_start_tk: Tick,
+    },
 }
 
 // ---------------------------------------------------------------------
@@ -190,6 +218,67 @@ pub fn check_fade_clamp(project: &Project) -> Result<(), InvariantViolation> {
                     fade_in_tk: clip.fade_in_tk,
                     fade_out_tk: clip.fade_out_tk,
                     timeline_duration_tk: dur,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_no_overlap
+// ---------------------------------------------------------------------
+
+/// Walk every track; for each track sort its clips by
+/// `track_position_tk` and verify that no two adjacent intervals
+/// overlap. Returns the first
+/// [`InvariantViolation::ClipOverlap`] found, or [`Ok`].
+///
+/// Half-open intervals: a clip starting exactly where the previous
+/// ended (`earlier_end == later_start`) is **adjacent**, not
+/// overlapping. The predicate is `earlier_end > later_start`.
+///
+/// Empty / single-clip tracks are trivially overlap-free.
+///
+/// Sort is stable (`slice::sort_by_key`) so when two clips share the
+/// same `track_position_tk` (genuine overlap), the one appearing
+/// first in the input array is reported as `earlier_clip_id`.
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::ClipOverlap`] for the first overlap
+/// detected. Walks tracks in `Project.tracks[]` order; within each
+/// track, walks adjacent pairs in sorted-position order.
+pub fn check_no_overlap(project: &Project) -> Result<(), InvariantViolation> {
+    for (track_index, track) in project.tracks.iter().enumerate() {
+        if track.clips.len() < 2 {
+            continue;
+        }
+        // Build (clip_ref, start, end) tuples. `start` is the clip's
+        // `track_position_tk`; `end = start + timeline_duration_tk`
+        // (exclusive upper bound).
+        let mut intervals: Vec<(&crate::clip::Clip, Tick, Tick)> = track
+            .clips
+            .iter()
+            .map(|c| {
+                let dur = timeline_duration_tk(c.source_in_tk, c.source_out_tk, c.speed);
+                let start = c.track_position_tk;
+                let end = Tick::new(start.get().saturating_add(dur.get()));
+                (c, start, end)
+            })
+            .collect();
+        intervals.sort_by_key(|(_, start, _)| start.get());
+
+        for window in intervals.windows(2) {
+            let (a, _a_start, a_end) = &window[0];
+            let (b, b_start, _b_end) = &window[1];
+            if a_end.get() > b_start.get() {
+                return Err(InvariantViolation::ClipOverlap {
+                    track_index,
+                    earlier_clip_id: a.id,
+                    earlier_end_tk: *a_end,
+                    later_clip_id: b.id,
+                    later_start_tk: *b_start,
                 });
             }
         }

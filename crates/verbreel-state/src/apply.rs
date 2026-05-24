@@ -26,6 +26,7 @@
 //!    `fade_in_tk + fade_out_tk ≤ timeline_duration_tk`.
 //! 2. `check_track_contiguity` — tracks of the same kind are grouped
 //!    in `Project.tracks[]`.
+//! 3. `check_no_overlap` — clips on the same track don't overlap.
 //!
 //! Subsequent slices add more checks here. Each violation surfaces
 //! as [`ApplyError::InvariantViolation`] wrapping the typed
@@ -42,7 +43,9 @@
 
 use thiserror::Error;
 
-use crate::invariants::{InvariantViolation, check_fade_clamp, check_track_contiguity};
+use crate::invariants::{
+    InvariantViolation, check_fade_clamp, check_no_overlap, check_track_contiguity,
+};
 use crate::project::Project;
 
 // ---------------------------------------------------------------------
@@ -145,6 +148,7 @@ impl Project {
         // error reporting. See `crate::invariants` module docs.
         check_fade_clamp(&project)?;
         check_track_contiguity(&project)?;
+        check_no_overlap(&project)?;
         Ok(project)
     }
 
