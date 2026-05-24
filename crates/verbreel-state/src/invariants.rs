@@ -41,6 +41,18 @@
 //!   or a nil `asset_id` on a non-text-track clip is rejected.
 //! - [`check_asset_existence`] — every non-nil `Clip.asset_id`
 //!   resolves to an [`Asset`] in `Project.assets[]`.
+//! - [`check_effect_track_empty`] — `Track.kind == Effect` implies
+//!   `Track.clips.is_empty()`. Effect tracks are container metadata
+//!   only; clip-shaped children belong on a video/audio/text track.
+//! - [`check_text_clip_text_field`] — text-track clips MUST have
+//!   `Clip.text == Some(_)`; non-text-track clips MUST have
+//!   `Clip.text == None`. The biconditional shape mirrors the
+//!   `asset_id ↔ Track.kind == Text` slice.
+//! - [`check_mask_params`] — when `Clip.mask.is_some()`, the
+//!   `mask.params` map shape must match the `mask.kind` discriminant
+//!   (rect `{w,h} > 0`, ellipse `{rx,ry} > 0`, polygon
+//!   `points.len() in 3..=256`, asset `asset_id` resolves to an
+//!   image asset with optional `threshold ∈ [0,1]`).
 //!
 //! ## `apply()` check order
 //!
@@ -62,26 +74,29 @@
 //!    `asset_id`.
 //! 10. [`check_asset_existence`] — non-nil `asset_id` resolves into
 //!     `Project.assets[]`.
-//! 11. (future slices append here)
+//! 11. [`check_effect_track_empty`] — effect tracks carry no clips.
+//! 12. [`check_text_clip_text_field`] — text-track ⇔
+//!     `Clip.text.is_some()`.
+//! 13. [`check_mask_params`] — per-kind `Clip.mask.params` shape.
+//! 14. (future slices append here)
 //!
 //! Biconditional runs before existence intentionally: a nil
 //! `asset_id` on a non-text track is a kind-mismatch (structurally
 //! clearer error), while running existence first would surface a
 //! misleading "asset not found" for a value the spec mandates be
-//! nil in the first place.
+//! nil in the first place. Mask-params runs after asset existence
+//! for the same reason — by the time a mask-asset reference is
+//! cross-checked, `Project.assets[]` has already been audited and
+//! the same `resolve_asset_kind` helper is reused.
 //!
 //! ## Planned future invariant slices
 //!
-//! - `check_mask_per_kind_params` — `mask.params.<leaf>` matches the
-//!   `mask.kind`'s expected leaf set.
 //! - `check_metadata_size_caps` — `Project.metadata` ≤ 256 keys / 64 KiB.
 //! - `check_effect_params_size_caps` — `Effect.params` ≤ 64 keys / 16 KiB.
-//! - `check_effect_track_empty_clips` — `Track.kind == "effect"`
-//!   ⇒ `Track.clips.is_empty()`.
 //! - `check_speed_curve_internal_validity` — `speed_curve` bounds
 //!   (`2 ≤ len ≤ 256`, monotonic `time_tk`, factor `[0.001, 100]`).
-//! - `check_mask_asset_id_resolution` — `Clip.mask.params.asset_id`
-//!   (for `kind: "asset"` masks) resolves to an image asset.
+//! - `check_effect_window_inside_parent` — `0 ≤ in_tk < out_tk ≤
+//!   parent_clip.timeline_duration_tk` on every `Effect.window`.
 //!
 //! ## Spec references
 //!
@@ -95,6 +110,7 @@ use thiserror::Error;
 use verbreel_types::{AssetId, ClipId, KeyframeId, Tick};
 
 use crate::asset::Asset;
+use crate::clip::{ClipMask, MaskKind};
 use crate::newtypes::AssetRef;
 use crate::project::Project;
 use crate::track::TrackKind;
@@ -515,6 +531,173 @@ pub enum InvariantViolation {
         /// the missing entry (typically a verb-layer write that
         /// forgot to add the asset, or a hand-edited project.json).
         referenced_asset_id: AssetId,
+    },
+
+    /// `Track.kind == Effect` carries one or more clips. Spec §0.13 —
+    /// *"Effect tracks are container metadata only; clip-shaped
+    /// children live on a video / audio / text track."* A
+    /// hand-edited project.json that pushes clips onto an effect
+    /// track is rejected (rather than silently dropped) so the
+    /// hand-editor sees the structural error.
+    ///
+    /// `project.open` surfaces this with `E_SCHEMA_VIOLATION`;
+    /// `apply()` hard-rejects.
+    #[error(
+        "§0.13 effect-track-empty invariant: effect track at index \
+         {track_index} carries {clip_count} clip(s), must be empty"
+    )]
+    EffectTrackHasClips {
+        /// Index in `tracks[]` of the offending effect track.
+        track_index: usize,
+        /// Number of clips found on it (helps callers locate the
+        /// offending entries without re-walking).
+        clip_count: usize,
+    },
+
+    /// A text-track clip is missing the `Clip.text` field
+    /// (`text == None`). Spec §0.13 — *"Text-track clips carry their
+    /// rendered content via `Clip.text`; the field is mandatory on
+    /// `Track.kind == Text` and forbidden elsewhere."*
+    ///
+    /// Companion of [`InvariantViolation::NonTextClipHasTextField`].
+    /// The reconciliation pass does NOT auto-normalize — the
+    /// explicit-failure path forces the hand-editor to resolve.
+    ///
+    /// `project.open` surfaces this with `E_SCHEMA_VIOLATION`;
+    /// `apply()` hard-rejects.
+    #[error(
+        "§0.13 text-clip-text-field invariant: clip {clip_id} on text track is missing \
+         Clip.text (text-track clips must carry a TextElement)"
+    )]
+    TextClipMissingTextField {
+        /// Offending clip id.
+        clip_id: ClipId,
+    },
+
+    /// A non-text-track clip (video / audio / effect) has the
+    /// `Clip.text` field populated. Spec §0.13 — companion of
+    /// [`InvariantViolation::TextClipMissingTextField`] — text
+    /// content is forbidden on non-text-kind tracks.
+    ///
+    /// `project.open` surfaces this with `E_SCHEMA_VIOLATION`;
+    /// `apply()` hard-rejects.
+    #[error(
+        "§0.13 text-clip-text-field invariant: clip {clip_id} on {track_kind:?} track has \
+         Clip.text set (only Text-kind tracks may carry a TextElement)"
+    )]
+    NonTextClipHasTextField {
+        /// Offending clip id.
+        clip_id: ClipId,
+        /// Parent `Track.kind` — explains *why* the text field is
+        /// disallowed.
+        track_kind: TrackKind,
+    },
+
+    /// `Clip.mask.params` does not match the shape required by the
+    /// owning `mask.kind` discriminant. Spec §0.13 — *"`Clip.mask`
+    /// cross-field invariants per-kind."*
+    ///
+    /// The schema marks `mask.params` as `additionalProperties:
+    /// true` (opaque `Map<String, Value>`) so all per-kind shape
+    /// validation lives at the engine layer. This variant is the
+    /// single rejection surface; the discriminating
+    /// [`MaskParamsError`] sub-enum identifies which per-kind rule
+    /// fired.
+    ///
+    /// `project.open` surfaces this with `E_SCHEMA_VIOLATION` /
+    /// `E_MASK_INVALID_PARAMS`; `apply()` hard-rejects.
+    #[error(
+        "§0.13 mask-params invariant: clip {clip_id} mask (kind={mask_kind:?}) has invalid \
+         params: {reason}"
+    )]
+    InvalidMaskParams {
+        /// Offending clip id.
+        clip_id: ClipId,
+        /// Mask shape kind whose per-kind validation failed.
+        mask_kind: MaskKind,
+        /// Specific per-kind rule that fired (see [`MaskParamsError`]).
+        reason: MaskParamsError,
+    },
+}
+
+// ---------------------------------------------------------------------
+// MaskParamsError
+// ---------------------------------------------------------------------
+
+/// Per-kind cross-field reason carried by
+/// [`InvariantViolation::InvalidMaskParams::reason`]. Kept as a
+/// separate enum (rather than four sibling `InvariantViolation`
+/// variants) so the main invariant enum doesn't bloat with
+/// mask-specific shapes while still surfacing the precise rule that
+/// fired to callers.
+///
+/// Public so downstream consumers (the upcoming
+/// `clip.set_mask_params` verb in particular) can reuse the
+/// taxonomy when shaping their own pre-apply rejections.
+#[derive(Debug, Clone, Copy, PartialEq, Error)]
+pub enum MaskParamsError {
+    /// Rect mask: `params.w` and / or `params.h` is missing,
+    /// non-numeric, or `≤ 0`. Spec: `mask.kind == "rect"` requires
+    /// `w > 0 ∧ h > 0`.
+    #[error("rect mask requires params.w > 0 and params.h > 0")]
+    RectInvalidWH,
+
+    /// Ellipse mask: `params.rx` and / or `params.ry` is missing,
+    /// non-numeric, or `≤ 0`. Spec: `mask.kind == "ellipse"` requires
+    /// `rx > 0 ∧ ry > 0`.
+    #[error("ellipse mask requires params.rx > 0 and params.ry > 0")]
+    EllipseInvalidRxRy,
+
+    /// Polygon mask: `params.points` is missing, not an array, or
+    /// has a length outside `3..=256`. Spec: a polygon needs at least
+    /// three vertices to enclose an area and is capped at 256 to bound
+    /// rasterizer cost.
+    #[error("polygon mask requires 3..=256 points, got {count}")]
+    PolygonPointsOutOfRange {
+        /// Actual vertex count seen (0 when `params.points` is
+        /// missing or not an array).
+        count: usize,
+    },
+
+    /// Asset mask: `params.asset_id` is missing or not a string. Spec:
+    /// `mask.kind == "asset"` requires a populated `asset_id` field.
+    #[error("asset mask requires params.asset_id")]
+    AssetMissingAssetId,
+
+    /// Asset mask: `params.asset_id` parses as a UUID but doesn't
+    /// resolve to any entry in `Project.assets[]`. Spec: the mask
+    /// asset reference must point at an existing asset.
+    #[error(
+        "asset mask params.asset_id {referenced_asset_id} does not resolve in Project.assets[]"
+    )]
+    AssetUnresolvable {
+        /// The dangling `AssetId` — surfaced so callers can locate
+        /// the missing asset entry.
+        referenced_asset_id: AssetId,
+    },
+
+    /// Asset mask: `params.asset_id` resolves to an asset that isn't
+    /// of kind `image`. Spec: mask sources must be still-image
+    /// assets so the alpha channel can be sampled at render time
+    /// without temporal interpolation.
+    #[error(
+        "asset mask params.asset_id {referenced_asset_id} resolves to a non-image asset \
+         (actual kind: {actual_kind})"
+    )]
+    AssetNotImageKind {
+        /// The asset id whose kind disqualifies it.
+        referenced_asset_id: AssetId,
+        /// What the asset actually is.
+        actual_kind: &'static str,
+    },
+
+    /// Asset mask: `params.threshold` is present but outside `[0, 1]`
+    /// (or is non-numeric). Spec: when supplied, the threshold is a
+    /// normalized alpha cutoff in `[0, 1]`.
+    #[error("asset mask params.threshold = {threshold} is outside [0, 1]")]
+    AssetThresholdOutOfRange {
+        /// Actual value found — surfaced for debugging.
+        threshold: f64,
     },
 }
 
@@ -1040,4 +1223,242 @@ pub fn check_asset_existence(project: &Project) -> Result<(), InvariantViolation
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_effect_track_empty
+// ---------------------------------------------------------------------
+
+/// Verify every `Track.kind == Effect` track carries zero clips. Spec
+/// §0.13.
+///
+/// Effect tracks are container metadata only — they exist to host
+/// track-scoped `Effect` entries (Phase 2 fourth slice will land the
+/// typed `Track.effects` field), not clip-shaped children. A hand-
+/// edited project.json that pushes clips onto an effect track is
+/// rejected rather than silently dropped so the editor surfaces the
+/// structural error.
+///
+/// **Layer note**: `project.open` surfaces this with
+/// `E_SCHEMA_VIOLATION`; the verb `clip.add` rejects when the
+/// destination track is `Effect` with `E_TRACK_KIND_MISMATCH`.
+/// `apply()` hard-rejects.
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::EffectTrackHasClips`] for the first
+/// effect track with non-empty `clips`.
+pub fn check_effect_track_empty(project: &Project) -> Result<(), InvariantViolation> {
+    for (track_index, track) in project.tracks.iter().enumerate() {
+        if track.kind == TrackKind::Effect && !track.clips.is_empty() {
+            return Err(InvariantViolation::EffectTrackHasClips {
+                track_index,
+                clip_count: track.clips.len(),
+            });
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_text_clip_text_field
+// ---------------------------------------------------------------------
+
+/// Verify the spec §0.13 `Clip.text` ↔ `Track.kind == Text`
+/// biconditional. Two failure shapes share the check (each with its
+/// own variant for clean caller pattern-matching):
+///
+/// - text-track clip with `Clip.text == None` →
+///   [`InvariantViolation::TextClipMissingTextField`]. Text clips
+///   carry their rendered content via the `text` field, never via
+///   `asset_id`, so the field is mandatory on text-track clips.
+/// - non-text-track clip with `Clip.text == Some(_)` →
+///   [`InvariantViolation::NonTextClipHasTextField`]. The `text`
+///   field has no rendering pipeline on video / audio / effect
+///   tracks and would silently confuse `project.open`'s
+///   text-renderer dispatch.
+///
+/// **Layer note**: `project.open` surfaces these with
+/// `E_SCHEMA_VIOLATION`; the verb-layer cannot construct either
+/// shape (`clip.add` / `text.set` reject with
+/// `E_CLIP_KIND_MISMATCH`). `apply()` hard-rejects.
+///
+/// # Errors
+///
+/// Returns one of the two text-field variants on the first offending
+/// clip.
+pub fn check_text_clip_text_field(project: &Project) -> Result<(), InvariantViolation> {
+    for track in &project.tracks {
+        let is_text_track = track.kind == TrackKind::Text;
+        for clip in &track.clips {
+            match (is_text_track, clip.text.is_some()) {
+                (true, false) => {
+                    return Err(InvariantViolation::TextClipMissingTextField { clip_id: clip.id });
+                }
+                (false, true) => {
+                    return Err(InvariantViolation::NonTextClipHasTextField {
+                        clip_id: clip.id,
+                        track_kind: track.kind,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_mask_params
+// ---------------------------------------------------------------------
+
+/// Verify every `Clip.mask` (when present) carries `params` matching
+/// the shape required by its `mask.kind` discriminant. Spec §0.13.
+///
+/// The schema declares `mask.params` as
+/// `additionalProperties: true` (an opaque `Map<String, Value>`) so
+/// all per-kind validation lives at the engine layer. Per-kind rules
+/// (spec §0.13):
+///
+/// - `MaskKind::Rect` — `params.w > 0 ∧ params.h > 0`.
+/// - `MaskKind::Ellipse` — `params.rx > 0 ∧ params.ry > 0`.
+/// - `MaskKind::Polygon` — `3 ≤ params.points.len() ≤ 256`.
+/// - `MaskKind::Asset` — `params.asset_id` parses + resolves to an
+///   image-kind `Asset`; optional `params.threshold` ∈ `[0, 1]`.
+///
+/// Discriminating reasons surface through [`MaskParamsError`] in the
+/// [`InvariantViolation::InvalidMaskParams::reason`] field so callers
+/// can pattern-match precisely (the upcoming `clip.set_mask_params`
+/// verb will reuse the taxonomy for pre-apply rejections).
+///
+/// **Layer note**: `project.open` surfaces this with
+/// `E_SCHEMA_VIOLATION` / `E_MASK_INVALID_PARAMS`; `apply()` hard-
+/// rejects.
+///
+/// **Check order**: runs *after* [`check_asset_existence`] so the
+/// asset-mask asset-id resolution can rely on `Project.assets[]`
+/// having been audited first (and reuses the same
+/// [`resolve_asset_kind`] helper).
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::InvalidMaskParams`] for the first
+/// mask whose per-kind shape is invalid.
+pub fn check_mask_params(project: &Project) -> Result<(), InvariantViolation> {
+    for track in &project.tracks {
+        for clip in &track.clips {
+            let Some(mask) = clip.mask.as_ref() else {
+                continue;
+            };
+            if let Err(reason) = validate_mask_params(project, mask) {
+                return Err(InvariantViolation::InvalidMaskParams {
+                    clip_id: clip.id,
+                    mask_kind: mask.kind,
+                    reason,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Per-kind shape validator for [`ClipMask::params`]. Pure helper —
+/// no project mutation, no allocation beyond `serde_json` value
+/// inspection. Returned `MaskParamsError` is wrapped by
+/// [`check_mask_params`] into the user-facing
+/// [`InvariantViolation::InvalidMaskParams`] variant.
+fn validate_mask_params(project: &Project, mask: &ClipMask) -> Result<(), MaskParamsError> {
+    match mask.kind {
+        MaskKind::Rect => {
+            let w = mask.params.get("w").and_then(serde_json::Value::as_f64);
+            let h = mask.params.get("h").and_then(serde_json::Value::as_f64);
+            match (w, h) {
+                (Some(w), Some(h)) if w > 0.0 && h > 0.0 => Ok(()),
+                _ => Err(MaskParamsError::RectInvalidWH),
+            }
+        }
+        MaskKind::Ellipse => {
+            let rx = mask.params.get("rx").and_then(serde_json::Value::as_f64);
+            let ry = mask.params.get("ry").and_then(serde_json::Value::as_f64);
+            match (rx, ry) {
+                (Some(rx), Some(ry)) if rx > 0.0 && ry > 0.0 => Ok(()),
+                _ => Err(MaskParamsError::EllipseInvalidRxRy),
+            }
+        }
+        MaskKind::Polygon => {
+            // Missing or non-array `points` reports count=0 — the
+            // PolygonPointsOutOfRange variant covers both "not enough"
+            // and "wrong shape" with one error per spec §0.13.
+            let count = mask
+                .params
+                .get("points")
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len);
+            if (3..=256).contains(&count) {
+                Ok(())
+            } else {
+                Err(MaskParamsError::PolygonPointsOutOfRange { count })
+            }
+        }
+        MaskKind::Asset => {
+            let asset_id_str = mask
+                .params
+                .get("asset_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(MaskParamsError::AssetMissingAssetId)?;
+            // `AssetId` parses via `UuidV7::from_str` underneath — a
+            // non-UUIDv7 string fails the parse and is funneled into
+            // AssetMissingAssetId so callers don't have to handle a
+            // separate "malformed" variant. The hand-editor case where
+            // params.asset_id is literally absent and the case where
+            // it's "lolnotauuid" both indicate "no resolvable asset
+            // reference"; one error variant is enough.
+            let asset_id: AssetId = asset_id_str
+                .parse()
+                .map_err(|_| MaskParamsError::AssetMissingAssetId)?;
+            let asset_ref = AssetRef::from_id(asset_id);
+            match resolve_asset_kind(project, &asset_ref) {
+                Some(AssetKind::Image) => {}
+                Some(other) => {
+                    return Err(MaskParamsError::AssetNotImageKind {
+                        referenced_asset_id: asset_id,
+                        actual_kind: asset_kind_name(other),
+                    });
+                }
+                None => {
+                    return Err(MaskParamsError::AssetUnresolvable {
+                        referenced_asset_id: asset_id,
+                    });
+                }
+            }
+            // Threshold is optional — spec says "when present" — so
+            // absent is OK. When present, must be a finite f64 in
+            // [0, 1].
+            if let Some(threshold_value) = mask.params.get("threshold") {
+                let threshold =
+                    threshold_value
+                        .as_f64()
+                        .ok_or(MaskParamsError::AssetThresholdOutOfRange {
+                            threshold: f64::NAN,
+                        })?;
+                if !(0.0..=1.0).contains(&threshold) {
+                    return Err(MaskParamsError::AssetThresholdOutOfRange { threshold });
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Pretty-name for an [`AssetKind`] used in
+/// [`MaskParamsError::AssetNotImageKind::actual_kind`]. Mirrors the
+/// schema's `Asset.kind` enum literals so the error message reads as
+/// the user's spec-level vocabulary.
+fn asset_kind_name(kind: AssetKind) -> &'static str {
+    match kind {
+        AssetKind::Video => "video",
+        AssetKind::Audio => "audio",
+        AssetKind::Image => "image",
+        AssetKind::Subtitle => "subtitle",
+    }
 }

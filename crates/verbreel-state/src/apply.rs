@@ -42,6 +42,12 @@
 //!    iff `Track.kind == Text`.
 //! 10. `check_asset_existence` — every non-nil `Clip.asset_id`
 //!     resolves to an `Asset.id` in `Project.assets[]`.
+//! 11. `check_effect_track_empty` — effect tracks carry zero clips.
+//! 12. `check_text_clip_text_field` — text-track clips have
+//!     `Clip.text == Some(_)`; non-text-track clips have
+//!     `Clip.text == None`.
+//! 13. `check_mask_params` — when `Clip.mask` is present, the
+//!     per-kind `params` shape matches the `mask.kind` discriminant.
 //!
 //! Subsequent slices add more checks here. Each violation surfaces
 //! as [`ApplyError::InvariantViolation`] wrapping the typed
@@ -60,9 +66,9 @@ use thiserror::Error;
 
 use crate::invariants::{
     InvariantViolation, check_asset_existence, check_asset_id_biconditional,
-    check_dangling_keyframes, check_duration_tk, check_fade_clamp, check_no_overlap,
-    check_source_in_tk, check_speed_curve_on_image_text, check_speed_on_image_text,
-    check_track_contiguity,
+    check_dangling_keyframes, check_duration_tk, check_effect_track_empty, check_fade_clamp,
+    check_mask_params, check_no_overlap, check_source_in_tk, check_speed_curve_on_image_text,
+    check_speed_on_image_text, check_text_clip_text_field, check_track_contiguity,
 };
 use crate::project::Project;
 
@@ -174,6 +180,9 @@ impl Project {
         check_speed_curve_on_image_text(&project)?;
         check_asset_id_biconditional(&project)?;
         check_asset_existence(&project)?;
+        check_effect_track_empty(&project)?;
+        check_text_clip_text_field(&project)?;
+        check_mask_params(&project)?;
         Ok(project)
     }
 

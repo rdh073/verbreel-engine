@@ -96,10 +96,11 @@ pub use effect::{
     Effect, EffectKind, EffectNewtypeError, EffectWindow, EffectWindowDependencyError,
 };
 pub use invariants::{
-    AssetIdState, InvariantViolation, SourceInTkKind, check_asset_existence,
-    check_asset_id_biconditional, check_dangling_keyframes, check_duration_tk, check_fade_clamp,
-    check_no_overlap, check_source_in_tk, check_speed_curve_on_image_text,
-    check_speed_on_image_text, check_track_contiguity, extract_effect_id_from_property,
+    AssetIdState, InvariantViolation, MaskParamsError, SourceInTkKind, check_asset_existence,
+    check_asset_id_biconditional, check_dangling_keyframes, check_duration_tk,
+    check_effect_track_empty, check_fade_clamp, check_mask_params, check_no_overlap,
+    check_source_in_tk, check_speed_curve_on_image_text, check_speed_on_image_text,
+    check_text_clip_text_field, check_track_contiguity, extract_effect_id_from_property,
     timeline_duration_tk,
 };
 pub use keyframe::{Easing, Keyframe, KeyframeNewtypeError, KeyframeProperty};
