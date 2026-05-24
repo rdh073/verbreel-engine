@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
+use verbreel_events::{EventBackend, EventBuilder, NativeBackend};
 use verbreel_state::{
     LifecycleError, MutateOutcome, Project, ProjectStore, ReconstructError, Verb, VerbError,
     VerbRegistry, default_fixtures, default_registry,
@@ -56,7 +57,12 @@ fn mutate_via_verb_set_metadata_round_trip() {
         .mutate_via_verb("project.set_metadata", args, None)
         .expect("mutate_via_verb on happy path must succeed");
 
-    let MutateOutcome::Applied { event_id, data } = outcome else {
+    let MutateOutcome::Applied {
+        event_id,
+        data,
+        warnings,
+    } = outcome
+    else {
         panic!("happy path must return Applied, got {outcome:?}");
     };
 
@@ -83,6 +89,40 @@ fn mutate_via_verb_set_metadata_round_trip() {
     assert_eq!(
         data, expected,
         "data envelope is the verb's typed `{{ project_id, metadata }}` shape"
+    );
+    assert!(
+        warnings.is_empty(),
+        "existing production verbs emit no warnings in Slice 1"
+    );
+}
+
+#[test]
+fn applied_outcome_includes_empty_warnings_from_existing_verbs() {
+    let dir = TempDir::new().unwrap();
+    let mut store = ProjectStore::create_with_registry(
+        dir.path(),
+        load_empty_project(),
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .expect("create_with_registry must clear the gate and write project.json");
+
+    let args = json!({
+        "project_id": FIXTURE_PROJECT_ID,
+        "metadata": { "author": "bob" },
+    });
+
+    let outcome = store
+        .mutate_via_verb("project.set_metadata", args, None)
+        .expect("happy path must succeed");
+
+    let MutateOutcome::Applied { warnings, .. } = outcome else {
+        panic!("applied outcome required, got {outcome:?}");
+    };
+
+    assert!(
+        warnings.is_empty(),
+        "Slice 1 production verbs emit no warnings; outcome must include []"
     );
 }
 
@@ -260,10 +300,16 @@ fn mutate_via_verb_idempotency_replays() {
     let MutateOutcome::Applied {
         event_id: first_id,
         data: first_data,
+        warnings: first_warnings,
     } = first
     else {
         panic!("first call should be Applied, got {first:?}");
     };
+    assert_eq!(
+        first_warnings,
+        Vec::<Value>::new(),
+        "first apply returns no replay warning"
+    );
 
     let second = store
         .mutate_via_verb("project.set_metadata", args, Some("idem-1".into()))
@@ -271,6 +317,7 @@ fn mutate_via_verb_idempotency_replays() {
     let MutateOutcome::Replayed {
         event_id: replay_id,
         data: replay_data,
+        warnings: replay_warnings,
     } = second
     else {
         panic!("second call should be Replayed, got {second:?}");
@@ -287,6 +334,11 @@ fn mutate_via_verb_idempotency_replays() {
         first_data, replay_data,
         "replay envelope matches original (reconstructed from disk via Verb::reconstruct)"
     );
+    assert_eq!(
+        replay_warnings,
+        vec![json!({"code":"W_REPLAY","message":"idempotent replay"})],
+        "replay appends W_REPLAY warning"
+    );
 
     // Exactly one event line on disk (lock release on drop is
     // required before the test reads the file).
@@ -298,6 +350,50 @@ fn mutate_via_verb_idempotency_replays() {
         .filter(|l| !l.is_empty())
         .collect();
     assert_eq!(lines.len(), 1, "replay must not write a second event line");
+}
+
+#[test]
+fn replay_appends_w_replay_warning() {
+    let dir = TempDir::new().unwrap();
+    let mut store = ProjectStore::create_with_registry(
+        dir.path(),
+        load_empty_project(),
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .unwrap();
+
+    let args = json!({
+        "project_id": FIXTURE_PROJECT_ID,
+        "metadata": { "author": "charlie" },
+    });
+
+    let first = store
+        .mutate_via_verb(
+            "project.set_metadata",
+            args.clone(),
+            Some("idem-replay-2".into()),
+        )
+        .expect("first call must apply");
+    let MutateOutcome::Applied { warnings, .. } = first else {
+        panic!("first call should be Applied, got {first:?}");
+    };
+    assert!(
+        warnings.is_empty(),
+        "first call does not include replay marker"
+    );
+
+    let second = store
+        .mutate_via_verb("project.set_metadata", args, Some("idem-replay-2".into()))
+        .expect("second call must replay");
+    let MutateOutcome::Replayed { warnings, .. } = second else {
+        panic!("second call should be Replayed, got {second:?}");
+    };
+    assert_eq!(
+        warnings,
+        vec![json!({"code":"W_REPLAY","message":"idempotent replay"})],
+        "replay appends exactly one replay warning"
+    );
 }
 
 #[test]
@@ -437,8 +533,8 @@ impl Verb for BadReconstructVerb {
         &self,
         _prior: &Project,
         _args: &Value,
-    ) -> Result<(json_patch::Patch, Value), VerbError> {
-        Ok((json_patch::Patch(Vec::new()), Value::Null))
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), VerbError> {
+        Ok((json_patch::Patch(Vec::new()), Value::Null, Vec::new()))
     }
 
     fn reconstruct(
@@ -471,10 +567,11 @@ impl Verb for WarningsCountVerb {
         &self,
         _prior: &Project,
         _args: &Value,
-    ) -> Result<(json_patch::Patch, Value), VerbError> {
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), VerbError> {
         Ok((
             json_patch::Patch(Vec::new()),
             json!({ "warnings_count": 0 }),
+            Vec::new(),
         ))
     }
 
@@ -562,7 +659,7 @@ fn replay_reconstruct_error_propagates() {
 /// the replay envelope proves the wiring reads `recorded.warnings`
 /// from disk rather than re-using compute-time data.
 #[test]
-fn replay_reads_disk_event() {
+fn replay_preserves_recorded_warnings() {
     let dir = TempDir::new().unwrap();
 
     // (1) Bootstrap the project root: project.json + .verbreel dir +
@@ -573,22 +670,21 @@ fn replay_reads_disk_event() {
     let verbreel_dir = dir.path().join(".verbreel");
     std::fs::create_dir_all(&verbreel_dir).unwrap();
 
-    // Hand-build the seeded event. Use Event::new + tweak the fields
-    // so the line shape matches what NativeBackend would have written.
-    let mut seeded = verbreel_events::Event::new(
-        "test.warnings_count",
-        json!({}),
-        json_patch::Patch(Vec::new()),
-    );
-    seeded.idempotency_key = Some("k1".into());
-    seeded.warnings = vec![json!({ "code": "W_TEST" })];
+    // Hand-build the seeded event. Use EventBuilder so we validate the
+    // warnings field is serialized and read from disk.
+    let seeded = EventBuilder::new()
+        .verb("test.warnings_count")
+        .args(json!({}))
+        .patch(json_patch::Patch(Vec::new()))
+        .warnings(vec![json!({ "code": "W_TEST" })])
+        .idempotency_key("k1")
+        .build();
     let seeded_id = seeded.id;
     let seeded_line = serde_json::to_string(&seeded).unwrap();
-    std::fs::write(
-        verbreel_dir.join("events.jsonl"),
-        format!("{seeded_line}\n"),
-    )
-    .unwrap();
+    {
+        let backend = NativeBackend::open(verbreel_dir.join("events.jsonl")).unwrap();
+        backend.append(seeded_line.as_bytes()).unwrap();
+    }
 
     // (2) Open the store with WarningsCountVerb registered. The
     // open-time replay applies the (empty) patch and the index rebuild
@@ -605,7 +701,12 @@ fn replay_reads_disk_event() {
         .mutate_via_verb("test.warnings_count", json!({}), Some("k1".into()))
         .expect("replay must succeed");
 
-    let MutateOutcome::Replayed { event_id, data } = outcome else {
+    let MutateOutcome::Replayed {
+        event_id,
+        data,
+        warnings,
+    } = outcome
+    else {
         panic!("expected Replayed (idempotency dedup), got {outcome:?}");
     };
 
@@ -623,5 +724,13 @@ fn replay_reads_disk_event() {
         data,
         json!({ "warnings_count": 1 }),
         "replay data must reflect the on-disk warnings slice, not compute_patch's empty default"
+    );
+    assert_eq!(
+        warnings,
+        vec![
+            json!({ "code": "W_TEST" }),
+            json!({"code":"W_REPLAY","message":"idempotent replay"}),
+        ],
+        "replay result prepends recorded warnings then appends W_REPLAY"
     );
 }

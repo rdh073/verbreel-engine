@@ -41,10 +41,10 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::NamedTempFile;
 use tracing::warn;
-use verbreel_events::{BackendError, Event, EventBackend, NativeBackend};
+use verbreel_events::{BackendError, Event, EventBackend, EventBuilder, NativeBackend};
 use verbreel_types::EventId;
 
 use crate::apply::ApplyError;
@@ -268,13 +268,12 @@ pub struct SaveInfo {
 ///
 /// ## Slice B3: typed `data` envelope
 ///
-/// Both variants now carry a `data: Value` field. For callers that
-/// route via [`ProjectStore::mutate_via_verb`], `data` is the verb's
-/// typed envelope — exactly the value the verb-layer wire response
-/// will set on `envelope.data`. For callers that use the raw
-/// [`ProjectStore::mutate`] tuple API, `data` is [`Value::Null`] —
-/// the raw API cannot infer typed data without going through the verb
-/// trait, which is the price of bypassing verb routing.
+/// Both variants carry `data` and `warnings` fields. For callers that
+/// route via [`ProjectStore::mutate_via_verb`], these are the verb's
+/// typed envelope and emitted warnings. For callers that use the raw
+/// [`ProjectStore::mutate`] tuple API, `data` is [`Value::Null`] and
+/// `warnings` is always empty — the raw API does not execute the verb
+/// trait and therefore cannot emit warnings yet.
 ///
 /// ## Replay-path semantics
 ///
@@ -299,6 +298,11 @@ pub enum MutateOutcome {
         /// the call came through the raw [`ProjectStore::mutate`] tuple
         /// API (which cannot infer typed data).
         data: Value,
+        /// Emitted warning JSON values.
+        ///
+        /// For raw [`ProjectStore::mutate`] callers this is always
+        /// `Vec::new()`.
+        warnings: Vec<Value>,
     },
     /// Same-key + same-fingerprint replay. Nothing was written, nothing
     /// was applied. `event_id` is the id of the original first call's
@@ -309,6 +313,11 @@ pub enum MutateOutcome {
         /// The verb's typed envelope `.data` value. See the
         /// `Replayed` caveat on [`MutateOutcome`].
         data: Value,
+        /// Emitted warning JSON values.
+        ///
+        /// Replay semantics preserve the original event's warnings and
+        /// append `W_REPLAY` as the final element.
+        warnings: Vec<Value>,
     },
 }
 
@@ -649,15 +658,27 @@ impl ProjectStore {
         patch: &json_patch::Patch,
         idempotency_key: Option<String>,
     ) -> Result<MutateOutcome, LifecycleError> {
+        self.mutate_with_warnings(verb, args, patch, idempotency_key, Vec::new())
+    }
+
+    fn mutate_with_warnings(
+        &mut self,
+        verb: &str,
+        args: Value,
+        patch: &json_patch::Patch,
+        idempotency_key: Option<String>,
+        warnings: Vec<Value>,
+    ) -> Result<MutateOutcome, LifecycleError> {
         // Un-keyed path — preserves the PR #32 contract. The raw API
         // cannot infer typed data, so `data` is filled with
         // [`Value::Null`]; callers that need a typed envelope must
         // route via [`Self::mutate_via_verb`].
         let Some(key) = idempotency_key else {
-            let event_id = self.apply_write_ordering(verb, args, patch, None)?;
+            let event_id = self.apply_write_ordering(verb, args, patch, None, warnings.clone())?;
             return Ok(MutateOutcome::Applied {
                 event_id,
                 data: Value::Null,
+                warnings,
             });
         };
 
@@ -667,6 +688,7 @@ impl ProjectStore {
             LookupOutcome::Completed { event_id } => Ok(MutateOutcome::Replayed {
                 event_id,
                 data: Value::Null,
+                warnings: Vec::new(),
             }),
             LookupOutcome::InProgress => Err(LifecycleError::IdempotencyBusy { key }),
             LookupOutcome::ConflictingFingerprint {
@@ -698,17 +720,26 @@ impl ProjectStore {
                             return Ok(MutateOutcome::Replayed {
                                 event_id,
                                 data: Value::Null,
+                                warnings: Vec::new(),
                             });
                         }
                     }
                 }
 
-                match self.apply_write_ordering(verb, args, patch, Some(key.clone())) {
+                let event_warnings = warnings;
+                match self.apply_write_ordering(
+                    verb,
+                    args,
+                    patch,
+                    Some(key.clone()),
+                    event_warnings.clone(),
+                ) {
                     Ok(event_id) => {
                         self.idempotency.complete(&key, event_id);
                         Ok(MutateOutcome::Applied {
                             event_id,
                             data: Value::Null,
+                            warnings: event_warnings,
                         })
                     }
                     Err(e) => {
@@ -810,21 +841,30 @@ impl ProjectStore {
             })?;
 
         // Step B: compute the patch + data envelope from the verb.
-        let (patch, data) = verb.compute_patch(&self.project, &args).map_err(|source| {
-            LifecycleError::VerbExecutionFailed {
-                verb_id: verb_id.to_string(),
-                source,
-            }
-        })?;
+        let (patch, data, warnings) =
+            verb.compute_patch(&self.project, &args).map_err(|source| {
+                LifecycleError::VerbExecutionFailed {
+                    verb_id: verb_id.to_string(),
+                    source,
+                }
+            })?;
 
         // Step C: delegate to the existing raw mutate() for §0.8
         // write-ordering + idempotency. Then thread the typed `data`
         // through the returned outcome.
-        match self.mutate(verb_id, args, &patch, idempotency_key)? {
-            MutateOutcome::Applied { event_id, data: _ } => {
-                Ok(MutateOutcome::Applied { event_id, data })
-            }
-            MutateOutcome::Replayed { event_id, data: _ } => {
+        match self.mutate_with_warnings(verb_id, args, &patch, idempotency_key, warnings)? {
+            MutateOutcome::Applied {
+                event_id, warnings, ..
+            } => Ok(MutateOutcome::Applied {
+                event_id,
+                data,
+                warnings,
+            }),
+            MutateOutcome::Replayed {
+                event_id,
+                warnings: _,
+                ..
+            } => {
                 // §0.8 replay: drop the freshly-computed `data` and
                 // reconstruct from the on-disk event line per the
                 // method's "Replay path semantics" rustdoc.
@@ -845,6 +885,12 @@ impl ProjectStore {
                     }
                 })?;
 
+                let mut warnings = recorded.warnings.clone();
+                warnings.push(json!({
+                    "code": "W_REPLAY",
+                    "message": "idempotent replay"
+                }));
+
                 let data = verb
                     .reconstruct(
                         &recorded.args,
@@ -858,7 +904,11 @@ impl ProjectStore {
                         source,
                     })?;
 
-                Ok(MutateOutcome::Replayed { event_id, data })
+                Ok(MutateOutcome::Replayed {
+                    event_id,
+                    data,
+                    warnings,
+                })
             }
         }
     }
@@ -872,13 +922,21 @@ impl ProjectStore {
         args: Value,
         patch: &json_patch::Patch,
         idempotency_key: Option<String>,
+        warnings: Vec<Value>,
     ) -> Result<EventId, LifecycleError> {
         // Step 1: validate without touching real state.
         let _candidate = self.project.apply(patch)?;
 
         // Step 2: build and durably write the event.
-        let mut event = Event::new(verb, args, patch.clone());
-        event.idempotency_key = idempotency_key;
+        let mut event = EventBuilder::new()
+            .verb(verb)
+            .args(args)
+            .patch(patch.clone())
+            .warnings(warnings);
+        if let Some(idempotency_key) = idempotency_key {
+            event = event.idempotency_key(idempotency_key);
+        }
+        let event = event.build();
         let event_id = event.id;
         let line = serde_json::to_string(&event).map_err(|e| {
             LifecycleError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))

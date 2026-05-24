@@ -103,12 +103,17 @@ pub trait Verb: Send + Sync + 'static {
     fn verb(&self) -> &'static str;
 
     /// §0.8 forward path: given a pre-state and args, return the
-    /// RFC 6902 patch + the data envelope value that will become
-    /// the verb's `.data` response field.
+    /// RFC 6902 patch, data envelope, and warnings that should be
+    /// persisted on the event line.
     ///
     /// MUST be a pure function of `(prior, args)` — no I/O, no clock,
     /// no RNG. The same `(prior, args)` MUST produce a
-    /// canonically-equal `(patch, data)` across runs.
+    /// canonically-equal `(patch, data, warnings)` across runs.
+    ///
+    /// Each warning is an opaque [`serde_json::Value`] whose nominal
+    /// schema is `{ code: string, message: string, details?: object }`.
+    /// Typed warning catalogs are intentionally deferred to a later
+    /// slice.
     ///
     /// # Errors
     ///
@@ -128,7 +133,7 @@ pub trait Verb: Send + Sync + 'static {
         &self,
         prior: &Project,
         args: &Value,
-    ) -> Result<(json_patch::Patch, Value), VerbError>;
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), VerbError>;
 
     /// Reconstruct the envelope `.data` field from the recorded 5-tuple.
     ///

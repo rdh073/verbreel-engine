@@ -6,8 +6,8 @@
 //!
 //! `idempotency_key` and `parent_event_id` are wired structurally now but
 //! their semantics (dedup index, retry chains) land in follow-up slices.
-//! `warnings` is currently always an empty array — verb-layer code will
-//! emit `W_*` codes in follow-up slices.
+//! `warnings` may carry any `W_*` warnings emitted by verb-layer code
+//! (JSON objects of shape `{ code: string, message: string, details?: any }`).
 //!
 //! Single-line invariant: serialize via `serde_json::to_string(&event)`
 //! (NOT `to_string_pretty`) so the result contains no embedded `\n`.
@@ -45,8 +45,7 @@ pub struct Event {
     /// project graph in §0.8 step 3. Serializes as a JSON array.
     pub patch: json_patch::Patch,
 
-    /// Warning codes emitted by the verb. `W_*` per spec. Empty at this
-    /// slice.
+    /// Warning codes emitted by the verb. `W_*` per spec.
     #[serde(default)]
     pub warnings: Vec<Value>,
 
@@ -88,6 +87,7 @@ pub struct EventBuilder {
     verb: Option<String>,
     args: Option<Value>,
     patch: Option<json_patch::Patch>,
+    warnings: Option<Vec<Value>>,
     idempotency_key: Option<String>,
     parent_event_id: Option<EventId>,
 }
@@ -120,6 +120,13 @@ impl EventBuilder {
         self
     }
 
+    /// Set warnings (defaults to empty `[]` if unset).
+    #[must_use]
+    pub fn warnings(mut self, warnings: Vec<Value>) -> Self {
+        self.warnings = Some(warnings);
+        self
+    }
+
     /// Set idempotency key.
     #[must_use]
     pub fn idempotency_key(mut self, key: impl Into<String>) -> Self {
@@ -143,7 +150,7 @@ impl EventBuilder {
             ts: timestamp_rfc3339_now(),
             args: self.args.unwrap_or(Value::Null),
             patch: self.patch.unwrap_or_else(|| json_patch::Patch(Vec::new())),
-            warnings: Vec::new(),
+            warnings: self.warnings.unwrap_or_default(),
             idempotency_key: self.idempotency_key,
             parent_event_id: self.parent_event_id,
         }
@@ -176,6 +183,7 @@ pub fn timestamp_rfc3339_now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn event_serialization_roundtrip() {
@@ -186,6 +194,17 @@ mod tests {
         assert!(back.warnings.is_empty());
         assert!(back.idempotency_key.is_none());
         assert!(back.parent_event_id.is_none());
+    }
+
+    #[test]
+    fn event_builder_carries_warnings() {
+        let warnings = vec![json!({"code": "W_TEST", "message": "..."})];
+        let ev = EventBuilder::new()
+            .verb("test")
+            .warnings(warnings.clone())
+            .build();
+
+        assert_eq!(ev.warnings, warnings);
     }
 
     #[test]

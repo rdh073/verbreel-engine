@@ -106,7 +106,7 @@ impl Drop for NativeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::Event;
+    use crate::event::{Event, EventBuilder};
     use tempfile::tempdir;
 
     #[test]
@@ -217,5 +217,28 @@ mod tests {
             matches!(err, BackendError::TornLine { .. }),
             "expected TornLine, got {err:?}"
         );
+    }
+
+    #[test]
+    fn eventbuilder_warnings_field_persists_to_disk() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let backend = NativeBackend::open(&path).unwrap();
+        let warnings = vec![serde_json::json!({
+            "code": "W_TEST",
+            "message": "unit test warning",
+        })];
+        let event = EventBuilder::new()
+            .verb("project.set_metadata")
+            .args(serde_json::json!({}))
+            .patch(json_patch::Patch(Vec::new()))
+            .warnings(warnings.clone())
+            .build();
+        let line = serde_json::to_string(&event).unwrap();
+        backend.append(line.as_bytes()).unwrap();
+
+        let read_back = backend.read_by_id(&event.id).unwrap().unwrap();
+        assert_eq!(read_back.warnings, warnings);
+        assert_eq!(read_back.verb, event.verb);
     }
 }
