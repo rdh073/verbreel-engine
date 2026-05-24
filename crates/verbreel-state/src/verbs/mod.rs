@@ -52,6 +52,7 @@ use crate::project::Project;
 use crate::reconstructor::{RecordedEvent, VerbRegistry};
 
 pub mod project_set_canvas;
+pub mod project_set_fps;
 pub mod project_set_metadata;
 
 /// Synthetic `UUIDv7` used as the `project_id` in [`default_fixtures`].
@@ -97,6 +98,13 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with project.set_metadata",
         );
     registry
+        .register(Arc::new(project_set_fps::ProjectSetFpsVerb))
+        .expect(
+            "ProjectSetFpsVerb is the third registration in \
+             default_registry(); cannot collide with project.set_metadata \
+             / project.set_canvas",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -111,7 +119,11 @@ pub fn default_registry() -> VerbRegistry {
 /// registries must build their own fixtures.
 #[must_use]
 pub fn default_fixtures() -> Vec<RecordedEvent> {
-    vec![project_set_metadata_fixture(), project_set_canvas_fixture()]
+    vec![
+        project_set_metadata_fixture(),
+        project_set_canvas_fixture(),
+        project_set_fps_fixture(),
+    ]
 }
 
 /// Build the canonical `project.set_metadata` fixture used by
@@ -203,6 +215,52 @@ fn project_set_canvas_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `project.set_fps` fixture used by
+/// [`default_fixtures`].
+///
+/// Exercises the happy path with `fps_den: Some(1)` (so the
+/// two-op patch shape is exercised — the partial-update form has a
+/// dedicated test in `tests/verb_project_set_fps.rs`). The prior
+/// project is the synthetic empty one (`fps_num=30, fps_den=1`, no
+/// tracks/clips/markers); args bump to `60/1`. Every off-frame
+/// counter walks the empty graph and yields zero; the
+/// `off_frame_entities` block is `None` (counts all zero rule).
+fn project_set_fps_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = project_set_fps::ProjectSetFpsArgs {
+        project_id,
+        fps_num: 60,
+        fps_den: Some(1),
+        list_off_frame_entities: None,
+    };
+
+    let (patch, _counts, _entities) = project_set_fps::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid patch");
+
+    let mut post_state = prior.clone();
+    post_state.fps_num = args.fps_num;
+    if let Some(d) = args.fps_den {
+        post_state.fps_den = d;
+    }
+
+    let expected_data = serde_json::to_value(project_set_fps::data_envelope(&args, &post_state))
+        .expect("ProjectSetFpsData serializes to Value");
+
+    RecordedEvent {
+        verb: "project.set_fps".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -250,11 +308,14 @@ mod tests {
             .expect("default_registry + default_fixtures must clear the §0.8 gate");
         assert_eq!(report.fixtures_run, fixtures.len());
         // `verbs_checked` is sort_unstable-then-dedup'd inside the
-        // validator; alphabetical order means `project.set_canvas` lands
-        // before `project.set_metadata`.
+        // validator; alphabetical order is the published contract.
         assert_eq!(
             report.verbs_checked,
-            vec!["project.set_canvas", "project.set_metadata"]
+            vec![
+                "project.set_canvas",
+                "project.set_fps",
+                "project.set_metadata"
+            ]
         );
     }
 
