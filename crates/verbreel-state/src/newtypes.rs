@@ -1,11 +1,17 @@
-//! Newtypes for content-addressed asset fields: [`Sha256`],
-//! [`AssetPath`], [`AssetRef`].
+//! Regex-validated newtypes:
 //!
-//! All three carry a `try_from = "String"` + `into = "String"` serde
+//! - [`Sha256`] — 64 lowercase hex chars (schema `$defs/Sha256`).
+//! - [`AssetPath`] — `assets/<aa>/<sha256>.<ext>` layout (schema
+//!   `$defs/AssetPath`).
+//! - [`AssetRef`] — `UUIDv7` or nil-UUID (schema `$defs/AssetRef`).
+//! - [`Color`] — `#rrggbbaa` hex with lowercase normalization on
+//!   construction (schema `$defs/Color`).
+//!
+//! All carry a `try_from = "String"` + `into = "String"` serde
 //! representation: on-disk and on-wire they look like plain strings,
-//! exactly matching the patterns in `spec/project-schema.json`
-//! `$defs/Sha256`, `$defs/AssetPath`, `$defs/AssetRef`. Deserialize
-//! runs the regex; an unparseable input surfaces as a serde error.
+//! exactly matching the patterns in `spec/project-schema.json`.
+//! Deserialize runs the regex; an unparseable input surfaces as a
+//! serde error.
 //!
 //! The regexes are compiled exactly once per process via
 //! [`std::sync::OnceLock`]. No `once_cell` dep is needed — the
@@ -53,6 +59,13 @@ pub enum AssetNewtypeError {
          got {got:?}"
     )]
     InvalidAssetRef {
+        /// The offending input.
+        got: String,
+    },
+
+    /// String did not match the [`Color`] pattern `^#[0-9a-fA-F]{8}$`.
+    #[error("Color must match `^#[0-9a-fA-F]{{8}}$` (schema $defs/Color pattern), got {got:?}")]
+    InvalidColor {
         /// The offending input.
         got: String,
     },
@@ -260,5 +273,70 @@ impl fmt::Display for AssetRef {
             AssetRefInner::Nil => f.write_str(NIL_UUID_STR),
             AssetRefInner::Id(id) => id.fmt(f),
         }
+    }
+}
+
+// ---------------------------------------------------------------------
+// Color
+// ---------------------------------------------------------------------
+
+/// RGBA hex color, always 8 hex digits with explicit alpha, e.g.
+/// `"#ff8800ff"`. Matches schema `$defs/Color`.
+///
+/// The schema accepts mixed case (`^#[0-9a-fA-F]{8}$`) so CLI users
+/// can type either form, but the engine **normalizes to lowercase on
+/// persist** per spec §0.5.2. This newtype implements that
+/// normalization in `TryFrom<String>` — `Color::new("#FF8800FF")` and
+/// `Color::new("#ff8800ff")` produce equal values, both stored
+/// lowercase. The in-memory form is always lowercase; round-tripping
+/// through serde never re-emits the input's case.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Color(String);
+
+fn color_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^#[0-9a-fA-F]{8}$").expect("compile-time-correct regex"))
+}
+
+impl Color {
+    /// Construct from a string, validating against the schema pattern
+    /// and lowercasing the hex digits. Accepts any case on input.
+    ///
+    /// # Errors
+    /// Returns [`AssetNewtypeError::InvalidColor`] if `s` is not an
+    /// 8-hex-digit `#`-prefixed color literal.
+    pub fn new(s: String) -> Result<Self, AssetNewtypeError> {
+        if color_re().is_match(&s) {
+            // Lowercase the hex digits, leave the `#` as-is.
+            Ok(Color(s.to_ascii_lowercase()))
+        } else {
+            Err(AssetNewtypeError::InvalidColor { got: s })
+        }
+    }
+
+    /// Borrow the inner string (always lowercase per §0.5.2).
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Color {
+    type Error = AssetNewtypeError;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Color::new(value)
+    }
+}
+
+impl From<Color> for String {
+    fn from(value: Color) -> Self {
+        value.0
+    }
+}
+
+impl fmt::Display for Color {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }

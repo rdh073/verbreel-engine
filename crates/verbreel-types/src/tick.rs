@@ -14,12 +14,14 @@ pub const TICK_RATE_HZ: u32 = 240_000;
 ///
 /// `Tick` is a transparent newtype: serialized as a JSON number, not an object.
 /// This matches the project-schema.json shape where tick fields are bare integers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[serde(transparent)]
 pub struct Tick(pub i64);
 
 impl Tick {
-    /// Tick value 0.
+    /// Tick value 0. Same as `Tick::default()`.
     pub const ZERO: Tick = Tick(0);
 
     /// Construct from a raw tick count.

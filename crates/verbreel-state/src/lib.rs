@@ -19,23 +19,26 @@
 //! - [`Asset`] tagged-union enum + the 4 variant structs
 //!   ([`VideoAsset`], [`AudioAsset`], [`ImageAsset`],
 //!   [`SubtitleAsset`]) + per-variant metadata.
-//! - [`Sha256`], [`AssetPath`], [`AssetRef`] regex-validated
-//!   newtypes (Phase 2 second slice — `AssetRef` is the Clip
-//!   blocker).
+//! - [`Sha256`], [`AssetPath`], [`AssetRef`], [`Color`]
+//!   regex-validated newtypes.
 //! - [`RotationDeg`] enum + [`FileFingerprint`] struct.
+//! - [`Clip`] + [`Transform`] + [`Shadow`] + [`TextElement`] +
+//!   [`FadeCurve`] / [`BlendMode`] / [`MaskKind`] enums +
+//!   [`ClipMask`] / [`SpeedCurvePoint`] (Phase 2 third slice).
 //!
 //! ## What's deferred (follow-up slices)
 //!
-//! - `Clip` typing (currently `Vec<serde_json::Value>` placeholder on
-//!   [`Track::clips`]). Next slice — uses [`crate::AssetRef`] from
-//!   this slice.
-//! - `Effect`, `Keyframe`, `TextElement`, `Transform`, `Shadow`,
-//!   `Color` newtype.
+//! - `Effect` typing (currently `Vec<serde_json::Value>` placeholder
+//!   on [`Track::effects`] and [`Clip::effects`]). Next slice.
+//! - `Keyframe` typing (currently `Vec<serde_json::Value>`
+//!   placeholder on [`Clip::keyframes`]).
 //! - `apply(patch) -> Result<Project>` — the json-patch consumer.
 //! - Event-log integration (§0.8 write-ordering).
 //! - §0.13 invariant enforcement (track contiguity, no-overlap,
 //!   fade clamp, asset hash uniqueness, `AssetPath` prefix-of-hash,
-//!   fingerprint clamp).
+//!   fingerprint clamp, `source_in_tk == 0` for image/text clips,
+//!   `speed_curve` forbidden on image/text clips, biconditional
+//!   `Clip.asset_id == nil-UUID ⇔ Track.kind == "text"`).
 //! - `project.open` reconciliation passes.
 //! - `project.create` / `project.save` verb implementations.
 //!
@@ -58,11 +61,15 @@
 pub mod asset;
 pub mod asset_meta;
 pub mod canvas;
+pub mod clip;
 pub mod marker;
 pub mod newtypes;
 pub mod project;
+pub mod shadow;
+pub mod text_element;
 pub mod track;
 pub mod tracker;
+pub mod transform;
 
 pub use asset::{Asset, AudioAsset, ImageAsset, SubtitleAsset, VideoAsset};
 pub use asset_meta::{
@@ -70,11 +77,15 @@ pub use asset_meta::{
     VideoAssetMetadata,
 };
 pub use canvas::Canvas;
+pub use clip::{BlendMode, Clip, ClipMask, FadeCurve, MaskKind, SpeedCurvePoint};
 pub use marker::Marker;
-pub use newtypes::{AssetNewtypeError, AssetPath, AssetRef, Sha256};
+pub use newtypes::{AssetNewtypeError, AssetPath, AssetRef, Color, Sha256};
 pub use project::{Project, SCHEMA_VERSION};
+pub use shadow::Shadow;
+pub use text_element::{TextAlign, TextElement};
 pub use track::{Track, TrackKind};
 pub use tracker::Tracker;
+pub use transform::Transform;
 
 // Re-export the tick rate constant from verbreel-types so downstream
 // crates (verbreel-args, the verb implementations) can refer to it via

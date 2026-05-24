@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use verbreel_types::TrackId;
 
+use crate::clip::Clip;
+
 /// The kind of a track. Spec `$defs/Track::kind` enum.
 ///
 /// - `Video` — holds video clips composited onto the canvas.
@@ -51,13 +53,9 @@ pub struct Track {
     /// only at the schema layer; the typed validator lands with §0.13).
     pub name: String,
 
-    /// Clips on this track. **Placeholder** until the Clip-typing slice
-    /// lands — see the lib-level docstring for the follow-up list.
-    ///
-    // TODO(#19 follow-up): replace `Vec<serde_json::Value>` with
-    // `Vec<Clip>` once `Clip` is typed.
+    /// Clips on this track. See [`Clip`] for the per-clip shape.
     #[serde(default)]
-    pub clips: Vec<Value>,
+    pub clips: Vec<Clip>,
 
     /// Whether the track is muted. Default `false`.
     #[serde(default)]
