@@ -25,6 +25,11 @@
 //!   form `effects[<uuid>].params.<…>` references an effect that
 //!   exists on the parent clip. Non-effect-targeting properties
 //!   (`transform.*`, `opacity`, `volume`, `mask.*`) skip the check.
+//! - [`check_source_in_tk`] — `source_in_tk == 0` on text clips
+//!   (parent `Track.kind == Text`) and image clips (referenced
+//!   `Asset` is `Image`). Hard-rejects; the `project.open` silent-
+//!   normalization behavior with `W_CLIP_SOURCE_IN_NORMALIZED`
+//!   warning is a separate reconciliation slice.
 //!
 //! ## `apply()` check order
 //!
@@ -38,7 +43,8 @@
 //! 4. [`check_duration_tk`] — project-level extent.
 //! 5. [`check_dangling_keyframes`] — per-clip keyframe → effect-id
 //!    referential integrity.
-//! 6. (future slices append here)
+//! 6. [`check_source_in_tk`] — text/image clip `source_in_tk == 0`.
+//! 7. (future slices append here)
 //!
 //! ## Planned future invariant slices
 //!
@@ -65,8 +71,73 @@ use regex::Regex;
 use thiserror::Error;
 use verbreel_types::{ClipId, KeyframeId, Tick};
 
+use crate::asset::Asset;
+use crate::newtypes::AssetRef;
 use crate::project::Project;
 use crate::track::TrackKind;
+
+// ---------------------------------------------------------------------
+// AssetKind / SourceInTkKind helpers
+// ---------------------------------------------------------------------
+
+/// Discriminator surfaced by [`resolve_asset_kind`]. Mirrors the
+/// `Asset` tagged-union variants from PR #22. Lives in `invariants.rs`
+/// because it's currently only used here; promote to `asset.rs` if
+/// other consumers emerge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssetKind {
+    Video,
+    Audio,
+    Image,
+    Subtitle,
+}
+
+/// Indicator carried by [`InvariantViolation::InvalidSourceInTk`] so
+/// callers can tell whether the offending clip was flagged via its
+/// parent `Track.kind` (text) or via its referenced
+/// `Asset.kind` (image).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceInTkKind {
+    /// Parent `Track.kind == Text`.
+    Text,
+    /// `Clip.asset_id` resolves to `Asset::Image(_)`.
+    Image,
+}
+
+impl std::fmt::Display for SourceInTkKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SourceInTkKind::Text => f.write_str("text"),
+            SourceInTkKind::Image => f.write_str("image"),
+        }
+    }
+}
+
+/// Resolve a [`AssetRef`] to its [`AssetKind`] by walking
+/// `project.assets[]`. Returns:
+///
+/// - `None` if the `AssetRef` is nil (text clip case — there is no
+///   asset to resolve).
+/// - `None` if the `AssetRef` is `Id(...)` but no matching asset is
+///   found in `project.assets[]`. The asset-existence invariant
+///   (separate slice) will catch this; the `source_in_tk` check just
+///   skips it.
+/// - `Some(kind)` on successful resolution.
+fn resolve_asset_kind(project: &Project, asset_id: &AssetRef) -> Option<AssetKind> {
+    let id = asset_id.id()?;
+    project.assets.iter().find_map(|a| {
+        if a.id() == id {
+            Some(match a {
+                Asset::Video(_) => AssetKind::Video,
+                Asset::Audio(_) => AssetKind::Audio,
+                Asset::Image(_) => AssetKind::Image,
+                Asset::Subtitle(_) => AssetKind::Subtitle,
+            })
+        } else {
+            None
+        }
+    })
+}
 
 // ---------------------------------------------------------------------
 // InvariantViolation
@@ -184,6 +255,31 @@ pub enum InvariantViolation {
         stored_duration_tk: Tick,
         /// Value computed from a fresh walk over every clip.
         computed_duration_tk: Tick,
+    },
+
+    /// `Clip.source_in_tk` is non-zero on a clip that the spec
+    /// requires to be zero — text clips (parent `Track.kind ==
+    /// Text`) or image clips (referenced `Asset` is `Image`). Spec
+    /// §0.13 — *"For image and text clips, the engine pins this to
+    /// 0 on every write."*
+    ///
+    /// `project.open` reconciliation silently normalizes hand-
+    /// edited non-zero values with a `W_CLIP_SOURCE_IN_NORMALIZED`
+    /// warning; that lives in a separate slice. `apply()` hard-
+    /// rejects to surface verb-layer bugs loudly.
+    #[error(
+        "§0.13 source_in_tk invariant: source_in_tk = {} on {clip_kind_indicator} clip \
+         {clip_id}, must be 0",
+        source_in_tk.get()
+    )]
+    InvalidSourceInTk {
+        /// Offending clip id.
+        clip_id: ClipId,
+        /// Why the clip is required to have `source_in_tk == 0` —
+        /// `Text` (parent Track.kind) or `Image` (referenced Asset).
+        clip_kind_indicator: SourceInTkKind,
+        /// The actual non-zero value found.
+        source_in_tk: Tick,
     },
 
     /// A keyframe targets `effects[<uuid>].params.<…>` but the
@@ -510,6 +606,61 @@ pub fn check_dangling_keyframes(project: &Project) -> Result<(), InvariantViolat
                         property: property.to_string(),
                     });
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_source_in_tk
+// ---------------------------------------------------------------------
+
+/// Verify `Clip.source_in_tk == 0` on every text clip (parent
+/// `Track.kind == Text`) and every image clip (referenced `Asset` is
+/// `Image`). Spec §0.13.
+///
+/// Two-tier check per clip:
+/// - If `Track.kind == Text` → must be `Tick::ZERO`.
+/// - Else if [`resolve_asset_kind`] returns `Some(AssetKind::Image)` →
+///   must be `Tick::ZERO`.
+/// - Else (video/audio/subtitle assets, or unresolvable `asset_id`) →
+///   no constraint here. Unresolvable `asset_id` is a separate
+///   invariant (asset-existence — future slice); skip silently to
+///   avoid double-reporting.
+///
+/// **Layer note**: `project.open` reconciliation silently normalizes
+/// non-zero values with a `W_CLIP_SOURCE_IN_NORMALIZED` warning;
+/// that's verb-layer / reconciliation territory. `apply()` hard-
+/// rejects because mutating verbs are spec-bound never to write the
+/// state and a patch that does is bug-shaped.
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::InvalidSourceInTk`] for the first
+/// text or image clip with non-zero `source_in_tk`.
+pub fn check_source_in_tk(project: &Project) -> Result<(), InvariantViolation> {
+    for track in &project.tracks {
+        let track_kind = track.kind;
+        for clip in &track.clips {
+            let must_be_zero_because = if track_kind == TrackKind::Text {
+                Some(SourceInTkKind::Text)
+            } else if matches!(
+                resolve_asset_kind(project, &clip.asset_id),
+                Some(AssetKind::Image)
+            ) {
+                Some(SourceInTkKind::Image)
+            } else {
+                None
+            };
+            if let Some(kind) = must_be_zero_because
+                && clip.source_in_tk != Tick::ZERO
+            {
+                return Err(InvariantViolation::InvalidSourceInTk {
+                    clip_id: clip.id,
+                    clip_kind_indicator: kind,
+                    source_in_tk: clip.source_in_tk,
+                });
             }
         }
     }
