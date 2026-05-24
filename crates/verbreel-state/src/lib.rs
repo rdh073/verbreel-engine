@@ -136,6 +136,10 @@ pub use verbs::project_set_canvas::{
     CANVAS_MAX_DIM, CANVAS_MIN_DIM, PIXEL_ASPECT_MIN, ProjectSetCanvasArgs, ProjectSetCanvasData,
     ProjectSetCanvasError, ProjectSetCanvasVerb,
 };
+pub use verbs::project_set_fps::{
+    FPS_MIN, OffFrameCount, OffFrameEntities, ProjectSetFpsArgs, ProjectSetFpsData,
+    ProjectSetFpsError, ProjectSetFpsVerb,
+};
 pub use verbs::project_set_metadata::{
     ProjectSetMetadataArgs, ProjectSetMetadataData, ProjectSetMetadataError, ProjectSetMetadataVerb,
 };
