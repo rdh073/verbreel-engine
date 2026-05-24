@@ -96,8 +96,8 @@ pub use effect::{
     Effect, EffectKind, EffectNewtypeError, EffectWindow, EffectWindowDependencyError,
 };
 pub use invariants::{
-    InvariantViolation, check_fade_clamp, check_no_overlap, check_track_contiguity,
-    timeline_duration_tk,
+    InvariantViolation, check_duration_tk, check_fade_clamp, check_no_overlap,
+    check_track_contiguity, timeline_duration_tk,
 };
 pub use keyframe::{Easing, Keyframe, KeyframeNewtypeError, KeyframeProperty};
 #[cfg(feature = "native")]

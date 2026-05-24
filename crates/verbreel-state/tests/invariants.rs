@@ -7,8 +7,8 @@
 use serde_json::json;
 use verbreel_state::{
     ApplyError, AssetRef, BlendMode, Clip, FadeCurve, InvariantViolation, Project, Track,
-    TrackKind, Transform, check_fade_clamp, check_no_overlap, check_track_contiguity,
-    timeline_duration_tk,
+    TrackKind, Transform, check_duration_tk, check_fade_clamp, check_no_overlap,
+    check_track_contiguity, timeline_duration_tk,
 };
 use verbreel_types::{ClipId, Tick, TrackId, UuidV7};
 
@@ -697,17 +697,21 @@ fn apply_rejects_no_overlap_violation() {
 fn apply_accepts_adjacent_non_overlapping_patch() {
     // Same setup — append a second video clip starting RIGHT WHERE
     // the first ends (2_400_000). Half-open intervals → adjacent,
-    // not overlapping.
+    // not overlapping. Also includes the /duration_tk replace op
+    // the spec §0.13 maintenance rule requires for duration-
+    // extending mutations (post-state max becomes 2_880_000).
     let p = load_three_track();
     let new_clip = clip_at(2_400_000, 480_000, 1.0);
     let new_clip_json = serde_json::to_value(&new_clip).unwrap();
     let patch: json_patch::Patch = serde_json::from_value(json!([
         {"op":"add","path":"/tracks/0/clips/-","value": new_clip_json},
+        {"op":"replace","path":"/duration_tk","value": 2_880_000},
     ]))
     .unwrap();
     let out = p.apply(&patch).expect("adjacent clips must succeed");
     assert_eq!(out.tracks[0].clips.len(), 2);
     assert_eq!(out.tracks[0].clips[1].track_position_tk.get(), 2_400_000);
+    assert_eq!(out.duration_tk.get(), 2_880_000);
 }
 
 #[test]
@@ -765,6 +769,230 @@ fn fixtures_satisfy_no_overlap() {
             serde_json::from_str(src).unwrap_or_else(|e| panic!("fixture {name:?} parses: {e}"));
         check_no_overlap(&p).unwrap_or_else(|e| {
             panic!("fixture {name:?} must satisfy no-overlap: {e}");
+        });
+    }
+}
+
+// ---------------------------------------------------------------------
+// check_duration_tk
+// ---------------------------------------------------------------------
+
+/// Helper — synthesize a single-track project with `clips` and set
+/// `Project.duration_tk` to `expected`. Used to exercise both the
+/// happy and unhappy paths of `check_duration_tk` without dragging in
+/// fade/contiguity/overlap concerns.
+fn project_with_duration(kind: TrackKind, clips: Vec<Clip>, expected: i64) -> Project {
+    let mut p = project_with_single_track_clips(kind, clips);
+    p.duration_tk = Tick::new(expected);
+    p
+}
+
+#[test]
+fn duration_tk_empty_project_zero_passes() {
+    // No clips at all — max = 0; persisted must equal 0.
+    let p = project_with_duration(TrackKind::Video, vec![], 0);
+    check_duration_tk(&p).expect("empty project with duration_tk=0 passes");
+}
+
+#[test]
+fn duration_tk_empty_project_nonzero_rejected() {
+    // No clips but stale `duration_tk = 1000`.
+    let p = project_with_duration(TrackKind::Video, vec![], 1000);
+    let err = check_duration_tk(&p).expect_err("nonzero on empty must reject");
+    if let InvariantViolation::ProjectDurationStale {
+        stored_duration_tk,
+        computed_duration_tk,
+    } = err
+    {
+        assert_eq!(stored_duration_tk.get(), 1000);
+        assert_eq!(computed_duration_tk.get(), 0);
+    } else {
+        panic!("expected ProjectDurationStale, got {err:?}");
+    }
+}
+
+#[test]
+fn duration_tk_single_clip_correct_passes() {
+    // Single clip [0, 100). max = 100. duration_tk = 100.
+    let p = project_with_duration(TrackKind::Video, vec![clip_at(0, 100, 1.0)], 100);
+    check_duration_tk(&p).expect("correct single-clip duration_tk passes");
+
+    // Same with a non-zero track_position_tk. clip [200, 300).
+    let p = project_with_duration(TrackKind::Video, vec![clip_at(200, 100, 1.0)], 300);
+    check_duration_tk(&p).expect("clip with non-zero start passes");
+}
+
+#[test]
+fn duration_tk_single_clip_stale_rejected() {
+    // Clip [0, 100). duration_tk = 50 (stale-under).
+    let p = project_with_duration(TrackKind::Video, vec![clip_at(0, 100, 1.0)], 50);
+    let err = check_duration_tk(&p).expect_err("stale-under must reject");
+    if let InvariantViolation::ProjectDurationStale {
+        stored_duration_tk,
+        computed_duration_tk,
+    } = err
+    {
+        assert_eq!(stored_duration_tk.get(), 50);
+        assert_eq!(computed_duration_tk.get(), 100);
+    } else {
+        panic!("expected ProjectDurationStale, got {err:?}");
+    }
+}
+
+#[test]
+fn duration_tk_single_clip_overshoot_rejected() {
+    // Clip [0, 100). duration_tk = 999 (overshoot — no clip extends
+    // that far). Must reject — duration must equal, not bound.
+    let p = project_with_duration(TrackKind::Video, vec![clip_at(0, 100, 1.0)], 999);
+    let err = check_duration_tk(&p).expect_err("overshoot must reject");
+    if let InvariantViolation::ProjectDurationStale {
+        stored_duration_tk,
+        computed_duration_tk,
+    } = err
+    {
+        assert_eq!(stored_duration_tk.get(), 999);
+        assert_eq!(computed_duration_tk.get(), 100);
+    } else {
+        panic!("expected ProjectDurationStale, got {err:?}");
+    }
+}
+
+#[test]
+fn duration_tk_multi_clip_correct() {
+    // Clips [0, 100) and [200, 350). max = 350.
+    let p = project_with_duration(
+        TrackKind::Video,
+        vec![clip_at(0, 100, 1.0), clip_at(200, 150, 1.0)],
+        350,
+    );
+    check_duration_tk(&p).expect("multi-clip max correct passes");
+}
+
+#[test]
+fn duration_tk_speed_affected_max_uses_speed_adjusted_duration() {
+    // Clip source duration = 200, speed = 2 → timeline duration = 100.
+    // Track position = 0 → end = 100.
+    let p = project_with_duration(TrackKind::Video, vec![clip_at(0, 200, 2.0)], 100);
+    check_duration_tk(&p).expect("speed-adjusted timeline duration in max");
+
+    // Same configuration but persisted as 200 (raw source span — bug).
+    let p = project_with_duration(TrackKind::Video, vec![clip_at(0, 200, 2.0)], 200);
+    let err = check_duration_tk(&p).expect_err("speed not accounted for must reject");
+    if let InvariantViolation::ProjectDurationStale {
+        computed_duration_tk,
+        ..
+    } = err
+    {
+        assert_eq!(computed_duration_tk.get(), 100, "speed-adjusted = 100");
+    } else {
+        panic!("expected ProjectDurationStale, got {err:?}");
+    }
+}
+
+#[test]
+fn duration_tk_clips_on_different_tracks_max_across_all() {
+    // Start from the 3-track keyframes fixture (video clip
+    // [0, 2_400_000), text clip [0, 480_000)). max = 2_400_000.
+    let mut p = load_three_track();
+    p.duration_tk = Tick::new(2_400_000);
+    check_duration_tk(&p).expect("max across all tracks");
+
+    // Stale to 480_000 (text-only max) → reject.
+    p.duration_tk = Tick::new(480_000);
+    let err = check_duration_tk(&p).expect_err("stale to text-only max must reject");
+    if let InvariantViolation::ProjectDurationStale {
+        stored_duration_tk,
+        computed_duration_tk,
+    } = err
+    {
+        assert_eq!(stored_duration_tk.get(), 480_000);
+        assert_eq!(computed_duration_tk.get(), 2_400_000);
+    } else {
+        panic!("expected ProjectDurationStale, got {err:?}");
+    }
+}
+
+// ---------------------------------------------------------------------
+// check_duration_tk — apply() integration
+// ---------------------------------------------------------------------
+
+#[test]
+fn apply_rejects_duration_tk_stale_after_patch() {
+    // Patch that extends a clip's source_out (and thus timeline
+    // duration) WITHOUT including the matching /duration_tk replace
+    // op must reject. Three-track fixture's video clip has
+    // source_out=2_400_000; bump to 3_000_000 without touching
+    // duration_tk → post-state has duration_tk=2_400_000 but max
+    // = 3_000_000.
+    let p = load_three_track();
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op":"replace","path":"/tracks/0/clips/0/source_out_tk","value": 3_000_000},
+    ]))
+    .unwrap();
+    let err = p
+        .apply(&patch)
+        .expect_err("missing /duration_tk update must reject");
+    assert!(matches!(
+        err,
+        ApplyError::InvariantViolation(InvariantViolation::ProjectDurationStale { .. })
+    ));
+}
+
+#[test]
+fn apply_accepts_patch_with_consistent_duration_tk_update() {
+    // Same patch as above, but WITH the matching /duration_tk replace
+    // op. Spec §0.13: duration-extending mutations must include the
+    // op in the same patch.
+    let p = load_three_track();
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op":"replace","path":"/tracks/0/clips/0/source_out_tk","value": 3_000_000},
+        {"op":"replace","path":"/duration_tk","value": 3_000_000},
+    ]))
+    .unwrap();
+    let out = p.apply(&patch).expect("consistent patch must succeed");
+    assert_eq!(out.duration_tk.get(), 3_000_000);
+    assert_eq!(out.tracks[0].clips[0].source_out_tk.get(), 3_000_000);
+}
+
+#[test]
+fn project_duration_stale_error_carries_both_values() {
+    // The Err must surface both `stored` and `computed` for
+    // debuggability. Hand-construct via direct check.
+    let p = project_with_duration(TrackKind::Video, vec![clip_at(0, 100, 1.0)], 42);
+    let err = check_duration_tk(&p).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("42"), "msg must mention stored value: {msg}");
+    assert!(
+        msg.contains("100"),
+        "msg must mention computed value: {msg}"
+    );
+    assert!(
+        msg.contains("duration_tk"),
+        "msg must mention the field: {msg}"
+    );
+}
+
+#[test]
+fn fixtures_satisfy_duration_tk() {
+    // Regression canary against ALL 4 fixtures (incl. empty + assets).
+    let fixtures: [(&str, &str); 5] = [
+        ("empty", include_str!("fixtures/empty_project_create.json")),
+        ("assets", include_str!("fixtures/project_with_assets.json")),
+        ("clips", include_str!("fixtures/project_with_clips.json")),
+        (
+            "effects",
+            include_str!("fixtures/project_with_effects.json"),
+        ),
+        (
+            "keyframes",
+            include_str!("fixtures/project_with_keyframes.json"),
+        ),
+    ];
+    for (name, src) in fixtures {
+        let p: Project =
+            serde_json::from_str(src).unwrap_or_else(|e| panic!("fixture {name:?} parses: {e}"));
+        check_duration_tk(&p).unwrap_or_else(|e| {
+            panic!("fixture {name:?} must satisfy duration_tk: {e}");
         });
     }
 }

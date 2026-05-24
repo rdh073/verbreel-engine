@@ -17,6 +17,10 @@
 //! - [`check_no_overlap`] — clips on the same track don't overlap.
 //!   Half-open intervals; adjacent clips sharing an endpoint are
 //!   not considered overlapping.
+//! - [`check_duration_tk`] — persisted `Project.duration_tk` equals
+//!   `max(track_position_tk + timeline_duration_tk)` across all
+//!   clips. Post-condition only — verbs are responsible for the
+//!   `/duration_tk` replace op in their patches.
 //!
 //! ## `apply()` check order
 //!
@@ -27,7 +31,8 @@
 //! 1. [`check_fade_clamp`] — per-clip.
 //! 2. [`check_track_contiguity`] — per-project structure.
 //! 3. [`check_no_overlap`] — per-track clip intervals.
-//! 4. (future slices append here)
+//! 4. [`check_duration_tk`] — project-level extent.
+//! 5. (future slices append here)
 //! - `check_duration_tk_maintenance` —
 //!   `Project.duration_tk == max(end_of_last_clip per track)`.
 //! - `check_dangling_keyframe` — every keyframe's `effects[<uuid>]`
@@ -147,6 +152,27 @@ pub enum InvariantViolation {
         later_clip_id: ClipId,
         /// The later clip's `track_position_tk`.
         later_start_tk: Tick,
+    },
+
+    /// `Project.duration_tk` doesn't equal the computed maximum
+    /// across all clips. Spec §0.13 — *"`Project.duration_tk` is
+    /// maintained on every mutation, not lazily."* Mutating verbs
+    /// that change a clip extent must include a `/duration_tk`
+    /// replace op in their patch; this variant is the rejection
+    /// path when a patch tries to bypass that maintenance.
+    ///
+    /// Empty projects: computed = 0; `Project.duration_tk` must
+    /// be `Tick(0)`.
+    #[error(
+        "§0.13 duration_tk invariant: Project.duration_tk = {} but \
+         max(track_position_tk + timeline_duration_tk) across all clips = {}",
+        stored_duration_tk.get(), computed_duration_tk.get()
+    )]
+    ProjectDurationStale {
+        /// Value persisted on the patched `Project`.
+        stored_duration_tk: Tick,
+        /// Value computed from a fresh walk over every clip.
+        computed_duration_tk: Tick,
     },
 }
 
@@ -334,6 +360,49 @@ pub fn check_track_contiguity(project: &Project) -> Result<(), InvariantViolatio
         // Brand-new kind block starts here.
         seen_kinds.push(kind);
         last_kind = Some(kind);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// check_duration_tk
+// ---------------------------------------------------------------------
+
+/// Verify `Project.duration_tk` equals
+/// `max(track_position_tk + timeline_duration_tk)` across every clip
+/// in every track. Empty projects compute max = 0 → `duration_tk`
+/// must be `Tick(0)`.
+///
+/// Post-condition only — this check does NOT synthesize a patch op
+/// to fix `duration_tk`. The verb-layer side of §0.13 requires
+/// mutating verbs to include the `/duration_tk` replace op
+/// themselves; this function rejects the result when they don't.
+///
+/// Arithmetic uses [`i64::saturating_add`] defensively. Spec bounds
+/// (~1.19 trillion years of `Tick` range) make overflow impossible
+/// in practice but the type-level helper stays honest.
+///
+/// # Errors
+///
+/// Returns [`InvariantViolation::ProjectDurationStale`] when
+/// `project.duration_tk != computed`.
+pub fn check_duration_tk(project: &Project) -> Result<(), InvariantViolation> {
+    let mut computed: i64 = 0;
+    for track in &project.tracks {
+        for clip in &track.clips {
+            let dur = timeline_duration_tk(clip.source_in_tk, clip.source_out_tk, clip.speed);
+            let end = clip.track_position_tk.get().saturating_add(dur.get());
+            if end > computed {
+                computed = end;
+            }
+        }
+    }
+    let computed = Tick::new(computed);
+    if project.duration_tk != computed {
+        return Err(InvariantViolation::ProjectDurationStale {
+            stored_duration_tk: project.duration_tk,
+            computed_duration_tk: computed,
+        });
     }
     Ok(())
 }
