@@ -27,15 +27,16 @@
 //!   [`ClipMask`] / [`SpeedCurvePoint`] (Phase 2 third slice).
 //! - [`Effect`] + [`EffectKind`] + [`EffectWindow`] (Phase 2 fourth
 //!   slice). [`Clip::effects`] is now `Vec<Effect>`.
+//! - [`Keyframe`] + [`KeyframeProperty`] + [`Easing`] (Phase 2 fifth
+//!   slice). [`Clip::keyframes`] is now `Vec<Keyframe>`. Every
+//!   nested `$def` in `spec/project-schema.json` is now typed.
 //!
 //! ## What's deferred (follow-up slices)
 //!
 //! - `Effect` typing on tracks (currently `Vec<serde_json::Value>`
 //!   placeholder on [`Track::effects`] — replacement coupled with
-//!   track-level effects work in a future slice; this slice only
-//!   replaced [`Clip::effects`] per task scope).
-//! - `Keyframe` typing (currently `Vec<serde_json::Value>`
-//!   placeholder on [`Clip::keyframes`]).
+//!   track-level effects work in a future slice; the Effect slice
+//!   only replaced [`Clip::effects`] per task scope).
 //! - `apply(patch) -> Result<Project>` — the json-patch consumer.
 //! - Event-log integration (§0.8 write-ordering).
 //! - §0.13 invariant enforcement (track contiguity, no-overlap,
@@ -67,6 +68,7 @@ pub mod asset_meta;
 pub mod canvas;
 pub mod clip;
 pub mod effect;
+pub mod keyframe;
 pub mod marker;
 pub mod newtypes;
 pub mod project;
@@ -86,6 +88,7 @@ pub use clip::{BlendMode, Clip, ClipMask, FadeCurve, MaskKind, SpeedCurvePoint};
 pub use effect::{
     Effect, EffectKind, EffectNewtypeError, EffectWindow, EffectWindowDependencyError,
 };
+pub use keyframe::{Easing, Keyframe, KeyframeNewtypeError, KeyframeProperty};
 pub use marker::Marker;
 pub use newtypes::{AssetNewtypeError, AssetPath, AssetRef, Color, Sha256};
 pub use project::{Project, SCHEMA_VERSION};

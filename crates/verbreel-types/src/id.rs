@@ -198,6 +198,10 @@ define_id! {
     /// Effect ID — `UUIDv7` of an effect record (§0.3, schema `$defs/Effect`).
     pub EffectId
 }
+define_id! {
+    /// Keyframe ID — `UUIDv7` of a keyframe record (§0.3, schema `$defs/Keyframe`).
+    pub KeyframeId
+}
 
 #[cfg(test)]
 mod tests {
