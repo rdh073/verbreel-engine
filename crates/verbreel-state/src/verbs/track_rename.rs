@@ -12,7 +12,7 @@
 //!
 //! ## Selector handling (v1)
 //!
-//! `track` is accepted as **bare UUIDv7 only** in this slice. Structural
+//! `track` is accepted as **bare `UUIDv7` only** in this slice. Structural
 //! selectors (for example `video[0]` or `video[name="main"]`) are deferred
 //! to a future verb-slice. Bare selector parse failures map to
 //! [`TrackRenameError::BadSelector`].
@@ -48,7 +48,7 @@ pub struct TrackRenameArgs {
     /// Target project id.
     pub project_id: ProjectId,
 
-    /// Target track id as bare UUIDv7.
+    /// Target track id as bare `UUIDv7`.
     pub track: String,
 
     /// New track name.
@@ -68,7 +68,7 @@ pub struct TrackRenameData {
 /// Verb-level validation failures for `track.rename`.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TrackRenameError {
-    /// `args.track` is not parseable as UUIDv7.
+    /// `args.track` is not parseable as `UUIDv7`.
     #[error("track.rename: `track` selector parse failed: {detail}")]
     BadSelector {
         /// Parse failure detail.
@@ -119,6 +119,10 @@ pub enum TrackRenameError {
 
 /// Returns `Err` when another track in the same kind (excluding
 /// `exclude_track_id`) already uses `name`.
+/// # Errors
+///
+/// Returns [`TrackRenameError::NameConflict`] when a track of the
+/// same kind already uses the requested name.
 pub fn check_name_conflict(
     prior: &Project,
     kind: TrackKind,
@@ -157,8 +161,12 @@ pub fn compute_patch(
     prior: &Project,
     args: &TrackRenameArgs,
 ) -> Result<(Value, Vec<Value>, TrackRenameData), TrackRenameError> {
-    let track_id = TrackId::try_from(args.track.clone())
-        .map_err(|err| TrackRenameError::BadSelector { detail: err.to_string() })?;
+    let track_id = args
+        .track
+        .parse::<TrackId>()
+        .map_err(|err| TrackRenameError::BadSelector {
+            detail: err.to_string(),
+        })?;
 
     let (global_idx, track) = prior
         .tracks
@@ -224,11 +232,18 @@ pub fn compute_patch(
 }
 
 /// Rebuilds the envelope from `(args, post_state)`.
+/// # Errors
+///
+/// Returns [`ReconstructError::TypeMismatch`] when `args.track` is not
+/// a valid `UUIDv7`, or [`ReconstructError::PostStateMissing`] when the
+/// post-state does not contain the target track.
 pub fn data_envelope_from_post_state(
     args: &TrackRenameArgs,
     post_state: &Project,
 ) -> Result<TrackRenameData, ReconstructError> {
-    let track_id = TrackId::try_from(args.track.clone())
+    let track_id = args
+        .track
+        .parse::<TrackId>()
         .map_err(|_| ReconstructError::TypeMismatch {
             name: "args.track",
             expected: "UUIDv7 TrackId string",
@@ -277,14 +292,17 @@ impl Verb for TrackRenameVerb {
         prior: &Project,
         args: &Value,
     ) -> Result<(json_patch::Patch, Value, Vec<Value>), VerbError> {
-        let typed: TrackRenameArgs = serde_json::from_value(args.clone()).map_err(|err| VerbError::BadArgs {
-            detail: format!("track.rename: args deserialize failed: {err}"),
-        })?;
+        let typed: TrackRenameArgs =
+            serde_json::from_value(args.clone()).map_err(|err| VerbError::BadArgs {
+                detail: format!("track.rename: args deserialize failed: {err}"),
+            })?;
 
-        let (_patch_value, warnings, _data) = compute_patch(prior, &typed)?;
+        let (patch_value, warnings, _data) = compute_patch(prior, &typed)?;
 
-        let patch: json_patch::Patch = serde_json::from_value(_patch_value.clone())
-            .map_err(|err| VerbError::Custom(format!("track.rename: patch construction failed: {err}")))?;
+        let patch: json_patch::Patch =
+            serde_json::from_value(patch_value.clone()).map_err(|err| {
+                VerbError::Custom(format!("track.rename: patch construction failed: {err}"))
+            })?;
 
         let post_state = prior
             .apply(&patch)
@@ -292,13 +310,15 @@ impl Verb for TrackRenameVerb {
                 detail: format!("track.rename: post-state validation failed: {err}"),
             })?;
 
-        let envelope =
-            data_envelope_from_post_state(&typed, &post_state).map_err(|err| VerbError::Custom(
-                format!("track.rename: data envelope reconstruction failed: {err}"),
-            ))?;
+        let envelope = data_envelope_from_post_state(&typed, &post_state).map_err(|err| {
+            VerbError::Custom(format!(
+                "track.rename: data envelope reconstruction failed: {err}"
+            ))
+        })?;
 
-        let data = serde_json::to_value(&envelope)
-            .map_err(|err| VerbError::Custom(format!("track.rename: data serialize failed: {err}")))?;
+        let data = serde_json::to_value(&envelope).map_err(|err| {
+            VerbError::Custom(format!("track.rename: data serialize failed: {err}"))
+        })?;
 
         Ok((patch, data, warnings))
     }
@@ -310,8 +330,8 @@ impl Verb for TrackRenameVerb {
         _warnings: &[Value],
         post_state: &Project,
     ) -> Result<Value, ReconstructError> {
-        let typed: TrackRenameArgs = serde_json::from_value(args.clone())
-            .map_err(|_| ReconstructError::TypeMismatch {
+        let typed: TrackRenameArgs =
+            serde_json::from_value(args.clone()).map_err(|_| ReconstructError::TypeMismatch {
                 name: "args",
                 expected: "TrackRenameArgs",
             })?;

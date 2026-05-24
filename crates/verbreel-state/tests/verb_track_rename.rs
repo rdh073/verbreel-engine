@@ -2,13 +2,13 @@
 
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use verbreel_state::{
     MutateOutcome, Project, RecordedEvent, Track, TrackKind, TrackRenameArgs, TrackRenameData,
     TrackRenameError, TrackRenameVerb, VerbRegistry, default_fixtures, default_registry,
     validate_reconstructors,
     verbs::track_rename::{
-        compute_patch, data_envelope_from_post_state, TRACK_NAME_MAX, W_NOOP_CODE,
+        TRACK_NAME_MAX, W_NOOP_CODE, compute_patch, data_envelope_from_post_state,
     },
 };
 use verbreel_types::ProjectId;
@@ -33,14 +33,13 @@ fn fixture_project_id() -> ProjectId {
 }
 
 fn track(id: &str, kind: TrackKind, name: &str, locked: bool) -> Track {
-    let mut track: Track =
-        serde_json::from_value(json!({
-            "id": id,
-            "kind": kind,
-            "name": name,
-            "clips": [],
-        }))
-        .expect("track fixture value should deserialize");
+    let mut track: Track = serde_json::from_value(json!({
+        "id": id,
+        "kind": kind,
+        "name": name,
+        "clips": [],
+    }))
+    .expect("track fixture value should deserialize");
     track.locked = locked;
     track
 }
@@ -61,7 +60,12 @@ fn patch_rename_name(patch: &Value) -> &Value {
 
 #[test]
 fn compute_patch_simple_rename_succeeds() {
-    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Original", false)]);
+    let prior = project_with_tracks(vec![track(
+        TRACK_VIDEO_A,
+        TrackKind::Video,
+        "Original",
+        false,
+    )]);
 
     let args = TrackRenameArgs {
         project_id: fixture_project_id(),
@@ -76,9 +80,7 @@ fn compute_patch_simple_rename_succeeds() {
     assert_eq!(data.track_id.to_string(), TRACK_VIDEO_A);
     assert_eq!(data.name, "Main Camera");
     assert_eq!(
-        patch
-            .as_array()
-            .expect("patch is array")[0]
+        patch.as_array().expect("patch is array")[0]
             .get("path")
             .and_then(Value::as_str),
         Some("/tracks/0/name")
@@ -87,7 +89,12 @@ fn compute_patch_simple_rename_succeeds() {
 
 #[test]
 fn compute_patch_rename_to_same_name_emits_w_noop() {
-    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Main Camera", false)]);
+    let prior = project_with_tracks(vec![track(
+        TRACK_VIDEO_A,
+        TrackKind::Video,
+        "Main Camera",
+        false,
+    )]);
 
     let args = TrackRenameArgs {
         project_id: fixture_project_id(),
@@ -95,7 +102,8 @@ fn compute_patch_rename_to_same_name_emits_w_noop() {
         name: "Main Camera".to_string(),
     };
 
-    let (patch, warnings, data) = compute_patch(&prior, &args).expect("same-name rename should succeed");
+    let (patch, warnings, data) =
+        compute_patch(&prior, &args).expect("same-name rename should succeed");
     let patch_arr = patch.as_array().expect("patch is array");
     assert!(patch_arr.is_empty(), "same-name rename is a no-op");
     assert_eq!(warnings.len(), 1);
@@ -131,7 +139,12 @@ fn compute_patch_bad_uuid_errors() {
 
 #[test]
 fn compute_patch_track_not_found_errors() {
-    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 1", false)]);
+    let prior = project_with_tracks(vec![track(
+        TRACK_VIDEO_A,
+        TrackKind::Video,
+        "Video 1",
+        false,
+    )]);
 
     let err = compute_patch(
         &prior,
@@ -177,7 +190,12 @@ fn compute_patch_locked_track_errors() {
 
 #[test]
 fn compute_patch_empty_name_errors() {
-    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 1", false)]);
+    let prior = project_with_tracks(vec![track(
+        TRACK_VIDEO_A,
+        TrackKind::Video,
+        "Video 1",
+        false,
+    )]);
 
     let err = compute_patch(
         &prior,
@@ -194,7 +212,12 @@ fn compute_patch_empty_name_errors() {
 
 #[test]
 fn compute_patch_129_char_name_errors() {
-    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 1", false)]);
+    let prior = project_with_tracks(vec![track(
+        TRACK_VIDEO_A,
+        TrackKind::Video,
+        "Video 1",
+        false,
+    )]);
 
     let err = compute_patch(
         &prior,
@@ -217,7 +240,12 @@ fn compute_patch_129_char_name_errors() {
 
 #[test]
 fn compute_patch_unicode_name_chars_counted() {
-    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 1", false)]);
+    let prior = project_with_tracks(vec![track(
+        TRACK_VIDEO_A,
+        TrackKind::Video,
+        "Video 1",
+        false,
+    )]);
     let name = "界".repeat(128);
     assert_eq!(name.chars().count(), 128);
     assert!(name.len() > 128);
@@ -228,11 +256,13 @@ fn compute_patch_unicode_name_chars_counted() {
         name: name.clone(),
     };
 
-    let (patch, _warnings, data) = compute_patch(&prior, &args).expect("unicode 128 chars should pass");
-    assert_eq!(patch_rename_name(&patch), name);
-    assert_eq!(patch.as_array().expect("patch array")[0]
-        .get("path")
-        .and_then(Value::as_str),
+    let (patch, _warnings, data) =
+        compute_patch(&prior, &args).expect("unicode 128 chars should pass");
+    assert_eq!(patch_rename_name(&patch).as_str(), Some(name.as_str()));
+    assert_eq!(
+        patch.as_array().expect("patch array")[0]
+            .get("path")
+            .and_then(Value::as_str),
         Some("/tracks/0/name")
     );
     assert_eq!(data.name, args.name);
@@ -304,9 +334,7 @@ fn compute_patch_name_no_conflict_across_kinds() {
     assert!(warnings.is_empty());
     assert_eq!(data.name, "Foo");
     assert_eq!(
-        patch
-            .as_array()
-            .expect("patch array")[0]
+        patch.as_array().expect("patch array")[0]
             .get("path")
             .and_then(Value::as_str),
         Some("/tracks/1/name")
@@ -332,7 +360,12 @@ fn data_envelope_returns_post_state_name() {
 
 #[test]
 fn reconstructor_round_trip() {
-    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 1", false)]);
+    let prior = project_with_tracks(vec![track(
+        TRACK_VIDEO_A,
+        TrackKind::Video,
+        "Video 1",
+        false,
+    )]);
     let args = TrackRenameArgs {
         project_id: fixture_project_id(),
         track: TRACK_VIDEO_A.to_string(),
@@ -346,8 +379,9 @@ fn reconstructor_round_trip() {
         .apply(&typed_patch)
         .expect("track.rename patch should apply cleanly");
 
-    let expected_data = serde_json::to_value(data_envelope_from_post_state(&args, &post_state).expect("envelope"))
-        .expect("envelope serializes");
+    let expected_data =
+        serde_json::to_value(data_envelope_from_post_state(&args, &post_state).expect("envelope"))
+            .expect("envelope serializes");
 
     let recorded = RecordedEvent {
         verb: "track.rename".to_string(),
@@ -399,7 +433,8 @@ fn verb_routes_through_mutate_via_verb() {
         panic!("happy path must return Applied, got {outcome:?}");
     };
 
-    let data: TrackRenameData = serde_json::from_value(data).expect("track.rename data is TrackRenameData");
+    let data: TrackRenameData =
+        serde_json::from_value(data).expect("track.rename data is TrackRenameData");
     assert_eq!(data.track_id.to_string(), track_id);
     assert_eq!(store.project().tracks[0].name, "Main Camera");
     assert_eq!(warnings, Vec::<Value>::new());
@@ -428,13 +463,20 @@ fn replay_returns_same_data_envelope() {
     });
 
     let first = store
-        .mutate_via_verb("track.rename", args.clone(), Some("idem-track-rename".into()))
+        .mutate_via_verb(
+            "track.rename",
+            args.clone(),
+            Some("idem-track-rename".into()),
+        )
         .expect("first call should apply");
-    let MutateOutcome::Applied { data: first_data, .. } = first else {
+    let MutateOutcome::Applied {
+        data: first_data, ..
+    } = first
+    else {
         panic!("first apply must be Applied, got {first:?}");
     };
-    let first_data: TrackRenameData = serde_json::from_value(first_data)
-        .expect("first result data is TrackRenameData");
+    let first_data: TrackRenameData =
+        serde_json::from_value(first_data).expect("first result data is TrackRenameData");
 
     let second = store
         .mutate_via_verb("track.rename", args, Some("idem-track-rename".into()))
@@ -447,8 +489,8 @@ fn replay_returns_same_data_envelope() {
     else {
         panic!("second call must be Replayed, got {second:?}");
     };
-    let second_data: TrackRenameData = serde_json::from_value(second_data)
-        .expect("replayed result data is TrackRenameData");
+    let second_data: TrackRenameData =
+        serde_json::from_value(second_data).expect("replayed result data is TrackRenameData");
 
     assert_eq!(first_data, second_data);
     assert_eq!(warnings.len(), 1);
@@ -469,8 +511,10 @@ fn apply_chain_preserves_track_contiguity() {
         name: "Video 2 Renamed".to_string(),
     };
 
-    let (patch, _warnings, _data) = compute_patch(&prior, &args).expect("compute_patch should succeed");
-    let typed_patch: json_patch::Patch = serde_json::from_value(patch).expect("patch parses to RFC 6902");
+    let (patch, _warnings, _data) =
+        compute_patch(&prior, &args).expect("compute_patch should succeed");
+    let typed_patch: json_patch::Patch =
+        serde_json::from_value(patch).expect("patch parses to RFC 6902");
     let post_state = prior
         .apply(&typed_patch)
         .expect("apply should preserve contiguity");
