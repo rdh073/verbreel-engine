@@ -34,6 +34,10 @@
 //!    references an effect that exists on the parent clip.
 //! 6. `check_source_in_tk` — text/image clips have
 //!    `source_in_tk == 0`.
+//! 7. `check_speed_on_image_text` — text/image clips have
+//!    `speed == 1.0`.
+//! 8. `check_speed_curve_on_image_text` — text/image clips have
+//!    `speed_curve == None`.
 //!
 //! Subsequent slices add more checks here. Each violation surfaces
 //! as [`ApplyError::InvariantViolation`] wrapping the typed
@@ -52,7 +56,8 @@ use thiserror::Error;
 
 use crate::invariants::{
     InvariantViolation, check_dangling_keyframes, check_duration_tk, check_fade_clamp,
-    check_no_overlap, check_source_in_tk, check_track_contiguity,
+    check_no_overlap, check_source_in_tk, check_speed_curve_on_image_text,
+    check_speed_on_image_text, check_track_contiguity,
 };
 use crate::project::Project;
 
@@ -160,6 +165,8 @@ impl Project {
         check_duration_tk(&project)?;
         check_dangling_keyframes(&project)?;
         check_source_in_tk(&project)?;
+        check_speed_on_image_text(&project)?;
+        check_speed_curve_on_image_text(&project)?;
         Ok(project)
     }
 
