@@ -123,6 +123,7 @@
 //!   [`ProjectSetCanvasArgs`] is sufficient for this slice; the
 //!   JSON-schema declaration belongs to that crate's future work.
 
+use crate::{Asset, Clip, TrackKind};
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -147,6 +148,10 @@ pub const CANVAS_MAX_DIM: u32 = 8192;
 /// Minimum pixel-aspect numerator / denominator per `$defs/Canvas`.
 /// `0` is rejected — pixel aspects must be positive integers.
 pub const PIXEL_ASPECT_MIN: u32 = 1;
+
+/// Warning emitted when one or more clip AABBs become fully visible
+/// outside the resized canvas.
+pub const W_CANVAS_CLIPS_OUT_OF_FRAME: &str = "W_CANVAS_CLIPS_OUT_OF_FRAME";
 
 /// Args for `project.set_canvas`. Mirrors the §2.10 args list.
 ///
@@ -326,6 +331,113 @@ fn parse_canvas_dims(s: &str) -> Result<(u32, u32), ProjectSetCanvasError> {
     Ok((width, height))
 }
 
+/// Axis-aligned bounding box of a clip's source rectangle after
+/// transform, in canvas coordinates.
+///
+/// Transform order:
+///
+/// 1. Subtract anchor point (`src_w * anchor_x`, `src_h * anchor_y`).
+/// 2. Scale by (`scale_x`, `scale_y`).
+/// 3. Rotate by `rotation_deg` (positive means clockwise, in
+///    screen-space with Y down).
+/// 4. Translate by (`x`, `y`).
+///
+/// The output is `(min_x, min_y, max_x, max_y)` across the four
+/// source corners.
+fn clip_bounding_box_aabb(clip: &Clip, src_w: u32, src_h: u32) -> (f64, f64, f64, f64) {
+    let w = f64::from(src_w);
+    let h = f64::from(src_h);
+    let transform = &clip.transform;
+
+    let ax = transform.anchor_x * w;
+    let ay = transform.anchor_y * h;
+
+    let theta = transform.rotation_deg.to_radians();
+    let (sin_t, cos_t) = theta.sin_cos();
+
+    let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)];
+
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    for (cx, cy) in corners {
+        let dx = cx - ax;
+        let dy = cy - ay;
+        let scaled_x = dx * transform.scale_x;
+        let scaled_y = dy * transform.scale_y;
+        let rx = scaled_x * cos_t - scaled_y * sin_t;
+        let ry = scaled_x * sin_t + scaled_y * cos_t;
+        let final_x = rx + transform.x;
+        let final_y = ry + transform.y;
+
+        min_x = min_x.min(final_x);
+        min_y = min_y.min(final_y);
+        max_x = max_x.max(final_x);
+        max_y = max_y.max(final_y);
+    }
+
+    (min_x, min_y, max_x, max_y)
+}
+
+/// Returns `true` if an AABB has no overlap with the canvas
+/// rectangle.
+///
+/// Full-off-frame means all points are strictly outside one side of
+/// the canvas:
+/// - right of left edge (`max_x < 0`) or
+/// - left of right edge (`min_x > canvas_w`) or
+/// - below top (`max_y < 0`) or
+/// - above bottom (`min_y > canvas_h`).
+fn is_fully_outside_canvas(aabb: (f64, f64, f64, f64), canvas_w: u32, canvas_h: u32) -> bool {
+    let (min_x, min_y, max_x, max_y) = aabb;
+    let canvas_w = f64::from(canvas_w);
+    let canvas_h = f64::from(canvas_h);
+    max_x < 0.0 || min_x > canvas_w || max_y < 0.0 || min_y > canvas_h
+}
+
+/// Resolve a clip's source dimensions from prior assets.
+///
+/// Returns `Some((width, height))` for display-capable assets
+/// (`Video` / `Image`) and `None` for everything else.
+fn resolve_clip_source_dims(prior: &Project, clip: &Clip) -> Option<(u32, u32)> {
+    let asset_id = clip.asset_id.id()?;
+    let asset = prior.assets.iter().find(|a| a.id() == asset_id)?;
+    match asset {
+        Asset::Video(video) => Some((video.metadata.width, video.metadata.height)),
+        Asset::Image(image) => Some((image.metadata.width, image.metadata.height)),
+        _ => None,
+    }
+}
+
+/// Walk all video tracks and emit the IDs of clips whose transformed
+/// source rects are fully outside the new canvas.
+///
+/// Output is lexicographically sorted for deterministic serialisation.
+fn compute_affected_clips(prior: &Project, canvas_w: u32, canvas_h: u32) -> Vec<String> {
+    let mut ids = Vec::new();
+
+    for track in &prior.tracks {
+        if track.kind != TrackKind::Video {
+            continue;
+        }
+
+        for clip in &track.clips {
+            let Some((src_w, src_h)) = resolve_clip_source_dims(prior, clip) else {
+                continue;
+            };
+            let aabb = clip_bounding_box_aabb(clip, src_w, src_h);
+            if is_fully_outside_canvas(aabb, canvas_w, canvas_h) {
+                ids.push(clip.id.to_string());
+            }
+        }
+    }
+
+    ids.sort_unstable();
+    ids
+}
+
 /// Compute the RFC 6902 patch and post-patch [`Canvas`] for a
 /// `project.set_canvas` call.
 ///
@@ -366,7 +478,7 @@ fn parse_canvas_dims(s: &str) -> Result<(u32, u32), ProjectSetCanvasError> {
 pub fn compute_patch(
     prior: &Project,
     args: &ProjectSetCanvasArgs,
-) -> Result<(Value, Canvas), ProjectSetCanvasError> {
+) -> Result<(Value, Canvas, Vec<Value>), ProjectSetCanvasError> {
     // Parse the canvas dims first — every other check assumes we have
     // valid u32 width/height to compare against.
     let (width, height) = parse_canvas_dims(&args.canvas)?;
@@ -436,7 +548,23 @@ pub fn compute_patch(
         { "op": "replace", "path": "/canvas", "value": canvas_value }
     ]);
 
-    Ok((patch, new_canvas))
+    let affected_clip_ids = compute_affected_clips(prior, new_canvas.width, new_canvas.height);
+    let mut warnings = Vec::new();
+
+    if !affected_clip_ids.is_empty() {
+        warnings.push(json!({
+            "code": W_CANVAS_CLIPS_OUT_OF_FRAME,
+            "message": format!(
+                "{} clip(s) now outside the new canvas",
+                affected_clip_ids.len()
+            ),
+            "details": {
+                "affected_clip_ids": affected_clip_ids
+            }
+        }));
+    }
+
+    Ok((patch, new_canvas, warnings))
 }
 
 /// Build the verb's envelope `data` from `(args, post_state)`. Pure —
@@ -508,7 +636,7 @@ impl Verb for ProjectSetCanvasVerb {
 
         // Run the freestanding compute_patch helper. Its typed error
         // funnels through the From impl above.
-        let (patch_value, new_canvas) = compute_patch(prior, &typed)?;
+        let (patch_value, new_canvas, warnings) = compute_patch(prior, &typed)?;
 
         // Convert the RFC 6902 patch from `serde_json::Value` to the
         // typed `json_patch::Patch`. A failure here is a verb-author
@@ -536,7 +664,7 @@ impl Verb for ProjectSetCanvasVerb {
             ))
         })?;
 
-        Ok((patch, data, Vec::new()))
+        Ok((patch, data, warnings))
     }
 
     fn reconstruct(

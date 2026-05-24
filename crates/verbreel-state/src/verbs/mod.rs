@@ -196,7 +196,7 @@ fn project_set_canvas_fixture() -> RecordedEvent {
         pixel_aspect_den: None,
     };
 
-    let (patch, new_canvas) = project_set_canvas::compute_patch(&prior, &args)
+    let (patch, new_canvas, _warnings) = project_set_canvas::compute_patch(&prior, &args)
         .expect("default fixture must produce a valid patch");
 
     let mut post_state = prior.clone();
