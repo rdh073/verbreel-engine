@@ -1,0 +1,127 @@
+{
+  "id": "0190b8d3-15e3-7000-bd00-000000000001",
+  "schema_version": "1.0.0",
+  "tick_rate_hz": 240000,
+  "name": "with-assets",
+  "created_at": "2026-05-24T00:00:00Z",
+  "updated_at": "2026-05-24T00:00:00Z",
+  "canvas": {
+    "width": 1080,
+    "height": 1920,
+    "background": "#000000ff",
+    "pixel_aspect_num": 1,
+    "pixel_aspect_den": 1
+  },
+  "fps_num": 30,
+  "fps_den": 1,
+  "duration_tk": 0,
+  "tracks": [
+    {
+      "id": "0190b8d3-15e3-7000-bd00-000000000002",
+      "kind": "video",
+      "name": "Video 1",
+      "clips": [],
+      "muted": false,
+      "solo": false,
+      "locked": false,
+      "hidden": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "effects": []
+    },
+    {
+      "id": "0190b8d3-15e3-7000-bd00-000000000003",
+      "kind": "audio",
+      "name": "Audio 1",
+      "clips": [],
+      "muted": false,
+      "solo": false,
+      "locked": false,
+      "hidden": false,
+      "volume": 1.0,
+      "pan": 0.0,
+      "effects": []
+    }
+  ],
+  "assets": [
+    {
+      "id": "0190b8d3-15e3-7000-bd00-0000000000a1",
+      "kind": "video",
+      "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+      "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.mp4",
+      "original_filename": "video1.mp4",
+      "imported_at": "2026-05-24T00:00:00Z",
+      "metadata": {
+        "duration_tk": 2400000,
+        "width": 1920,
+        "height": 1080,
+        "fps_num": 30,
+        "fps_den": 1,
+        "video_codec": "h264",
+        "container": "mp4",
+        "fingerprint": {
+          "mtime_ms": 1700000000000,
+          "size_bytes": 1048576
+        }
+      }
+    },
+    {
+      "id": "0190b8d3-15e3-7000-bd00-0000000000a2",
+      "kind": "audio",
+      "hash": "36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da",
+      "path": "assets/36/36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da.m4a",
+      "original_filename": "audio1.m4a",
+      "imported_at": "2026-05-24T00:00:00Z",
+      "metadata": {
+        "duration_tk": 720000,
+        "audio_codec": "aac",
+        "audio_channels": 2,
+        "audio_sample_rate_hz": 48000,
+        "container": "m4a",
+        "fingerprint": {
+          "mtime_ms": 1700000000000,
+          "size_bytes": 524288
+        }
+      }
+    },
+    {
+      "id": "0190b8d3-15e3-7000-bd00-0000000000a3",
+      "kind": "image",
+      "hash": "aa761291ff9d068556f2d1d6f63c53a4d22e44d65f882c1c252a04372123add3",
+      "path": "assets/aa/aa761291ff9d068556f2d1d6f63c53a4d22e44d65f882c1c252a04372123add3.png",
+      "original_filename": "image1.png",
+      "imported_at": "2026-05-24T00:00:00Z",
+      "metadata": {
+        "width": 1920,
+        "height": 1080,
+        "container": "png",
+        "has_alpha": true,
+        "fingerprint": {
+          "mtime_ms": 1700000000000,
+          "size_bytes": 65536
+        }
+      }
+    },
+    {
+      "id": "0190b8d3-15e3-7000-bd00-0000000000a4",
+      "kind": "subtitle",
+      "hash": "4000145a4200d4861daaac417051ced93cb850cbb819eb9c8bafe9f62b08e6ba",
+      "path": "assets/40/4000145a4200d4861daaac417051ced93cb850cbb819eb9c8bafe9f62b08e6ba.srt",
+      "original_filename": "subtitle1.srt",
+      "imported_at": "2026-05-24T00:00:00Z",
+      "metadata": {
+        "container": "srt",
+        "language": "en",
+        "segment_count": 12,
+        "fingerprint": {
+          "mtime_ms": 1700000000000,
+          "size_bytes": 2048
+        }
+      }
+    }
+  ],
+  "markers": [],
+  "metadata": {},
+  "last_saved_event_id": null,
+  "trackers": []
+}

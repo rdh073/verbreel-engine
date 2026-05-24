@@ -76,6 +76,12 @@ json-patch    = { version = "4" }
 # Last-checked: jsonschema 0.46.5 published 2026-05-13.
 jsonschema    = { version = "0.46", default-features = false }
 
+# Regex validation for content-addressed asset newtypes (Sha256, AssetPath,
+# AssetRef). Compiled once via std::sync::OnceLock at the call site —
+# matches the schema patterns in `spec/project-schema.json` `$defs/Sha256`
+# / `$defs/AssetPath` / `$defs/AssetRef`. Last-checked: regex 1.12.3.
+regex         = { version = "1" }
+
 # HTTP server
 axum          = { version = "0.8", features = ["ws", "macros"] }
 tower         = { version = "0.5" }

@@ -2705,6 +2705,7 @@ dependencies = [
  "json-patch",
  "jsonptr",
  "jsonschema",
+ "regex",
  "serde",
  "serde_json",
  "thiserror",
