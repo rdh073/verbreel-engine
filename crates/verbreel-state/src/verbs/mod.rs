@@ -50,10 +50,8 @@ use serde_json::{Map, Value, json};
 
 use crate::project::Project;
 use crate::reconstructor::{RecordedEvent, VerbRegistry};
-use crate::verbs::project_set_metadata::{
-    ProjectSetMetadataArgs, ProjectSetMetadataVerb, compute_patch, data_envelope,
-};
 
+pub mod project_set_canvas;
 pub mod project_set_metadata;
 
 /// Synthetic `UUIDv7` used as the `project_id` in [`default_fixtures`].
@@ -86,10 +84,18 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 #[must_use]
 pub fn default_registry() -> VerbRegistry {
     let mut registry = VerbRegistry::new();
-    registry.register(Arc::new(ProjectSetMetadataVerb)).expect(
-        "ProjectSetMetadataVerb is the first registration in \
+    registry
+        .register(Arc::new(project_set_metadata::ProjectSetMetadataVerb))
+        .expect(
+            "ProjectSetMetadataVerb is the first registration in \
              default_registry(); cannot collide",
-    );
+        );
+    registry
+        .register(Arc::new(project_set_canvas::ProjectSetCanvasVerb))
+        .expect(
+            "ProjectSetCanvasVerb is the second registration in \
+             default_registry(); cannot collide with project.set_metadata",
+        );
     registry
 }
 
@@ -105,7 +111,7 @@ pub fn default_registry() -> VerbRegistry {
 /// registries must build their own fixtures.
 #[must_use]
 pub fn default_fixtures() -> Vec<RecordedEvent> {
-    vec![project_set_metadata_fixture()]
+    vec![project_set_metadata_fixture(), project_set_canvas_fixture()]
 }
 
 /// Build the canonical `project.set_metadata` fixture used by
@@ -125,24 +131,70 @@ fn project_set_metadata_fixture() -> RecordedEvent {
 
     let mut metadata = Map::new();
     metadata.insert("author".to_string(), Value::String("alice".to_string()));
-    let args = ProjectSetMetadataArgs {
+    let args = project_set_metadata::ProjectSetMetadataArgs {
         project_id,
         metadata: Some(metadata),
         replace: false,
         unset: None,
     };
 
-    let (patch, new_metadata) =
-        compute_patch(&prior, &args).expect("default fixture must produce a valid patch");
+    let (patch, new_metadata) = project_set_metadata::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid patch");
 
     let mut post_state = prior.clone();
     post_state.metadata = new_metadata;
 
-    let expected_data = serde_json::to_value(data_envelope(&args, &post_state))
-        .expect("ProjectSetMetadataData serializes to Value");
+    let expected_data =
+        serde_json::to_value(project_set_metadata::data_envelope(&args, &post_state))
+            .expect("ProjectSetMetadataData serializes to Value");
 
     RecordedEvent {
         verb: "project.set_metadata".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `project.set_canvas` fixture used by
+/// [`default_fixtures`].
+///
+/// Exercises the happy path with all four optional fields **omitted**
+/// (so partial-update semantics are exercised — width/height update,
+/// background and pixel-aspect stay at the prior defaults). The prior
+/// project's portrait `1080x1920` canvas becomes the landscape
+/// `1920x1080` canvas (background `#000000ff`, pixel aspect `1/1`
+/// unchanged from the synthetic empty project). The reconstructor only
+/// reads `args.project_id` and `post_state.canvas` so this is the
+/// minimum-surface-area fixture that still proves the round-trip.
+fn project_set_canvas_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = project_set_canvas::ProjectSetCanvasArgs {
+        project_id,
+        canvas: "1920x1080".to_string(),
+        background: None,
+        pixel_aspect_num: None,
+        pixel_aspect_den: None,
+    };
+
+    let (patch, new_canvas) = project_set_canvas::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid patch");
+
+    let mut post_state = prior.clone();
+    post_state.canvas = new_canvas;
+
+    let expected_data = serde_json::to_value(project_set_canvas::data_envelope(&args, &post_state))
+        .expect("ProjectSetCanvasData serializes to Value");
+
+    RecordedEvent {
+        verb: "project.set_canvas".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch,
         warnings: vec![],
@@ -197,7 +249,13 @@ mod tests {
         let report = validate_reconstructors(&registry, &fixtures)
             .expect("default_registry + default_fixtures must clear the §0.8 gate");
         assert_eq!(report.fixtures_run, fixtures.len());
-        assert_eq!(report.verbs_checked, vec!["project.set_metadata"]);
+        // `verbs_checked` is sort_unstable-then-dedup'd inside the
+        // validator; alphabetical order means `project.set_canvas` lands
+        // before `project.set_metadata`.
+        assert_eq!(
+            report.verbs_checked,
+            vec!["project.set_canvas", "project.set_metadata"]
+        );
     }
 
     #[test]
