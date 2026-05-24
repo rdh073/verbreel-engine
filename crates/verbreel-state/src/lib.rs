@@ -30,6 +30,9 @@
 //! - [`Keyframe`] + [`KeyframeProperty`] + [`Easing`] (Phase 2 fifth
 //!   slice). [`Clip::keyframes`] is now `Vec<Keyframe>`. Every
 //!   nested `$def` in `spec/project-schema.json` is now typed.
+//! - [`Project::apply`] + [`ApplyError`] (Phase 2 sixth and FINAL
+//!   state-typing slice). MVP — pure RFC 6902 patch application;
+//!   §0.13 invariant enforcement is deferred to follow-up slices.
 //!
 //! ## What's deferred (follow-up slices)
 //!
@@ -37,7 +40,6 @@
 //!   placeholder on [`Track::effects`] — replacement coupled with
 //!   track-level effects work in a future slice; the Effect slice
 //!   only replaced [`Clip::effects`] per task scope).
-//! - `apply(patch) -> Result<Project>` — the json-patch consumer.
 //! - Event-log integration (§0.8 write-ordering).
 //! - §0.13 invariant enforcement (track contiguity, no-overlap,
 //!   fade clamp, asset hash uniqueness, `AssetPath` prefix-of-hash,
@@ -63,6 +65,7 @@
 // "Project" type lives in the `project` module and that's fine.
 #![allow(clippy::module_name_repetitions)]
 
+pub mod apply;
 pub mod asset;
 pub mod asset_meta;
 pub mod canvas;
@@ -78,6 +81,7 @@ pub mod track;
 pub mod tracker;
 pub mod transform;
 
+pub use apply::ApplyError;
 pub use asset::{Asset, AudioAsset, ImageAsset, SubtitleAsset, VideoAsset};
 pub use asset_meta::{
     AudioAssetMetadata, FileFingerprint, ImageAssetMetadata, RotationDeg, SubtitleAssetMetadata,
