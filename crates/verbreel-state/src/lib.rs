@@ -119,18 +119,25 @@ pub use marker::Marker;
 pub use newtypes::{AssetNewtypeError, AssetPath, AssetRef, Color, Sha256};
 pub use project::{Project, SCHEMA_VERSION};
 pub use reconstructor::{
-    ReconstructError, RecordedEvent, RegistryError, ValidationError, ValidationReport,
-    VerbReconstructor, VerbRegistry, validate_reconstructors,
+    ReconstructError, RecordedEvent, RegistryError, ValidationError, ValidationReport, Verb,
+    VerbError, VerbRegistry, validate_reconstructors,
 };
+// Deprecated alias kept for one slice cycle (Slice B3 rename). Down-
+// stream crates pinned to `VerbReconstructor` keep compiling; new code
+// MUST use `Verb`.
+#[allow(deprecated)]
+pub use reconstructor::VerbReconstructor;
 pub use shadow::Shadow;
 pub use text_element::{TextAlign, TextElement};
 pub use track::{Track, TrackKind};
 pub use tracker::Tracker;
 pub use transform::Transform;
 pub use verbs::project_set_metadata::{
-    ProjectSetMetadataArgs, ProjectSetMetadataData, ProjectSetMetadataError,
-    ProjectSetMetadataReconstructor,
+    ProjectSetMetadataArgs, ProjectSetMetadataData, ProjectSetMetadataError, ProjectSetMetadataVerb,
 };
+// Deprecated alias kept for one slice cycle (Slice B3 rename).
+#[allow(deprecated)]
+pub use verbs::project_set_metadata::ProjectSetMetadataReconstructor;
 pub use verbs::{default_fixtures, default_registry};
 
 // Re-export the tick rate constant from verbreel-types so downstream

@@ -19,7 +19,7 @@ use tempfile::TempDir;
 use verbreel_events::{Event, EventBackend, NativeBackend};
 use verbreel_state::{
     LifecycleError, MutateOutcome, Project, ProjectStore, ReconstructError, RecordedEvent,
-    ValidationError, VerbReconstructor, VerbRegistry, default_fixtures, default_registry,
+    ValidationError, VerbRegistry, default_fixtures, default_registry,
 };
 use verbreel_types::EventId;
 
@@ -363,7 +363,7 @@ fn lifecycle_mutate_with_key_first_call_applied() {
         .expect("first keyed call must succeed");
 
     let event_id = match outcome {
-        MutateOutcome::Applied { event_id } => event_id,
+        MutateOutcome::Applied { event_id, data: _ } => event_id,
         other => panic!("first call should be Applied, got {other:?}"),
     };
     assert_eq!(store.project().name, "renamed-via-idem");
@@ -390,7 +390,11 @@ fn lifecycle_mutate_with_key_replay_returns_replayed_outcome() {
     let first = store
         .mutate("project.set_name", args.clone(), &patch, Some("dup".into()))
         .expect("first call");
-    let MutateOutcome::Applied { event_id: first_id } = first else {
+    let MutateOutcome::Applied {
+        event_id: first_id,
+        data: _,
+    } = first
+    else {
         panic!("first call should be Applied, got {first:?}");
     };
 
@@ -399,6 +403,7 @@ fn lifecycle_mutate_with_key_replay_returns_replayed_outcome() {
         .expect("second (replay) call");
     let MutateOutcome::Replayed {
         event_id: replay_id,
+        data: _,
     } = second
     else {
         panic!("second call should be Replayed, got {second:?}");
@@ -497,10 +502,18 @@ fn lifecycle_mutate_without_key_skips_dedup() {
             None,
         )
         .unwrap();
-    let MutateOutcome::Applied { event_id: id_one } = outcome_one else {
+    let MutateOutcome::Applied {
+        event_id: id_one,
+        data: _,
+    } = outcome_one
+    else {
         panic!("first un-keyed call should be Applied");
     };
-    let MutateOutcome::Applied { event_id: id_two } = outcome_two else {
+    let MutateOutcome::Applied {
+        event_id: id_two,
+        data: _,
+    } = outcome_two
+    else {
         panic!("second un-keyed call should be Applied");
     };
     assert_ne!(id_one, id_two, "two un-keyed calls produce two events");
@@ -536,7 +549,7 @@ fn lifecycle_open_rebuilds_index_from_events() {
                 Some("persisted-key".into()),
             )
             .unwrap();
-        let MutateOutcome::Applied { event_id } = outcome else {
+        let MutateOutcome::Applied { event_id, data: _ } = outcome else {
             panic!("first call should be Applied");
         };
         original_event_id = event_id;
@@ -584,9 +597,22 @@ fn lifecycle_save_returns_bytes_written() {
 /// Models a verb-author bug surfaced at the startup gate.
 struct BrokenReconstructorVerb;
 
-impl VerbReconstructor for BrokenReconstructorVerb {
+impl verbreel_state::Verb for BrokenReconstructorVerb {
     fn verb(&self) -> &'static str {
         "broken.verb"
+    }
+
+    fn compute_patch(
+        &self,
+        _prior: &Project,
+        _args: &Value,
+    ) -> Result<(json_patch::Patch, Value), verbreel_state::VerbError> {
+        // These gate tests only exercise the reconstruct path; the
+        // forward path is unreachable from them. Surface a clear
+        // verb-side error if anything ever does call it.
+        Err(verbreel_state::VerbError::Custom(
+            "BrokenReconstructorVerb::compute_patch not implemented (gate-only test verb)".into(),
+        ))
     }
 
     fn reconstruct(
@@ -608,9 +634,19 @@ impl VerbReconstructor for BrokenReconstructorVerb {
 /// reconstructor produces.
 struct WrongDataReconstructor;
 
-impl VerbReconstructor for WrongDataReconstructor {
+impl verbreel_state::Verb for WrongDataReconstructor {
     fn verb(&self) -> &'static str {
         "wrong.data"
+    }
+
+    fn compute_patch(
+        &self,
+        _prior: &Project,
+        _args: &Value,
+    ) -> Result<(json_patch::Patch, Value), verbreel_state::VerbError> {
+        Err(verbreel_state::VerbError::Custom(
+            "WrongDataReconstructor::compute_patch not implemented (gate-only test verb)".into(),
+        ))
     }
 
     fn reconstruct(

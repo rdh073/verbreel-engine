@@ -2,14 +2,14 @@
 //!
 //! These exercise the freestanding [`validate_reconstructors`] validator
 //! and the [`VerbRegistry`] against purpose-built test verbs. No
-//! production verb is registered here — the only [`VerbReconstructor`]
-//! impls in the tree live in this file.
+//! production verb is registered here — the only [`Verb`] impls in
+//! this file are gate-only mocks whose `compute_patch` is unreachable.
 
 use std::sync::Arc;
 
 use serde_json::{Value, json};
 use verbreel_state::{
-    Project, ReconstructError, RecordedEvent, RegistryError, ValidationError, VerbReconstructor,
+    Project, ReconstructError, RecordedEvent, RegistryError, ValidationError, Verb, VerbError,
     VerbRegistry, validate_reconstructors,
 };
 
@@ -36,9 +36,19 @@ fn fixture(verb: &str, args: Value, expected_data: Value) -> RecordedEvent {
 /// A pure echo verb: `data` is `args["echo"]` verbatim.
 struct TestEchoVerb;
 
-impl VerbReconstructor for TestEchoVerb {
+impl Verb for TestEchoVerb {
     fn verb(&self) -> &'static str {
         "test.echo"
+    }
+
+    fn compute_patch(
+        &self,
+        _prior: &Project,
+        _args: &Value,
+    ) -> Result<(json_patch::Patch, Value), VerbError> {
+        Err(VerbError::Custom(
+            "TestEchoVerb::compute_patch not implemented (gate-only test verb)".into(),
+        ))
     }
 
     fn reconstruct(
@@ -58,9 +68,19 @@ impl VerbReconstructor for TestEchoVerb {
 /// (pretend-)malformed. Models a verb-author bug caught at the gate.
 struct BrokenReconstructorVerb;
 
-impl VerbReconstructor for BrokenReconstructorVerb {
+impl Verb for BrokenReconstructorVerb {
     fn verb(&self) -> &'static str {
         "broken.verb"
+    }
+
+    fn compute_patch(
+        &self,
+        _prior: &Project,
+        _args: &Value,
+    ) -> Result<(json_patch::Patch, Value), VerbError> {
+        Err(VerbError::Custom(
+            "BrokenReconstructorVerb::compute_patch not implemented (gate-only test verb)".into(),
+        ))
     }
 
     fn reconstruct(
@@ -79,9 +99,19 @@ impl VerbReconstructor for BrokenReconstructorVerb {
 /// canonical SHA (key-order-insensitive), not by raw serialization.
 struct TestKeyOrderVerb;
 
-impl VerbReconstructor for TestKeyOrderVerb {
+impl Verb for TestKeyOrderVerb {
     fn verb(&self) -> &'static str {
         "test.keyorder"
+    }
+
+    fn compute_patch(
+        &self,
+        _prior: &Project,
+        _args: &Value,
+    ) -> Result<(json_patch::Patch, Value), VerbError> {
+        Err(VerbError::Custom(
+            "TestKeyOrderVerb::compute_patch not implemented (gate-only test verb)".into(),
+        ))
     }
 
     fn reconstruct(

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value, json};
 use verbreel_state::{
     METADATA_MAX_BYTES, METADATA_MAX_KEYS, Project, ProjectSetMetadataArgs,
-    ProjectSetMetadataError, ProjectSetMetadataReconstructor, RecordedEvent, VerbRegistry,
+    ProjectSetMetadataError, ProjectSetMetadataVerb, RecordedEvent, VerbRegistry,
     validate_reconstructors,
     verbs::project_set_metadata::{compute_patch, data_envelope},
 };
@@ -326,7 +326,7 @@ fn reconstructor_round_trip() {
     // 7. Register the reconstructor and run the validator.
     let mut registry = VerbRegistry::new();
     registry
-        .register(Arc::new(ProjectSetMetadataReconstructor))
+        .register(Arc::new(ProjectSetMetadataVerb))
         .expect("register ok");
 
     let report = validate_reconstructors(&registry, &[recorded])
