@@ -79,6 +79,7 @@ pub mod lifecycle;
 pub mod marker;
 pub mod newtypes;
 pub mod project;
+pub mod reconstructor;
 pub mod shadow;
 pub mod text_element;
 pub mod track;
@@ -116,6 +117,10 @@ pub use lifecycle::{LifecycleError, MutateOutcome, ProjectStore, SaveInfo};
 pub use marker::Marker;
 pub use newtypes::{AssetNewtypeError, AssetPath, AssetRef, Color, Sha256};
 pub use project::{Project, SCHEMA_VERSION};
+pub use reconstructor::{
+    ReconstructError, RecordedEvent, RegistryError, ValidationError, ValidationReport,
+    VerbReconstructor, VerbRegistry, validate_reconstructors,
+};
 pub use shadow::Shadow;
 pub use text_element::{TextAlign, TextElement};
 pub use track::{Track, TrackKind};
