@@ -9,7 +9,8 @@
 //!
 //! Verbs land one at a time. `project.set_metadata` (§2.12) was the
 //! first and `project.rename` (§2.9) is the fourth production verb.
-//! The fifth is `marker.add` (§13.1), and the sixth is `marker.set` (§13.2).
+//! The fifth is `marker.add` (§13.1), the sixth is `marker.set` (§13.2), and
+//! the seventh is `marker.remove` (§13.3).
 //! The set grows on each slice so every consumer that wants "the stock
 //! kernel verb set" (`ProjectStore::create_with_registry` /
 //! `ProjectStore::open_with_registry` / `ProjectStore::mutate_via_verb`)
@@ -43,8 +44,8 @@
 //!
 //! ## Spec references
 //!
-//! - `spec/commands/marker.md` §13.1 (`marker.add`) and §13.2
-//!   (`marker.set`).
+//! - `spec/commands/marker.md` §13.1 (`marker.add`), §13.2
+//!   (`marker.set`), and §13.3 (`marker.remove`).
 //! - `spec/commands/project.md` §2.9 (`project.rename`) and §2.12
 //!   (`project.set_metadata`).
 //! - `spec/commands/conventions.md` §0.13 (metadata size caps).
@@ -58,6 +59,7 @@ use crate::project::Project;
 use crate::reconstructor::{RecordedEvent, VerbRegistry};
 
 pub mod marker_add;
+pub mod marker_remove;
 pub mod marker_set;
 pub mod project_rename;
 pub mod project_set_canvas;
@@ -81,6 +83,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `project.rename` (§2.9)
 /// - `marker.add` (§13.1)
 /// - `marker.set` (§13.2)
+/// - `marker.remove` (§13.3)
 ///
 /// Paired with [`default_fixtures`]: the two together clear the §0.8
 /// reconstructor-purity startup gate by construction.
@@ -133,6 +136,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(marker_remove::MarkerRemoveVerb))
+        .expect(
+            "MarkerRemoveVerb is the seventh registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -154,6 +163,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         project_rename_fixture(),
         marker_add_fixture(),
         marker_set_fixture(),
+        marker_remove_fixture(),
     ]
 }
 
@@ -426,6 +436,47 @@ fn marker_set_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `marker.remove` fixture used by
+/// [`default_fixtures`].
+///
+/// Starts from the `marker.set` fixture's post-state (which has exactly
+/// one marker), then applies `marker.remove` to delete that marker.
+fn marker_remove_fixture() -> RecordedEvent {
+    let fixture = marker_set_fixture();
+    let prior = fixture.post_state;
+    let marker_id = prior
+        .markers
+        .first()
+        .expect("marker.set fixture has exactly one marker")
+        .id
+        .to_string();
+
+    let args = marker_remove::MarkerRemoveArgs {
+        project_id: prior.id,
+        markers: vec![marker_id],
+        soft: false,
+    };
+
+    let (patch_value, _warnings, data) = marker_remove::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("marker.remove fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("marker.remove fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(data).expect("marker.remove fixture expected_data");
+
+    RecordedEvent {
+        verb: "marker.remove".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -478,6 +529,7 @@ mod tests {
             report.verbs_checked,
             vec![
                 "marker.add",
+                "marker.remove",
                 "marker.set",
                 "project.rename",
                 "project.set_canvas",
