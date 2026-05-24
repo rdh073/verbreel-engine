@@ -159,6 +159,9 @@ pub use verbs::project_set_metadata::{
 pub use verbs::track_add::{
     TRACK_NAME_MAX, TrackAddArgs, TrackAddData, TrackAddError, TrackAddVerb,
 };
+pub use verbs::track_rename::{
+    TrackRenameArgs, TrackRenameData, TrackRenameError, TrackRenameVerb,
+};
 // Deprecated alias kept for one slice cycle (Slice B3 rename).
 #[allow(deprecated)]
 pub use verbs::project_set_metadata::ProjectSetMetadataReconstructor;
