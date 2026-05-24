@@ -7,11 +7,12 @@
 use serde_json::json;
 use verbreel_state::{
     ApplyError, AssetRef, BlendMode, Clip, Effect, EffectKind, FadeCurve, InvariantViolation,
-    Keyframe, KeyframeProperty, Project, Track, TrackKind, Transform, check_dangling_keyframes,
-    check_duration_tk, check_fade_clamp, check_no_overlap, check_track_contiguity,
-    extract_effect_id_from_property, timeline_duration_tk,
+    Keyframe, KeyframeProperty, Project, SourceInTkKind, Track, TrackKind, Transform,
+    check_dangling_keyframes, check_duration_tk, check_fade_clamp, check_no_overlap,
+    check_source_in_tk, check_track_contiguity, extract_effect_id_from_property,
+    timeline_duration_tk,
 };
-use verbreel_types::{ClipId, EffectId, KeyframeId, Tick, TrackId, UuidV7};
+use verbreel_types::{AssetId, ClipId, EffectId, KeyframeId, Tick, TrackId, UuidV7};
 
 const THREE_TRACK_FIXTURE: &str = include_str!("fixtures/project_with_keyframes.json");
 
@@ -1303,4 +1304,286 @@ fn fixtures_satisfy_dangling_keyframes() {
             panic!("fixture {name:?} must satisfy dangling-keyframes: {e}");
         });
     }
+}
+
+// ---------------------------------------------------------------------
+// check_source_in_tk
+// ---------------------------------------------------------------------
+
+/// Build a minimal project with one image-asset and one clip on a
+/// video track referencing that image asset. Tests for image-clip
+/// behavior mutate the clip's `source_in_tk` from this baseline.
+fn project_with_image_clip() -> Project {
+    let raw = serde_json::json!({
+        "id": "0190b8d3-15e3-7000-bd00-000000000001",
+        "schema_version": "1.0.0",
+        "tick_rate_hz": 240000,
+        "name": "img-test",
+        "created_at": "2026-05-24T00:00:00Z",
+        "updated_at": "2026-05-24T00:00:00Z",
+        "canvas": {
+            "width": 1080, "height": 1920,
+            "background": "#000000ff",
+            "pixel_aspect_num": 1, "pixel_aspect_den": 1
+        },
+        "fps_num": 30, "fps_den": 1, "duration_tk": 480000,
+        "tracks": [
+            {
+                "id": "0190b8d3-15e3-7000-bd00-000000000002",
+                "kind": "video",
+                "name": "Video 1",
+                "clips": [
+                    {
+                        "id": "0190b8d3-15e3-7000-bd00-000000000c01",
+                        "name": "img clip",
+                        "asset_id": "0190b8d3-15e3-7000-bd00-0000000000b1",
+                        "track_position_tk": 0,
+                        "source_in_tk": 0,
+                        "source_out_tk": 480000
+                    }
+                ],
+                "muted": false, "solo": false, "locked": false, "hidden": false,
+                "volume": 1.0, "pan": 0.0, "effects": []
+            }
+        ],
+        "assets": [
+            {
+                "id": "0190b8d3-15e3-7000-bd00-0000000000b1",
+                "kind": "image",
+                "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+                "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.png",
+                "original_filename": "img.png",
+                "imported_at": "2026-05-24T00:00:00Z",
+                "metadata": {
+                    "width": 1920, "height": 1080,
+                    "container": "png",
+                    "fingerprint": {
+                        "mtime_ms": 1_700_000_000_000_i64,
+                        "size_bytes": 1_048_576
+                    }
+                }
+            }
+        ],
+        "markers": [], "metadata": {}, "last_saved_event_id": null, "trackers": []
+    });
+    serde_json::from_value(raw).expect("image-clip project deserializes")
+}
+
+#[test]
+fn source_in_text_clip_zero_passes() {
+    // Three-track keyframes fixture: text clip on the text track with
+    // source_in_tk = 0.
+    let p = load_three_track();
+    check_source_in_tk(&p).expect("text clip with source_in_tk=0 passes");
+}
+
+#[test]
+fn source_in_text_clip_nonzero_rejected() {
+    let mut p = load_three_track();
+    p.tracks[2].clips[0].source_in_tk = Tick::new(1234);
+    let err = check_source_in_tk(&p).expect_err("text clip non-zero must reject");
+    if let InvariantViolation::InvalidSourceInTk {
+        clip_kind_indicator,
+        source_in_tk,
+        ..
+    } = err
+    {
+        assert_eq!(clip_kind_indicator, SourceInTkKind::Text);
+        assert_eq!(source_in_tk.get(), 1234);
+    } else {
+        panic!("expected InvalidSourceInTk, got {err:?}");
+    }
+}
+
+#[test]
+fn source_in_image_clip_zero_passes() {
+    let p = project_with_image_clip();
+    check_source_in_tk(&p).expect("image clip with source_in_tk=0 passes");
+}
+
+#[test]
+fn source_in_image_clip_nonzero_rejected() {
+    let mut p = project_with_image_clip();
+    p.tracks[0].clips[0].source_in_tk = Tick::new(5000);
+    let err = check_source_in_tk(&p).expect_err("image clip non-zero must reject");
+    if let InvariantViolation::InvalidSourceInTk {
+        clip_kind_indicator,
+        source_in_tk,
+        ..
+    } = err
+    {
+        assert_eq!(clip_kind_indicator, SourceInTkKind::Image);
+        assert_eq!(source_in_tk.get(), 5000);
+    } else {
+        panic!("expected InvalidSourceInTk, got {err:?}");
+    }
+}
+
+#[test]
+fn source_in_video_clip_any_value_passes() {
+    // The keyframes fixture's video clip references a video asset
+    // (kind="video" in assets[]). Bumping source_in_tk to a non-zero
+    // value must pass — only image/text are constrained.
+    let mut p = load_three_track();
+    p.tracks[0].clips[0].source_in_tk = Tick::new(12000);
+    // We need to update source_out_tk and duration_tk consistently
+    // to avoid tripping the duration_tk + no-fade-clamp invariants
+    // first when we run apply() — but for direct check we only test
+    // check_source_in_tk, which doesn't care about those.
+    check_source_in_tk(&p).expect("video clip source_in_tk=12000 passes");
+}
+
+#[test]
+fn source_in_audio_clip_any_value_passes() {
+    // Need a project with an audio clip. Build via direct mutation
+    // of the keyframes fixture: switch the video asset to audio,
+    // bump the clip's source_in_tk. Since we're testing check_source_in_tk
+    // directly, no need to keep the rest of the project consistent.
+    let mut p = load_three_track();
+    // Replace the video asset's discriminator with audio. We do this
+    // via serde to keep the helper simple — re-serialize, edit, re-parse.
+    let mut v = serde_json::to_value(&p).unwrap();
+    v["assets"][0]["kind"] = serde_json::json!("audio");
+    // Audio asset needs different metadata; replace with audio shape.
+    v["assets"][0]["metadata"] = serde_json::json!({
+        "duration_tk": 2_400_000,
+        "audio_codec": "aac",
+        "audio_channels": 2,
+        "audio_sample_rate_hz": 48_000,
+        "container": "mp4",
+        "fingerprint": {
+            "mtime_ms": 1_700_000_000_000_i64,
+            "size_bytes": 1_048_576
+        }
+    });
+    p = serde_json::from_value(v).expect("audio-asset reshape parses");
+    p.tracks[0].clips[0].source_in_tk = Tick::new(8000);
+    check_source_in_tk(&p).expect("audio clip source_in_tk=8000 passes");
+}
+
+#[test]
+fn source_in_clip_with_unresolvable_asset_skipped() {
+    // Clip references an asset_id that's not in project.assets[].
+    // resolve_asset_kind returns None → check skips.
+    let mut p = project_with_image_clip();
+    // Clear the assets array — clip still references the (now gone)
+    // image asset.
+    p.assets.clear();
+    // Set source_in to non-zero. If the check did NOT skip
+    // unresolvable refs, this would reject.
+    p.tracks[0].clips[0].source_in_tk = Tick::new(999);
+    check_source_in_tk(&p).expect("unresolvable asset_id skips source_in_tk check");
+}
+
+#[test]
+fn apply_rejects_text_clip_nonzero_source_in() {
+    // Patch the text clip's source_in_tk to non-zero. apply() must
+    // reject — and also include the matching /duration_tk update
+    // because the text clip's source_out_tk - source_in_tk change
+    // would otherwise trip the duration_tk invariant first. Since
+    // we want to specifically trip source_in_tk, keep source_out
+    // unchanged so the text clip's timeline duration shrinks
+    // (480000 → 477000); also bump Project.duration_tk to the new
+    // video-clip max (still 2400000, unchanged because video is the
+    // taller track).
+    let p = load_three_track();
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op":"replace","path":"/tracks/2/clips/0/source_in_tk","value": 3000},
+    ]))
+    .unwrap();
+    let err = p.apply(&patch).expect_err("text clip non-zero must reject");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::InvalidSourceInTk {
+            clip_kind_indicator,
+            ..
+        }) => assert_eq!(clip_kind_indicator, SourceInTkKind::Text),
+        other => panic!("expected InvalidSourceInTk(Text), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_rejects_image_clip_nonzero_source_in() {
+    // Image clip's source span shrinks by `source_in_tk`, which the
+    // duration_tk invariant (earlier in chain) would catch first.
+    // Update /duration_tk in the same patch so we get to the
+    // source_in_tk check.
+    let p = project_with_image_clip();
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op":"replace","path":"/tracks/0/clips/0/source_in_tk","value": 7777},
+        {"op":"replace","path":"/duration_tk","value": 472_223},
+    ]))
+    .unwrap();
+    let err = p
+        .apply(&patch)
+        .expect_err("image clip non-zero must reject");
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::InvalidSourceInTk {
+            clip_kind_indicator,
+            ..
+        }) => assert_eq!(clip_kind_indicator, SourceInTkKind::Image),
+        other => panic!("expected InvalidSourceInTk(Image), got {other:?}"),
+    }
+}
+
+#[test]
+fn apply_accepts_text_clip_with_zero_source_in_patch() {
+    // Re-set source_in_tk to 0 on an already-zero text clip. No-op
+    // but must succeed.
+    let p = load_three_track();
+    let patch: json_patch::Patch = serde_json::from_value(json!([
+        {"op":"replace","path":"/tracks/2/clips/0/source_in_tk","value": 0},
+    ]))
+    .unwrap();
+    let out = p.apply(&patch).expect("zero is always OK on text clip");
+    assert_eq!(out.tracks[2].clips[0].source_in_tk.get(), 0);
+}
+
+#[test]
+fn invalid_source_in_tk_error_carries_clip_id_and_kind() {
+    let mut p = load_three_track();
+    let expected_clip_id = p.tracks[2].clips[0].id;
+    p.tracks[2].clips[0].source_in_tk = Tick::new(42);
+
+    let err = p.apply(&json_patch::Patch(vec![])).unwrap_err();
+    match err {
+        ApplyError::InvariantViolation(InvariantViolation::InvalidSourceInTk {
+            clip_id,
+            clip_kind_indicator,
+            source_in_tk,
+        }) => {
+            assert_eq!(clip_id, expected_clip_id);
+            assert_eq!(clip_kind_indicator, SourceInTkKind::Text);
+            assert_eq!(source_in_tk.get(), 42);
+        }
+        other => panic!("expected InvalidSourceInTk, got {other:?}"),
+    }
+}
+
+#[test]
+fn fixtures_satisfy_source_in_tk() {
+    // Regression canary. All Phase 0 fixtures' text clips have
+    // source_in_tk=0 (per the fixture authors). The keyframes,
+    // effects, clips fixtures all have a text track with one text
+    // clip at source_in_tk=0.
+    let fixtures: [(&str, &str); 5] = [
+        ("empty", include_str!("fixtures/empty_project_create.json")),
+        ("assets", include_str!("fixtures/project_with_assets.json")),
+        ("clips", include_str!("fixtures/project_with_clips.json")),
+        (
+            "effects",
+            include_str!("fixtures/project_with_effects.json"),
+        ),
+        (
+            "keyframes",
+            include_str!("fixtures/project_with_keyframes.json"),
+        ),
+    ];
+    for (name, src) in fixtures {
+        let p: Project =
+            serde_json::from_str(src).unwrap_or_else(|e| panic!("fixture {name:?} parses: {e}"));
+        check_source_in_tk(&p).unwrap_or_else(|e| {
+            panic!("fixture {name:?} must satisfy source_in_tk: {e}");
+        });
+    }
+    let _ = AssetId::now(); // silence unused-import warning if any
 }
