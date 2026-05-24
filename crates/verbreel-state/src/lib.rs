@@ -131,6 +131,7 @@ pub use verbs::project_set_metadata::{
     ProjectSetMetadataArgs, ProjectSetMetadataData, ProjectSetMetadataError,
     ProjectSetMetadataReconstructor,
 };
+pub use verbs::{default_fixtures, default_registry};
 
 // Re-export the tick rate constant from verbreel-types so downstream
 // crates (verbreel-args, the verb implementations) can refer to it via

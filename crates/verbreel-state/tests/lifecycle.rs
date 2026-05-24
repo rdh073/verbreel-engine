@@ -9,12 +9,18 @@
 
 use std::fs;
 use std::io::Write as _;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
 
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use verbreel_events::{Event, EventBackend, NativeBackend};
-use verbreel_state::{LifecycleError, MutateOutcome, Project, ProjectStore};
+use verbreel_state::{
+    LifecycleError, MutateOutcome, Project, ProjectStore, ReconstructError, RecordedEvent,
+    ValidationError, VerbReconstructor, VerbRegistry, default_fixtures, default_registry,
+};
 use verbreel_types::EventId;
 
 const EMPTY_FIXTURE: &str = include_str!("fixtures/empty_project_create.json");
@@ -561,4 +567,216 @@ fn lifecycle_save_returns_bytes_written() {
         "SaveInfo.bytes_written matches actual file size"
     );
     assert!(info.bytes_written > 0, "non-empty project.json");
+}
+
+// ---------------------------------------------------------------------
+// §0.8 reconstructor-purity startup gate (Slice B2)
+//
+// `*_with_registry` runs `validate_reconstructors(registry, fixtures)`
+// as Step 0 — BEFORE any IO. A misconfigured registry returns
+// `LifecycleError::ReconstructorGateFailed` regardless of the on-disk
+// state. The existing un-suffixed `create()` / `open()` delegate with
+// empty registry + empty fixtures (vacuous pass), so the older tests in
+// this file still exercise the same path transparently.
+// ---------------------------------------------------------------------
+
+/// Test-local broken reconstructor: always returns a structured error.
+/// Models a verb-author bug surfaced at the startup gate.
+struct BrokenReconstructorVerb;
+
+impl VerbReconstructor for BrokenReconstructorVerb {
+    fn verb(&self) -> &'static str {
+        "broken.verb"
+    }
+
+    fn reconstruct(
+        &self,
+        _args: &Value,
+        _patch: &Value,
+        _warnings: &[Value],
+        _post_state: &Project,
+    ) -> Result<Value, ReconstructError> {
+        Err(ReconstructError::MissingField {
+            name: "intentional",
+        })
+    }
+}
+
+/// Test-local reconstructor that returns a fixed payload — used to
+/// exercise the `DataMismatch` branch by pairing it with a fixture
+/// whose `expected_data` deliberately differs from what the
+/// reconstructor produces.
+struct WrongDataReconstructor;
+
+impl VerbReconstructor for WrongDataReconstructor {
+    fn verb(&self) -> &'static str {
+        "wrong.data"
+    }
+
+    fn reconstruct(
+        &self,
+        _args: &Value,
+        _patch: &Value,
+        _warnings: &[Value],
+        _post_state: &Project,
+    ) -> Result<Value, ReconstructError> {
+        Ok(json!({ "produced": "left" }))
+    }
+}
+
+/// Build a synthetic fixture for a test-local verb. The reconstructors
+/// above don't read `patch` / `warnings` / `post_state`, so those carry
+/// no signal here — the 5-tuple is still fully populated for the gate.
+fn fixture(verb: &str, expected_data: Value) -> RecordedEvent {
+    RecordedEvent {
+        verb: verb.to_string(),
+        args: json!({}),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: load_empty_project(),
+        expected_data,
+    }
+}
+
+#[test]
+fn open_with_default_registry_and_fixtures_succeeds() {
+    // Happy path: a freshly-created project re-opens cleanly under the
+    // canonical kernel-verb set + matching fixtures.
+    let dir = TempDir::new().unwrap();
+    {
+        let _store = ProjectStore::create(dir.path(), load_empty_project()).unwrap();
+    }
+    let reopened =
+        ProjectStore::open_with_registry(dir.path(), &default_registry(), &default_fixtures())
+            .expect("open_with_registry against default set must succeed");
+    // Sanity: the reopened project carries the expected shape.
+    assert_eq!(reopened.project().name, "test");
+}
+
+#[test]
+fn create_with_default_registry_and_fixtures_succeeds() {
+    // Happy path: create with the canonical kernel-verb set + matching
+    // fixtures. project.json lands on disk.
+    let dir = TempDir::new().unwrap();
+    let store = ProjectStore::create_with_registry(
+        dir.path(),
+        load_empty_project(),
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .expect("create_with_registry against default set must succeed");
+    assert!(
+        dir.path().join("project.json").is_file(),
+        "project.json written"
+    );
+    assert_eq!(store.project().name, "test");
+}
+
+#[test]
+fn open_with_empty_registry_and_fixtures_succeeds() {
+    // Vacuous-pass baseline: empty registry + empty fixtures → gate is
+    // a no-op. Exercises the same path the un-suffixed `open()` takes.
+    let dir = TempDir::new().unwrap();
+    {
+        let _store = ProjectStore::create(dir.path(), load_empty_project()).unwrap();
+    }
+    let reopened = ProjectStore::open_with_registry(dir.path(), &VerbRegistry::new(), &[])
+        .expect("open_with_registry against an empty registry must succeed (vacuous pass)");
+    assert_eq!(reopened.project().name, "test");
+}
+
+#[test]
+fn open_with_misconfigured_registry_fails() {
+    // Misconfigured registry: a broken reconstructor + a matching
+    // fixture. The gate must refuse the open regardless of project
+    // state on disk.
+    let dir = TempDir::new().unwrap();
+    {
+        let _store = ProjectStore::create(dir.path(), load_empty_project()).unwrap();
+    }
+    let mut registry = VerbRegistry::new();
+    registry
+        .register(Arc::new(BrokenReconstructorVerb))
+        .expect("register broken verb");
+    let fixtures = vec![fixture("broken.verb", json!({}))];
+
+    let err = ProjectStore::open_with_registry(dir.path(), &registry, &fixtures)
+        .expect_err("gate must reject the open");
+    assert!(
+        matches!(
+            err,
+            LifecycleError::ReconstructorGateFailed {
+                source: ValidationError::ReconstructError {
+                    verb: "broken.verb",
+                    ..
+                },
+            }
+        ),
+        "expected ReconstructorGateFailed wrapping ReconstructError, got {err:?}"
+    );
+}
+
+#[test]
+fn gate_runs_before_io() {
+    // Critical ordering invariant: the gate fires BEFORE any IO. Point
+    // the open at a path that does NOT exist on disk; if the gate ran
+    // after the existence check we'd see `NoProjectJson`. With Step-0
+    // ordering we get the `ReconstructorGateFailed` error instead, even
+    // though no project.json could possibly exist at the bogus path.
+    let bogus = PathBuf::from("/__definitely_does_not_exist_98765__/__/");
+    assert!(
+        !bogus.exists(),
+        "test precondition: bogus path must not exist"
+    );
+
+    let mut registry = VerbRegistry::new();
+    registry
+        .register(Arc::new(BrokenReconstructorVerb))
+        .expect("register broken verb");
+    let fixtures = vec![fixture("broken.verb", json!({}))];
+
+    let err = ProjectStore::open_with_registry(&bogus, &registry, &fixtures)
+        .expect_err("gate must fire before existence check");
+    assert!(
+        matches!(err, LifecycleError::ReconstructorGateFailed { .. }),
+        "expected ReconstructorGateFailed (gate fires first), got {err:?}"
+    );
+    // Negative: not the IO error.
+    assert!(
+        !matches!(err, LifecycleError::NoProjectJson),
+        "must NOT short-circuit to NoProjectJson — gate must run first"
+    );
+}
+
+#[test]
+fn gate_data_mismatch_propagates() {
+    // The reconstructor returns `{ "produced": "left" }` but the
+    // fixture's `expected_data` is `{ "produced": "right" }` — RFC 8785
+    // canonical SHAs differ, gate surfaces `DataMismatch`, lifecycle
+    // wraps it in `ReconstructorGateFailed`.
+    let dir = TempDir::new().unwrap();
+    {
+        let _store = ProjectStore::create(dir.path(), load_empty_project()).unwrap();
+    }
+
+    let mut registry = VerbRegistry::new();
+    registry
+        .register(Arc::new(WrongDataReconstructor))
+        .expect("register wrong-data verb");
+    let fixtures = vec![fixture("wrong.data", json!({ "produced": "right" }))];
+
+    let err = ProjectStore::open_with_registry(dir.path(), &registry, &fixtures)
+        .expect_err("data mismatch must propagate through the gate");
+    assert!(
+        matches!(
+            err,
+            LifecycleError::ReconstructorGateFailed {
+                source: ValidationError::DataMismatch {
+                    verb: "wrong.data",
+                    ..
+                },
+            }
+        ),
+        "expected ReconstructorGateFailed wrapping DataMismatch, got {err:?}"
+    );
 }
