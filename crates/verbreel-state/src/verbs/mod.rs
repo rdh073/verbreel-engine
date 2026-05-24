@@ -7,10 +7,12 @@
 //!   §0.8) — owns both the forward path (`compute_patch`) and the
 //!   replay path (`reconstruct`).
 //!
-//! Verbs land one at a time. `project.set_metadata` (§2.12) is the
-//! first — proves the reconstructor-purity contract end-to-end and,
-//! since Slice B3, is also the first verb routed through
-//! `ProjectStore::mutate_via_verb`.
+//! Verbs land one at a time. `project.set_metadata` (§2.12) was the
+//! first and `project.rename` (§2.9) is the fourth production verb.
+//! The set grows on each slice so every consumer that wants "the stock
+//! kernel verb set" (`ProjectStore::create_with_registry` /
+//! `ProjectStore::open_with_registry` / `ProjectStore::mutate_via_verb`)
+//! picks them up automatically.
 //!
 //! ## What lives here vs. elsewhere
 //!
@@ -40,7 +42,8 @@
 //!
 //! ## Spec references
 //!
-//! - `spec/commands/project.md` §2.12 (`project.set_metadata`).
+//! - `spec/commands/project.md` §2.9 (`project.rename`) and §2.12
+//!   (`project.set_metadata`).
 //! - `spec/commands/conventions.md` §0.13 (metadata size caps).
 //! - `spec/commands/conventions.md` §0.8 (reconstructor purity).
 
@@ -51,6 +54,7 @@ use serde_json::{Map, Value, json};
 use crate::project::Project;
 use crate::reconstructor::{RecordedEvent, VerbRegistry};
 
+pub mod project_rename;
 pub mod project_set_canvas;
 pub mod project_set_fps;
 pub mod project_set_metadata;
@@ -65,13 +69,11 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 
 /// The canonical set of verbs shipped by this engine build.
 ///
-/// Currently registers exactly one verb:
-/// [`ProjectSetMetadataVerb`] (§2.12). Subsequent verbs land here so
-/// every consumer that wants "the stock kernel verb set"
-/// ([`crate::lifecycle::ProjectStore::create_with_registry`] /
-/// [`crate::lifecycle::ProjectStore::open_with_registry`] /
-/// [`crate::lifecycle::ProjectStore::mutate_via_verb`], the future
-/// args-validator, etc.) picks them up automatically.
+/// Canonical kernel verbs currently shipped:
+/// - `project.set_metadata` (§2.12)
+/// - `project.set_canvas` (§2.10)
+/// - `project.set_fps` (§2.11)
+/// - `project.rename` (§2.9)
 ///
 /// Paired with [`default_fixtures`]: the two together clear the §0.8
 /// reconstructor-purity startup gate by construction.
@@ -105,6 +107,13 @@ pub fn default_registry() -> VerbRegistry {
              / project.set_canvas",
         );
     registry
+        .register(Arc::new(project_rename::ProjectRenameVerb))
+        .expect(
+            "ProjectRenameVerb is the fourth registration in \
+             default_registry(); cannot collide with project.set_metadata \
+             / project.set_canvas / project.set_fps",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -123,6 +132,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         project_set_metadata_fixture(),
         project_set_canvas_fixture(),
         project_set_fps_fixture(),
+        project_rename_fixture(),
     ]
 }
 
@@ -261,6 +271,44 @@ fn project_set_fps_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `project.rename` fixture used by
+/// [`default_fixtures`].
+///
+/// Exercises the minimum-surface-area happy path: prior state with
+/// `name = "default-fixture"`, args set `name = "Renamed"`, post-state
+/// holds the new name. The reconstructor only reads `args.project_id`
+/// and `post_state.name`, so this is the narrowest fixture needed to
+/// prove pure round-trip replay.
+fn project_rename_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+    let args = project_rename::ProjectRenameArgs {
+        project_id,
+        name: "Renamed".to_string(),
+    };
+
+    let (patch, new_name, _warnings) = project_rename::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid patch");
+
+    let mut post_state = prior.clone();
+    post_state.name = new_name;
+
+    let expected_data = serde_json::to_value(project_rename::data_envelope(&args, &post_state))
+        .expect("ProjectRenameData serializes to Value");
+
+    RecordedEvent {
+        verb: "project.rename".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -312,6 +360,7 @@ mod tests {
         assert_eq!(
             report.verbs_checked,
             vec![
+                "project.rename",
                 "project.set_canvas",
                 "project.set_fps",
                 "project.set_metadata"
