@@ -8,8 +8,8 @@ use verbreel_state::verbs::track_set_volume::{
 };
 use verbreel_state::{
     MutateOutcome, Project, RecordedEvent, Track, TrackAddData, TrackKind, TrackSetVolumeArgs,
-    TrackSetVolumeData, TrackSetVolumeError, TrackSetVolumeVerb, VerbError, VerbRegistry,
-    Verb, default_fixtures, default_registry, validate_reconstructors,
+    TrackSetVolumeData, TrackSetVolumeError, TrackSetVolumeVerb, Verb, VerbError, VerbRegistry,
+    default_fixtures, default_registry, validate_reconstructors,
 };
 use verbreel_types::ProjectId;
 
