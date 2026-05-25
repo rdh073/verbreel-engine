@@ -186,6 +186,7 @@ pub use verbs::project_set_fps::{
 pub use verbs::project_set_metadata::{
     ProjectSetMetadataArgs, ProjectSetMetadataData, ProjectSetMetadataError, ProjectSetMetadataVerb,
 };
+pub use verbs::text_edit::{TextEditArgs, TextEditData, TextEditError, TextEditVerb};
 pub use verbs::track_add::{
     TRACK_NAME_MAX, TrackAddArgs, TrackAddData, TrackAddError, TrackAddVerb,
 };
