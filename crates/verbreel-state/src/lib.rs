@@ -132,6 +132,7 @@ pub use text_element::{TextAlign, TextElement};
 pub use track::{Track, TrackKind};
 pub use tracker::Tracker;
 pub use transform::Transform;
+pub use verbs::clip_lock::{ClipLockArgs, ClipLockData, ClipLockError, ClipLockVerb};
 pub use verbs::marker_add::{
     DEFAULT_MARKER_COLOR, LABEL_MAX as MARKER_LABEL_MAX, MarkerAddArgs, MarkerAddData,
     MarkerAddError, MarkerAddVerb, NOTE_MAX as MARKER_NOTE_MAX,
