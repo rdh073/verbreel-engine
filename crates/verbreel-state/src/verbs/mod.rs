@@ -55,6 +55,7 @@
 //! - `spec/commands/keyframe.md` §8.1 (`keyframe.add`), §8.2
 //!   (`keyframe.remove`), §8.3 (`keyframe.set`), and §8.4
 //!   (`keyframe.list`).
+//! - `spec/commands/track.md` §4.2 (`track.remove`).
 //! - `spec/commands/conventions.md` §0.13 (metadata size caps).
 //! - `spec/commands/conventions.md` §0.8 (reconstructor purity).
 
@@ -97,6 +98,7 @@ pub mod track_add;
 pub mod track_hide;
 pub mod track_lock;
 pub mod track_mute;
+pub mod track_remove;
 pub mod track_rename;
 pub mod track_reorder;
 pub mod track_set_pan;
@@ -145,6 +147,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `track.hide` (§4.10)
 /// - `track.lock` (§4.6)
 /// - `track.mute` (§4.4)
+/// - `track.remove` (§4.2)
 /// - `track.solo` (§4.5)
 /// - `track.rename` (§4.7)
 /// - `track.reorder` (§4.3)
@@ -375,6 +378,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(track_remove::TrackRemoveVerb))
+        .expect(
+            "TrackRemoveVerb is the thirty-seventh registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -426,6 +435,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         keyframe_list_fixture(),
         keyframe_remove_fixture(),
         keyframe_set_fixture(),
+        track_remove_fixture(),
     ]
 }
 
@@ -2366,6 +2376,126 @@ fn track_mute_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `track.remove` fixture used by
+/// [`default_fixtures`].
+///
+/// Starts from a synthetic project with two video tracks. The target
+/// track has one clip with one opacity keyframe; the surviving track
+/// has an equal-duration clip so the existing project duration remains
+/// valid after removal.
+#[allow(clippy::too_many_lines)]
+fn track_remove_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let asset_id = "01900000-0000-7000-8000-0000000cc701";
+    prior
+        .assets
+        .push(serde_json::from_value(json!({
+            "id": asset_id,
+            "kind": "video",
+            "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+            "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.mp4",
+            "original_filename": "track-remove.mp4",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 240_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("track.remove fixture asset parses"));
+
+    let target_track_id = "01900000-0000-7000-8000-0000000aa701";
+    let survivor_track_id = "01900000-0000-7000-8000-0000000aa702";
+    let target_clip_id = "01900000-0000-7000-8000-0000000bb701";
+    let survivor_clip_id = "01900000-0000-7000-8000-0000000bb702";
+    let keyframe_id = "01900000-0000-7000-8000-0000000ff701";
+
+    let target_track = json!({
+        "id": target_track_id,
+        "kind": "video",
+        "name": "Remove Me",
+        "locked": false,
+        "clips": [{
+            "id": target_clip_id,
+            "name": "Target Clip",
+            "asset_id": asset_id,
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 240_000,
+            "locked": false,
+            "keyframes": [{
+                "id": keyframe_id,
+                "property": "opacity",
+                "time_tk": 0,
+                "value": 1.0,
+                "easing": "linear",
+            }],
+        }],
+    });
+    let survivor_track = json!({
+        "id": survivor_track_id,
+        "kind": "video",
+        "name": "Survivor",
+        "locked": false,
+        "clips": [{
+            "id": survivor_clip_id,
+            "name": "Survivor Clip",
+            "asset_id": asset_id,
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 240_000,
+            "locked": false,
+        }],
+    });
+    prior
+        .tracks
+        .push(serde_json::from_value(target_track).expect("target track parses"));
+    prior
+        .tracks
+        .push(serde_json::from_value(survivor_track).expect("survivor track parses"));
+    prior.duration_tk = Tick::new(240_000);
+
+    let args = track_remove::TrackRemoveArgs {
+        project_id,
+        track: target_track_id.to_string(),
+    };
+
+    let (patch_value, warnings, _data) = track_remove::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid track.remove patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("track.remove fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("track.remove fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        track_remove::data_envelope_from_args_warnings(&args, &warnings)
+            .expect("track.remove fixture expected_data"),
+    )
+    .expect("track.remove fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "track.remove".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
 /// Build the canonical `track.solo` fixture used by [`default_fixtures`].
 ///
 /// Starts from the `track_add_fixture()` post-state (which has one video
@@ -2631,6 +2761,7 @@ mod tests {
                 "track.hide",
                 "track.lock",
                 "track.mute",
+                "track.remove",
                 "track.rename",
                 "track.reorder",
                 "track.set_pan",
