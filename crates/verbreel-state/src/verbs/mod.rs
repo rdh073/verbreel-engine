@@ -55,7 +55,8 @@
 //! - `spec/commands/keyframe.md` §8.1 (`keyframe.add`), §8.2
 //!   (`keyframe.remove`), §8.3 (`keyframe.set`), and §8.4
 //!   (`keyframe.list`).
-//! - `spec/commands/track.md` §4.2 (`track.remove`).
+//! - `spec/commands/track.md` §4.1 (`track.add`) and §4.2
+//!   (`track.remove`).
 //! - `spec/commands/conventions.md` §0.13 (metadata size caps).
 //! - `spec/commands/conventions.md` §0.8 (reconstructor purity).
 
@@ -217,10 +218,9 @@ pub fn default_registry() -> VerbRegistry {
             "MarkerListVerb is the eighth registration in \
              default_registry(); cannot collide with prior verbs",
         );
-    registry.register(Arc::new(track_add::TrackAddVerb)).expect(
-        "TrackAddVerb is the ninth registration in \
-             default_registry(); cannot collide with prior verbs",
-    );
+    registry
+        .register(Arc::new(track_add::TrackAddVerb))
+        .expect("TrackAddVerb registration in default_registry() cannot collide with prior verbs");
     registry
         .register(Arc::new(track_rename::TrackRenameVerb))
         .expect(
@@ -2208,14 +2208,24 @@ fn clip_list_fixture() -> RecordedEvent {
 
 /// Build the canonical `track.add` fixture used by [`default_fixtures`].
 ///
-/// Starts from an empty synthetic project, then inserts a first video
-/// track with auto-name `Video 1` at global index `0`.
+/// Starts from a synthetic project with one video track named `Video 1`,
+/// then inserts a second video track with auto-name `Video 2` at the end.
 fn track_add_fixture() -> RecordedEvent {
     let project_id = DEFAULT_FIXTURE_PROJECT_ID
         .parse()
         .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
 
-    let prior = synthetic_empty_project(project_id);
+    let mut prior = synthetic_empty_project(project_id);
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa001",
+        "kind": "video",
+        "name": "Video 1",
+        "clips": [],
+    });
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+
     let args = track_add::TrackAddArgs {
         project_id,
         kind: crate::track::TrackKind::Video,
@@ -2249,14 +2259,15 @@ fn track_add_fixture() -> RecordedEvent {
 
 /// Build the canonical `track.rename` fixture used by [`default_fixtures`].
 ///
-/// Starts from the `track_add_fixture()` post-state (which has one video
-/// track named `Video 1`) and renames that track to `Main Camera`.
+/// Starts from the `track_add_fixture()` post-state (which has video
+/// tracks named `Video 1` and `Video 2`) and renames the first track to
+/// `Main Camera`.
 fn track_rename_fixture() -> RecordedEvent {
     let prior = track_add_fixture().post_state;
     let track = prior
         .tracks
         .first()
-        .expect("track_add fixture has exactly one track");
+        .expect("track_add fixture has at least one track");
 
     let args = track_rename::TrackRenameArgs {
         project_id: DEFAULT_FIXTURE_PROJECT_ID
@@ -2292,14 +2303,14 @@ fn track_rename_fixture() -> RecordedEvent {
 
 /// Build the canonical `track.lock` fixture used by [`default_fixtures`].
 ///
-/// Starts from the `track_add_fixture()` post-state (which has one video
-/// track named `Video 1` and an unlocked state) and locks that track.
+/// Starts from the `track_add_fixture()` post-state and locks the first
+/// video track.
 fn track_lock_fixture() -> RecordedEvent {
     let prior = track_add_fixture().post_state;
     let track = prior
         .tracks
         .first()
-        .expect("track_add fixture has exactly one track");
+        .expect("track_add fixture has at least one track");
 
     let args = track_lock::TrackLockArgs {
         project_id: DEFAULT_FIXTURE_PROJECT_ID
@@ -2335,14 +2346,14 @@ fn track_lock_fixture() -> RecordedEvent {
 
 /// Build the canonical `track.mute` fixture used by [`default_fixtures`].
 ///
-/// Starts from the `track_add_fixture()` post-state (which has one video
-/// track named `Video 1` and an unmuted state) and mutes that track.
+/// Starts from the `track_add_fixture()` post-state and mutes the first
+/// video track.
 fn track_mute_fixture() -> RecordedEvent {
     let prior = track_add_fixture().post_state;
     let track = prior
         .tracks
         .first()
-        .expect("track_add fixture has exactly one track");
+        .expect("track_add fixture has at least one track");
 
     let args = track_mute::TrackMuteArgs {
         project_id: DEFAULT_FIXTURE_PROJECT_ID
@@ -2498,14 +2509,14 @@ fn track_remove_fixture() -> RecordedEvent {
 
 /// Build the canonical `track.solo` fixture used by [`default_fixtures`].
 ///
-/// Starts from the `track_add_fixture()` post-state (which has one video
-/// track named `Video 1` and an unsoloed state) and solos that track.
+/// Starts from the `track_add_fixture()` post-state and solos the first
+/// video track.
 fn track_solo_fixture() -> RecordedEvent {
     let prior = track_add_fixture().post_state;
     let track = prior
         .tracks
         .first()
-        .expect("track_add fixture has exactly one track");
+        .expect("track_add fixture has at least one track");
 
     let args = track_solo::TrackSoloArgs {
         project_id: DEFAULT_FIXTURE_PROJECT_ID
@@ -2541,14 +2552,14 @@ fn track_solo_fixture() -> RecordedEvent {
 
 /// Build the canonical `track.hide` fixture used by [`default_fixtures`].
 ///
-/// Starts from the `track_add_fixture()` post-state (which has one video
-/// track named `Video 1` and an unhidden state) and hides that track.
+/// Starts from the `track_add_fixture()` post-state and hides the first
+/// video track.
 fn track_hide_fixture() -> RecordedEvent {
     let prior = track_add_fixture().post_state;
     let track = prior
         .tracks
         .first()
-        .expect("track_add fixture has exactly one track");
+        .expect("track_add fixture has at least one track");
 
     let args = track_hide::TrackHideArgs {
         project_id: DEFAULT_FIXTURE_PROJECT_ID
