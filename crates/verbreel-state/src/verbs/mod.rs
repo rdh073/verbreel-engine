@@ -63,6 +63,7 @@ use verbreel_types::Tick;
 pub mod clip_lock;
 pub mod clip_rename;
 pub mod clip_set_opacity;
+pub mod clip_set_volume;
 pub mod marker_add;
 pub mod marker_list;
 pub mod marker_remove;
@@ -95,6 +96,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `clip.lock` (§5.13)
 /// - `clip.rename` (§5.17)
 /// - `clip.set_opacity` (§5.10)
+/// - `clip.set_volume` (§5.11)
 /// - `project.set_metadata` (§2.12)
 /// - `project.set_canvas` (§2.10)
 /// - `project.set_fps` (§2.11)
@@ -245,6 +247,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(clip_set_volume::ClipSetVolumeVerb))
+        .expect(
+            "ClipSetVolumeVerb is the twenty-first registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -280,6 +288,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_lock_fixture(),
         clip_rename_fixture(),
         clip_set_opacity_fixture(),
+        clip_set_volume_fixture(),
     ]
 }
 
@@ -476,6 +485,92 @@ fn clip_set_opacity_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "clip.set_opacity".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `clip.set_volume` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with a single audio track and a single
+/// audio clip referencing a real audio asset, then sets that clip's volume.
+fn clip_set_volume_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": "01900000-0000-7000-8000-0000000ccaa1",
+            "kind": "audio",
+            "hash": "36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da",
+            "path": "assets/36/36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da.m4a",
+            "original_filename": "audio-clip-set-volume.m4a",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 240_000,
+                "audio_codec": "aac",
+                "audio_channels": 2,
+                "audio_sample_rate_hz": 48000,
+                "container": "m4a",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("audio asset fixture parses"),
+    );
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa201",
+        "kind": "audio",
+        "name": "Audio 1",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb301",
+            "name": "Audio Clip 1",
+            "asset_id": "01900000-0000-7000-8000-0000000ccaa1",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 240_000,
+            "volume": 1.0,
+            "locked": false,
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(240_000);
+
+    let args = clip_set_volume::ClipSetVolumeArgs {
+        project_id,
+        clip: "01900000-0000-7000-8000-0000000bb301".to_string(),
+        volume: 0.5,
+    };
+
+    let (patch_value, _warnings, _data) = clip_set_volume::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.set_volume patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.set_volume fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.set_volume fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_set_volume::data_envelope_from_post_state(&args, &post_state)
+            .expect("clip.set_volume fixture expected_data"),
+    )
+    .expect("clip.set_volume fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.set_volume".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings: vec![],
@@ -1310,6 +1405,7 @@ mod tests {
                 "clip.lock",
                 "clip.rename",
                 "clip.set_opacity",
+                "clip.set_volume",
                 "marker.add",
                 "marker.list",
                 "marker.remove",
