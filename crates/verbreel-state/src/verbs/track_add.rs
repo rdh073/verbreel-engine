@@ -1,4 +1,4 @@
-//! `track.add` (§4.1) — ninth production verb in the engine.
+//! `track.add` (§4.1) — thirty-eighth production verb in the engine.
 //!
 //! ## Spec quote (`spec/commands/track.md` §4.1, verbatim)
 //!
@@ -24,19 +24,16 @@
 //!
 //! ## Kind-relative index
 //!
-//! `index` is relative to the contiguous kind block in `Project.tracks[]`:
+//! `index` is relative to the tracks of the requested kind in
+//! `Project.tracks[]`:
 //!
-//! - `index: 0` inserts at the head of that block
-//! - `index: count` inserts at the block tail
+//! - `index: 0` inserts before the first existing track of that kind
+//! - `index: count` inserts after the last existing track of that kind
 //!
-//! A new kind with no existing block maps to insertion at the end of
-//! `tracks[]`.
-//!
-//! ## Contiguity preservation
-//!
-//! `Project::apply()` enforces §0.13 track-contiguity, so invalid
-//! kind-relative mapping (inserting into another kind's region) must be
-//! avoided during patch construction.
+//! A new kind with no existing tracks maps to insertion at the end of
+//! `tracks[]`. On valid §0.13 states, same-kind tracks are contiguous;
+//! the resolver still walks the full array for kind counting and
+//! kind-relative positioning.
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -110,13 +107,13 @@ pub enum TrackAddError {
     },
 
     /// Kind-relative insertion index out of bounds.
-    #[error("track.add: index {requested} exceeds max allowed {max_allowed} for kind {kind:?}")]
+    #[error("track.add: index {index} exceeds max allowed {max} for kind {kind:?}")]
     BadIndex {
         /// Requested kind-relative index.
-        requested: usize,
+        index: usize,
 
         /// Maximum allowed index (`kind_count`).
-        max_allowed: usize,
+        max: usize,
 
         /// Target kind for the failing index check.
         kind: TrackKind,
@@ -180,18 +177,12 @@ fn auto_name_for_kind(prior: &Project, kind: TrackKind) -> String {
     format!("{} {}", kind_label(kind), max_seen + 1)
 }
 
-fn find_kind_block_range(prior: &Project, kind: TrackKind) -> Option<(usize, usize)> {
-    let start = prior.tracks.iter().position(|track| track.kind == kind)?;
-    let mut count = 0usize;
-
-    for track in &prior.tracks[start..] {
-        if track.kind != kind {
-            break;
-        }
-        count += 1;
-    }
-
-    Some((start, count))
+fn count_kind_tracks(prior: &Project, kind: TrackKind) -> usize {
+    prior
+        .tracks
+        .iter()
+        .filter(|track| track.kind == kind)
+        .count()
 }
 
 fn resolve_global_insertion_idx(
@@ -199,10 +190,21 @@ fn resolve_global_insertion_idx(
     kind: TrackKind,
     kind_relative_idx: usize,
 ) -> usize {
-    match find_kind_block_range(prior, kind) {
-        Some((start, _count)) => start + kind_relative_idx,
-        None => prior.tracks.len(),
+    let mut seen = 0usize;
+    let mut last_match_idx = None;
+
+    for (idx, track) in prior.tracks.iter().enumerate() {
+        if track.kind != kind {
+            continue;
+        }
+        if seen == kind_relative_idx {
+            return idx;
+        }
+        seen += 1;
+        last_match_idx = Some(idx);
     }
+
+    last_match_idx.map_or(prior.tracks.len(), |idx| idx + 1)
 }
 
 /// Build the RFC 6902 patch and warnings for `track.add`.
@@ -246,12 +248,12 @@ pub fn compute_patch(
         });
     }
 
-    let kind_count = find_kind_block_range(prior, args.kind).map_or(0, |(_, count)| count);
+    let kind_count = count_kind_tracks(prior, args.kind);
     let requested_idx = args.index.unwrap_or(kind_count);
     if requested_idx > kind_count {
         return Err(TrackAddError::BadIndex {
-            requested: requested_idx,
-            max_allowed: kind_count,
+            index: requested_idx,
+            max: kind_count,
             kind: args.kind,
         });
     }
@@ -367,15 +369,15 @@ pub fn data_envelope_from_post_state(
             "track_add: track id {track_id} not found in post_state.tracks"
         )))?;
 
-    let (kind_start, _) =
-        find_kind_block_range(post_state, found_kind).ok_or(ReconstructError::Custom(format!(
-            "track_add: kind block for {found_kind:?} missing in post_state"
-        )))?;
+    let kind_relative_idx = post_state.tracks[..global_idx]
+        .iter()
+        .filter(|track| track.kind == found_kind)
+        .count();
 
     Ok(TrackAddData {
         track_id,
         kind: found_kind,
-        index: global_idx - kind_start,
+        index: kind_relative_idx,
     })
 }
 

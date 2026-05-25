@@ -5,7 +5,8 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use verbreel_state::{
     MutateOutcome, Project, RecordedEvent, Track, TrackAddArgs, TrackAddData, TrackAddError,
-    TrackAddVerb, TrackKind, VerbRegistry, validate_reconstructors,
+    TrackAddVerb, TrackKind, Verb, VerbError, VerbRegistry, default_fixtures,
+    validate_reconstructors,
     verbs::track_add::{compute_patch, data_envelope_from_post_state},
 };
 
@@ -64,6 +65,161 @@ fn assert_track_name_and_path(patch: &Value, name: &str, path: &str) {
         .and_then(Value::as_str)
         .expect("patch path exists");
     assert_eq!(path_actual, path);
+}
+
+fn apply_patch_to_project(prior: &Project, patch: Value) -> Project {
+    let typed_patch: json_patch::Patch =
+        serde_json::from_value(patch).expect("track.add patch parses to RFC 6902");
+    prior
+        .apply(&typed_patch)
+        .expect("track.add patch should apply cleanly")
+}
+
+#[test]
+fn compute_patch_appends_video_track_at_end() {
+    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 1")]);
+
+    let (patch, warnings) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Video,
+            name: None,
+            index: None,
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert!(warnings.is_empty());
+    assert_track_name_and_path(&patch, "Video 2", "/tracks/1");
+    let post_state = apply_patch_to_project(&prior, patch);
+    assert_eq!(post_state.tracks[1].name, "Video 2");
+    assert_eq!(post_state.tracks[1].kind, TrackKind::Video);
+}
+
+#[test]
+fn compute_patch_inserts_video_track_at_index_zero() {
+    let prior = project_with_tracks(vec![
+        track(TRACK_VIDEO_A, TrackKind::Video, "Video 1"),
+        track(TRACK_VIDEO_B, TrackKind::Video, "Video 2"),
+    ]);
+
+    let (patch, warnings) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Video,
+            name: None,
+            index: Some(0),
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert!(warnings.is_empty());
+    assert_track_name_and_path(&patch, "Video 3", "/tracks/0");
+    let post_state = apply_patch_to_project(&prior, patch);
+    assert_eq!(post_state.tracks[0].name, "Video 3");
+    assert_eq!(post_state.tracks[1].id.to_string(), TRACK_VIDEO_A);
+    assert_eq!(post_state.tracks[2].id.to_string(), TRACK_VIDEO_B);
+}
+
+#[test]
+fn compute_patch_inserts_at_middle_index_shifts_subsequent() {
+    let prior = project_with_tracks(vec![
+        track(TRACK_VIDEO_A, TrackKind::Video, "Video 1"),
+        track(TRACK_VIDEO_B, TrackKind::Video, "Video 2"),
+        track(TRACK_VIDEO_C, TrackKind::Video, "Video 3"),
+    ]);
+
+    let (patch, warnings) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Video,
+            name: None,
+            index: Some(1),
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert!(warnings.is_empty());
+    assert_track_name_and_path(&patch, "Video 4", "/tracks/1");
+    let post_state = apply_patch_to_project(&prior, patch);
+    assert_eq!(post_state.tracks[0].id.to_string(), TRACK_VIDEO_A);
+    assert_eq!(post_state.tracks[1].name, "Video 4");
+    assert_eq!(post_state.tracks[2].id.to_string(), TRACK_VIDEO_B);
+    assert_eq!(post_state.tracks[3].id.to_string(), TRACK_VIDEO_C);
+}
+
+#[test]
+fn compute_patch_audio_kind_starts_fresh_naming() {
+    let prior = project_with_tracks(vec![
+        track(TRACK_VIDEO_A, TrackKind::Video, "Video 1"),
+        track(TRACK_VIDEO_B, TrackKind::Video, "Video 2"),
+    ]);
+
+    let (patch, _) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Audio,
+            name: None,
+            index: None,
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert_track_name_and_path(&patch, "Audio 1", "/tracks/2");
+}
+
+#[test]
+fn compute_patch_text_kind() {
+    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 1")]);
+
+    let (patch, _) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Text,
+            name: None,
+            index: None,
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert_track_name_and_path(&patch, "Text 1", "/tracks/1");
+    assert_eq!(patch_track_value(&patch)["kind"], "text");
+}
+
+#[test]
+fn compute_patch_effect_kind() {
+    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 1")]);
+
+    let (patch, _) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Effect,
+            name: None,
+            index: None,
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert_track_name_and_path(&patch, "Effect 1", "/tracks/1");
+    assert_eq!(patch_track_value(&patch)["kind"], "effect");
 }
 
 #[test]
@@ -147,8 +303,148 @@ fn compute_patch_auto_name_max_is_one_plus_max() {
 }
 
 #[test]
+fn compute_patch_auto_name_picks_max_plus_one() {
+    let prior = project_with_tracks(vec![
+        track(TRACK_VIDEO_A, TrackKind::Video, "Video 1"),
+        track(TRACK_VIDEO_B, TrackKind::Video, "Video 9"),
+    ]);
+
+    let (patch, _) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Video,
+            name: None,
+            index: None,
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert_track_name_and_path(&patch, "Video 10", "/tracks/2");
+}
+
+#[test]
+fn compute_patch_auto_name_ignores_gaps() {
+    let prior = project_with_tracks(vec![
+        track(TRACK_VIDEO_A, TrackKind::Video, "Video 1"),
+        track(TRACK_VIDEO_B, TrackKind::Video, "Video 3"),
+    ]);
+
+    let (patch, _) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Video,
+            name: None,
+            index: None,
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert_track_name_and_path(&patch, "Video 4", "/tracks/2");
+}
+
+#[test]
+fn compute_patch_auto_name_ignores_non_canonical_names() {
+    let prior = project_with_tracks(vec![
+        track(TRACK_VIDEO_A, TrackKind::Video, "Video 1"),
+        track(TRACK_VIDEO_B, TrackKind::Video, "Vox"),
+        track(TRACK_VIDEO_C, TrackKind::Video, "Master Bus"),
+        track(
+            "0190b8d3-15e3-7000-bd00-0000000aa104",
+            TrackKind::Video,
+            "Video Final 2",
+        ),
+    ]);
+
+    let (patch, _) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Video,
+            name: None,
+            index: None,
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert_track_name_and_path(&patch, "Video 2", "/tracks/4");
+}
+
+#[test]
+fn compute_patch_auto_name_rejects_leading_zero() {
+    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 01")]);
+
+    let (patch, _) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Video,
+            name: None,
+            index: None,
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert_track_name_and_path(&patch, "Video 1", "/tracks/1");
+}
+
+#[test]
 fn compute_patch_auto_name_zero_is_valid_suffix() {
     let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 0")]);
+    let (patch, _) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Video,
+            name: None,
+            index: None,
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert_track_name_and_path(&patch, "Video 1", "/tracks/1");
+}
+
+#[test]
+fn compute_patch_auto_name_accepts_bare_zero() {
+    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 0")]);
+
+    let (patch, _) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Video,
+            name: None,
+            index: None,
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert_track_name_and_path(&patch, "Video 1", "/tracks/1");
+}
+
+#[test]
+fn compute_patch_auto_name_rejects_non_ascii_digit() {
+    let non_ascii_digit_name = format!("Video {}", '\u{0661}');
+    let prior = project_with_tracks(vec![track(
+        TRACK_VIDEO_A,
+        TrackKind::Video,
+        &non_ascii_digit_name,
+    )]);
+
     let (patch, _) = compute_patch(
         &prior,
         &TrackAddArgs {
@@ -294,6 +590,32 @@ fn compute_patch_name_conflict_within_kind_errors() {
 }
 
 #[test]
+fn compute_patch_custom_name_conflict_returns_e_track_name_conflict() {
+    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 1")]);
+
+    let err = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Video,
+            name: Some("Video 1".to_string()),
+            index: None,
+        },
+    )
+    .expect_err("same-kind name conflict must reject");
+
+    match err {
+        TrackAddError::NameConflict { name, kind } => {
+            assert_eq!(name, "Video 1");
+            assert_eq!(kind, TrackKind::Video);
+        }
+        other => panic!("expected NameConflict, got {other:?}"),
+    }
+}
+
+#[test]
 fn compute_patch_name_no_conflict_across_kinds() {
     let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Foo")]);
     let (patch, _) = compute_patch(
@@ -310,6 +632,26 @@ fn compute_patch_name_no_conflict_across_kinds() {
     .expect("compute_patch should allow cross-kind same name");
 
     assert_track_name_and_path(&patch, "Foo", "/tracks/1");
+}
+
+#[test]
+fn compute_patch_custom_name_conflict_only_within_same_kind() {
+    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 1")]);
+    let (patch, _) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Audio,
+            name: Some("Video 1".to_string()),
+            index: None,
+        },
+    )
+    .expect("compute_patch should allow cross-kind same name");
+
+    assert_track_name_and_path(&patch, "Video 1", "/tracks/1");
+    assert_eq!(patch_track_value(&patch)["kind"], "audio");
 }
 
 #[test]
@@ -408,17 +750,96 @@ fn compute_patch_bad_index_errors() {
     .expect_err("index > count must reject");
 
     match err {
-        TrackAddError::BadIndex {
-            requested,
-            max_allowed,
-            kind,
-        } => {
-            assert_eq!(requested, 4);
-            assert_eq!(max_allowed, 3);
+        TrackAddError::BadIndex { index, max, kind } => {
+            assert_eq!(index, 4);
+            assert_eq!(max, 3);
             assert_eq!(kind, TrackKind::Video);
         }
         other => panic!("expected BadIndex, got {other:?}"),
     }
+}
+
+#[test]
+fn compute_patch_index_above_kind_count_is_bad_index() {
+    let prior = project_with_tracks(vec![
+        track(TRACK_VIDEO_A, TrackKind::Video, "Video 1"),
+        track(TRACK_VIDEO_B, TrackKind::Video, "Video 2"),
+    ]);
+
+    let err = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Video,
+            name: None,
+            index: Some(3),
+        },
+    )
+    .expect_err("index > kind count must reject");
+
+    match err {
+        TrackAddError::BadIndex { index, max, kind } => {
+            assert_eq!(index, 3);
+            assert_eq!(max, 2);
+            assert_eq!(kind, TrackKind::Video);
+        }
+        other => panic!("expected BadIndex, got {other:?}"),
+    }
+}
+
+#[test]
+fn compute_patch_index_negative_is_bad_index() {
+    let prior = project_with_tracks(vec![track(TRACK_VIDEO_A, TrackKind::Video, "Video 1")]);
+    let verb = TrackAddVerb;
+    let args = json!({
+        "project_id": FIXTURE_PROJECT_ID,
+        "kind": "video",
+        "index": -1,
+    });
+
+    let err = verb
+        .compute_patch(&prior, &args)
+        .expect_err("negative index must reject during args parsing");
+
+    match err {
+        VerbError::BadArgs { detail } => {
+            assert!(detail.contains("invalid value") || detail.contains("deserialize failed"));
+        }
+        other => panic!("expected BadArgs, got {other:?}"),
+    }
+}
+
+#[test]
+fn compute_patch_index_zero_inserts_at_head_of_kind_block_not_project_head() {
+    let prior = project_with_tracks(vec![
+        track(TRACK_AUDIO_A, TrackKind::Audio, "Audio 1"),
+        track(TRACK_AUDIO_B, TrackKind::Audio, "Audio 2"),
+        track(TRACK_VIDEO_A, TrackKind::Video, "Video 1"),
+        track(TRACK_VIDEO_B, TrackKind::Video, "Video 2"),
+        track(
+            "0190b8d3-15e3-7000-bd00-0000000cc101",
+            TrackKind::Text,
+            "Text 1",
+        ),
+        track(TRACK_VIDEO_C, TrackKind::Video, "Video 3"),
+    ]);
+
+    let (patch, _) = compute_patch(
+        &prior,
+        &TrackAddArgs {
+            project_id: FIXTURE_PROJECT_ID
+                .parse()
+                .expect("fixture project id parses"),
+            kind: TrackKind::Video,
+            name: None,
+            index: Some(0),
+        },
+    )
+    .expect("compute_patch should succeed");
+
+    assert_track_name_and_path(&patch, "Video 4", "/tracks/2");
 }
 
 #[test]
@@ -523,7 +944,7 @@ fn data_envelope_returns_kind_relative_index() {
 }
 
 #[test]
-fn reconstructor_round_trip() {
+fn round_trip_track_add() {
     let prior = project_with_tracks(vec![
         track(TRACK_AUDIO_A, TrackKind::Audio, "Audio 1"),
         track(TRACK_VIDEO_A, TrackKind::Video, "Video 1"),
@@ -543,6 +964,10 @@ fn reconstructor_round_trip() {
     let post_state = prior
         .apply(&typed_patch)
         .expect("track.add patch should apply cleanly");
+    let inserted_track_id = patch_track_id(&patch);
+    assert_eq!(post_state.tracks[2].id.to_string(), inserted_track_id);
+    assert_eq!(post_state.tracks[2].name, "Video 2");
+    assert_eq!(post_state.tracks[2].kind, TrackKind::Video);
 
     let expected_data = serde_json::to_value(
         data_envelope_from_post_state(&patch, &post_state)
@@ -567,6 +992,34 @@ fn reconstructor_round_trip() {
 
     let report = validate_reconstructors(&registry, std::slice::from_ref(&recorded))
         .expect("reconstructor validation should pass");
+    assert_eq!(report.verbs_checked, vec!["track.add"]);
+    assert_eq!(report.fixtures_run, 1);
+}
+
+#[test]
+fn reconstruct_from_default_fixture() {
+    let fixture = default_fixtures()
+        .into_iter()
+        .find(|event| event.verb == "track.add")
+        .expect("default_fixtures includes track.add");
+
+    assert_eq!(fixture.post_state.tracks.len(), 2);
+    assert_eq!(fixture.post_state.tracks[0].name, "Video 1");
+    assert_eq!(fixture.post_state.tracks[1].name, "Video 2");
+
+    let data: TrackAddData =
+        serde_json::from_value(fixture.expected_data.clone()).expect("fixture data parses");
+    assert_eq!(data.kind, TrackKind::Video);
+    assert_eq!(data.index, 1);
+    assert_eq!(data.track_id, fixture.post_state.tracks[1].id);
+
+    let mut registry = VerbRegistry::new();
+    registry
+        .register(Arc::new(TrackAddVerb))
+        .expect("register track.add verb");
+
+    let report = validate_reconstructors(&registry, std::slice::from_ref(&fixture))
+        .expect("track.add default fixture reconstructs");
     assert_eq!(report.verbs_checked, vec!["track.add"]);
     assert_eq!(report.fixtures_run, 1);
 }
