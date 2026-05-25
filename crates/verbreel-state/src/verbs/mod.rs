@@ -61,6 +61,7 @@ use crate::reconstructor::{RecordedEvent, VerbRegistry};
 use verbreel_types::Tick;
 
 pub mod clip_lock;
+pub mod clip_rename;
 pub mod marker_add;
 pub mod marker_list;
 pub mod marker_remove;
@@ -91,6 +92,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 ///
 /// Canonical kernel verbs currently shipped:
 /// - `clip.lock` (§5.13)
+/// - `clip.rename` (§5.17)
 /// - `project.set_metadata` (§2.12)
 /// - `project.set_canvas` (§2.10)
 /// - `project.set_fps` (§2.11)
@@ -229,6 +231,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
     );
     registry
+        .register(Arc::new(clip_rename::ClipRenameVerb))
+        .expect(
+            "ClipRenameVerb is the nineteenth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -262,6 +270,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         track_set_pan_fixture(),
         track_reorder_fixture(),
         clip_lock_fixture(),
+        clip_rename_fixture(),
     ]
 }
 
@@ -324,6 +333,73 @@ fn clip_lock_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "clip.lock".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `clip.rename` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with a single text track and a single
+/// clip, then renames that clip.
+fn clip_rename_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa102",
+        "kind": "text",
+        "name": "Text 2",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb202",
+            "name": "Clip 2",
+            "asset_id": "00000000-0000-0000-0000-000000000000",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+            "text": {
+                "content": "Hello",
+                "font_family": "Arial",
+                "font_size_px": 24
+            },
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+
+    let args = clip_rename::ClipRenameArgs {
+        project_id,
+        clip: "01900000-0000-7000-8000-0000000bb202".to_string(),
+        name: "Renamed Clip".to_string(),
+    };
+
+    let (patch_value, _warnings, _data) = clip_rename::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.rename patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.rename fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.rename fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_rename::data_envelope_from_post_state(&args, &post_state)
+            .expect("clip.rename fixture expected_data"),
+    )
+    .expect("clip.rename fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.rename".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings: vec![],
@@ -1156,6 +1232,7 @@ mod tests {
             report.verbs_checked,
             vec![
                 "clip.lock",
+                "clip.rename",
                 "marker.add",
                 "marker.list",
                 "marker.remove",
