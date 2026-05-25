@@ -122,6 +122,9 @@ pub use reconstructor::{
     ReconstructError, RecordedEvent, RegistryError, ValidationError, ValidationReport, Verb,
     VerbError, VerbRegistry, validate_reconstructors,
 };
+pub use verbs::asset_list::{
+    AssetKindFilter, AssetListArgs, AssetListData, AssetListError, AssetListVerb,
+};
 // Deprecated alias kept for one slice cycle (Slice B3 rename). Down-
 // stream crates pinned to `VerbReconstructor` keep compiling; new code
 // MUST use `Verb`.
