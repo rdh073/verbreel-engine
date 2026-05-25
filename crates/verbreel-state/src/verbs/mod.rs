@@ -68,6 +68,7 @@ pub mod project_set_canvas;
 pub mod project_set_fps;
 pub mod project_set_metadata;
 pub mod track_add;
+pub mod track_hide;
 pub mod track_lock;
 pub mod track_mute;
 pub mod track_rename;
@@ -93,6 +94,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `marker.remove` (§13.3)
 /// - `marker.list` (§13.4)
 /// - `track.add` (§4.1)
+/// - `track.hide` (§4.10)
 /// - `track.lock` (§4.6)
 /// - `track.mute` (§4.4)
 /// - `track.solo` (§4.5)
@@ -189,6 +191,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(track_hide::TrackHideVerb))
+        .expect(
+            "TrackHideVerb is the fourteenth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -217,6 +225,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         track_lock_fixture(),
         track_mute_fixture(),
         track_solo_fixture(),
+        track_hide_fixture(),
     ]
 }
 
@@ -789,6 +798,49 @@ fn track_solo_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `track.hide` fixture used by [`default_fixtures`].
+///
+/// Starts from the `track_add_fixture()` post-state (which has one video
+/// track named `Video 1` and an unhidden state) and hides that track.
+fn track_hide_fixture() -> RecordedEvent {
+    let prior = track_add_fixture().post_state;
+    let track = prior
+        .tracks
+        .first()
+        .expect("track_add fixture has exactly one track");
+
+    let args = track_hide::TrackHideArgs {
+        project_id: DEFAULT_FIXTURE_PROJECT_ID
+            .parse()
+            .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7"),
+        track: track.id.to_string(),
+        hidden: Some(true),
+    };
+
+    let (patch_value, _warnings, _data) = track_hide::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid track.hide patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("track.hide fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("track.hide fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        track_hide::data_envelope_from_post_state(&args, &post_state)
+            .expect("track.hide fixture expected_data"),
+    )
+    .expect("track.hide fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "track.hide".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -849,6 +901,7 @@ mod tests {
                 "project.set_fps",
                 "project.set_metadata",
                 "track.add",
+                "track.hide",
                 "track.lock",
                 "track.mute",
                 "track.rename",
