@@ -68,6 +68,7 @@ pub mod clip_set_opacity;
 pub mod clip_set_transform;
 pub mod clip_set_volume;
 pub mod clip_unlink;
+pub mod effect_toggle;
 pub mod marker_add;
 pub mod marker_list;
 pub mod marker_remove;
@@ -105,6 +106,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `clip.set_transform` (§5.9)
 /// - `clip.set_volume` (§5.11)
 /// - `clip.unlink` (§5.16)
+/// - `effect.toggle` (§6.4)
 /// - `project.set_metadata` (§2.12)
 /// - `project.set_canvas` (§2.10)
 /// - `project.set_fps` (§2.11)
@@ -283,6 +285,12 @@ pub fn default_registry() -> VerbRegistry {
          default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(effect_toggle::EffectToggleVerb))
+        .expect(
+            "EffectToggleVerb is the twenty-sixth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -323,6 +331,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_set_volume_fixture(),
         clip_list_fixture(),
         clip_unlink_fixture(),
+        effect_toggle_fixture(),
     ]
 }
 
@@ -912,6 +921,79 @@ fn clip_unlink_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "clip.unlink".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `effect.toggle` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with a single text clip and a single
+/// disabled effect, then enables the effect.
+fn effect_toggle_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa201",
+        "kind": "text",
+        "name": "Text 1",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb201",
+            "name": "Clip 1",
+            "asset_id": "00000000-0000-0000-0000-000000000000",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+            "text": {
+                "content": "Hello",
+                "font_family": "Arial",
+                "font_size_px": 24,
+            },
+            "effects": [{
+                "id": "01900000-0000-7000-8000-0000000cc201",
+                "kind": "blur",
+                "enabled": false,
+                "params": { "radius": 5 },
+            }],
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+
+    let args = effect_toggle::EffectToggleArgs {
+        project_id,
+        effect: "01900000-0000-7000-8000-0000000cc201".to_string(),
+        enabled: Some(true),
+    };
+
+    let (patch_value, _warnings, _data) = effect_toggle::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid effect.toggle patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("effect.toggle fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("effect.toggle fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        effect_toggle::data_envelope_from_post_state(&args, &post_state)
+            .expect("effect.toggle fixture expected_data"),
+    )
+    .expect("effect.toggle fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "effect.toggle".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings: vec![],
@@ -1830,6 +1912,7 @@ mod tests {
                 "clip.set_transform",
                 "clip.set_volume",
                 "clip.unlink",
+                "effect.toggle",
                 "marker.add",
                 "marker.list",
                 "marker.remove",
