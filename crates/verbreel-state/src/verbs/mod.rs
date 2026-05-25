@@ -62,6 +62,7 @@ use crate::reconstructor::{RecordedEvent, VerbRegistry};
 use verbreel_types::Tick;
 
 pub mod asset_list;
+pub mod caption_edit;
 pub mod clip_list;
 pub mod clip_lock;
 pub mod clip_rename;
@@ -115,6 +116,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `effect.toggle` (§6.4)
 /// - `effect.list_available` (§6.5)
 /// - `text.edit` (§7.2)
+/// - `caption.edit` (§10.2, §7.2 alias)
 /// - `keyframe.list` (§8.4)
 /// - `project.set_metadata` (§2.12)
 /// - `project.set_canvas` (§2.10)
@@ -322,6 +324,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
     );
     registry
+        .register(Arc::new(caption_edit::CaptionEditVerb))
+        .expect(
+            "CaptionEditVerb is the thirty-first registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -342,6 +350,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         project_set_fps_fixture(),
         project_rename_fixture(),
         text_edit_fixture(),
+        caption_edit_fixture(),
         marker_add_fixture(),
         marker_set_fixture(),
         marker_remove_fixture(),
@@ -436,6 +445,14 @@ fn text_edit_fixture() -> RecordedEvent {
         post_state,
         expected_data,
     }
+}
+
+/// Alias fixture for `caption.edit` (`caption.edit` and `text.edit` share
+/// the same logical patch shape and envelope).
+fn caption_edit_fixture() -> RecordedEvent {
+    let mut fixture = text_edit_fixture();
+    fixture.verb = "caption.edit".to_string();
+    fixture
 }
 
 /// Build the canonical `clip.set_blend_mode` fixture used by [`default_fixtures`].
@@ -2172,6 +2189,7 @@ mod tests {
             report.verbs_checked,
             vec![
                 "asset.list",
+                "caption.edit",
                 "clip.list",
                 "clip.lock",
                 "clip.rename",

@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+use verbreel_state::verbs::caption_edit;
 use verbreel_state::verbs::text_edit::{
     MAX_CONTENT_LEN, W_NOOP_CODE, compute_patch, data_envelope_from_post_state,
 };
@@ -734,6 +735,124 @@ fn verb_routes_through_mutate_via_verb() {
             .content,
         "World"
     );
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn verb_routes_through_mutate_via_verb_caption_edit() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    let mut store = ProjectStore::create_with_registry(
+        dir.path(),
+        project_with_tracks(vec![text_track(
+            TRACK_TEXT_A,
+            "Text 1",
+            false,
+            CLIP_TEXT_A,
+            false,
+            "Hello",
+        )]),
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .expect("create_with_registry clears gate and writes project.json");
+
+    let outcome = store
+        .mutate_via_verb(
+            "caption.edit",
+            json!({
+                "project_id": FIXTURE_PROJECT_ID,
+                "clip": CLIP_TEXT_A,
+                "content": "Hello world",
+            }),
+            None,
+        )
+        .expect("mutate_via_verb happy path");
+
+    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
+        panic!("happy path must return Applied, got {outcome:?}");
+    };
+
+    let data: TextEditData =
+        serde_json::from_value(data).expect("caption.edit data is TextEditData");
+    assert_eq!(data.clip_id.to_string(), CLIP_TEXT_A);
+    assert_eq!(data.content, "Hello world");
+    assert_eq!(warnings, Vec::<Value>::new());
+    assert_eq!(
+        store.project().tracks[0].clips[0]
+            .text
+            .as_ref()
+            .expect("text exists")
+            .content,
+        "Hello world"
+    );
+}
+
+#[test]
+fn caption_edit_compute_patch_updates_text_content() {
+    let prior = project_with_tracks(vec![text_track(
+        TRACK_TEXT_A,
+        "Text 1",
+        false,
+        CLIP_TEXT_A,
+        false,
+        "Hello",
+    )]);
+
+    let (patch, warnings, data) = caption_edit::compute_patch(
+        &prior,
+        &TextEditArgs {
+            project_id: fixture_project_id(),
+            clip: CLIP_TEXT_A.to_string(),
+            content: "World".to_string(),
+        },
+    )
+    .expect("caption edit happy path");
+
+    assert_eq!(patch.as_array().expect("patch is array").len(), 1);
+    assert!(warnings.is_empty());
+    assert_eq!(data.content, "World");
+
+    let patch: json_patch::Patch = serde_json::from_value(patch).expect("patch parses");
+    let post_state = prior.apply(&patch).expect("patch applies");
+    assert_eq!(
+        post_state.tracks[0].clips[0]
+            .text
+            .as_ref()
+            .expect("text exists")
+            .content,
+        "World"
+    );
+}
+
+#[test]
+fn caption_edit_video_track_is_not_text_clip() {
+    let prior = project_with_tracks(vec![video_track(
+        TRACK_VIDEO_A,
+        "Video 1",
+        false,
+        CLIP_VIDEO_A,
+        false,
+    )]);
+
+    let err = caption_edit::compute_patch(
+        &prior,
+        &TextEditArgs {
+            project_id: fixture_project_id(),
+            clip: CLIP_VIDEO_A.to_string(),
+            content: "World".to_string(),
+        },
+    )
+    .expect_err("video clip rejects caption.edit");
+
+    assert!(matches!(
+        err,
+        TextEditError::ClipKindMismatch {
+            clip_id,
+            found_kind: TrackKind::Video,
+        } if clip_id == CLIP_VIDEO_A
+    ));
 }
 
 #[test]
