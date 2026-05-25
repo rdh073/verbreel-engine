@@ -165,6 +165,9 @@ pub use verbs::effect_list_available::{
 pub use verbs::effect_reorder::{
     EffectReorderArgs, EffectReorderData, EffectReorderError, EffectReorderVerb, ToIndex,
 };
+pub use verbs::effect_set_param::{
+    EffectSetParamArgs, EffectSetParamData, EffectSetParamError, EffectSetParamVerb,
+};
 pub use verbs::effect_toggle::{
     EffectToggleArgs, EffectToggleData, EffectToggleError, EffectToggleVerb,
 };
