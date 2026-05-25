@@ -52,6 +52,9 @@
 //!   (`project.set_metadata`).
 //! - `spec/commands/text.md` §7.2 (`text.edit`) and §7.3
 //!   (`text.style`).
+//! - `spec/commands/keyframe.md` §8.1 (`keyframe.add`), §8.2
+//!   (`keyframe.remove`), §8.3 (`keyframe.set`), and §8.4
+//!   (`keyframe.list`).
 //! - `spec/commands/conventions.md` §0.13 (metadata size caps).
 //! - `spec/commands/conventions.md` §0.8 (reconstructor purity).
 
@@ -77,6 +80,7 @@ pub mod effect_list_available;
 pub mod effect_toggle;
 pub mod keyframe_add;
 pub mod keyframe_list;
+pub mod keyframe_remove;
 pub mod keyframe_set;
 pub mod marker_add;
 pub mod marker_list;
@@ -125,6 +129,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `caption.edit` (§10.2, §7.2 alias)
 /// - `keyframe.add` (§8.1)
 /// - `keyframe.list` (§8.4)
+/// - `keyframe.remove` (§8.2)
 /// - `keyframe.set` (§8.3)
 /// - `project.set_metadata` (§2.12)
 /// - `project.set_canvas` (§2.10)
@@ -356,6 +361,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(keyframe_remove::KeyframeRemoveVerb))
+        .expect(
+            "KeyframeRemoveVerb is the thirty-fifth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -404,6 +415,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         asset_list_fixture(),
         keyframe_add_fixture(),
         keyframe_list_fixture(),
+        keyframe_remove_fixture(),
         keyframe_set_fixture(),
     ]
 }
@@ -1522,6 +1534,91 @@ fn keyframe_set_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `keyframe.remove` fixture used by
+/// [`default_fixtures`].
+///
+/// Starts from a synthetic project with two opacity keyframes on one
+/// clip, then removes one of them.
+fn keyframe_remove_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa705",
+        "kind": "video",
+        "name": "Video 5",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb705",
+            "name": "Clip 5",
+            "asset_id": "01900000-0000-7000-8000-0000000cc705",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+            "keyframes": [
+                { "id": "01900000-0000-7000-8000-0000000ff705", "property": "opacity", "time_tk": 0, "value": 1.0 },
+                { "id": "01900000-0000-7000-8000-0000000ff706", "property": "opacity", "time_tk": 100, "value": 0.5 },
+            ],
+        }],
+    });
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": "01900000-0000-7000-8000-0000000cc705",
+            "kind": "video",
+            "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+            "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.mp4",
+            "original_filename": "video-keyframe-remove.mp4",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 480_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("keyframe.remove fixture asset parses"),
+    );
+
+    let args = keyframe_remove::KeyframeRemoveArgs {
+        project_id,
+        keyframes: vec!["01900000-0000-7000-8000-0000000ff705".to_string()],
+        soft: None,
+    };
+
+    let (patch_value, warnings, data) = keyframe_remove::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid keyframe.remove patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("keyframe.remove fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("keyframe.remove fixture patch must apply cleanly");
+    let expected_data = serde_json::to_value(data).expect("keyframe.remove fixture expected_data");
+
+    RecordedEvent {
+        verb: "keyframe.remove".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
 /// Build the canonical `track.reorder` fixture used by [`default_fixtures`].
 ///
 /// Starts from an empty synthetic project, then adds two video tracks.
@@ -2438,6 +2535,7 @@ mod tests {
                 "effect.toggle",
                 "keyframe.add",
                 "keyframe.list",
+                "keyframe.remove",
                 "keyframe.set",
                 "marker.add",
                 "marker.list",
