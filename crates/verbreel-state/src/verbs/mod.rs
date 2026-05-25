@@ -69,6 +69,7 @@ pub mod project_set_fps;
 pub mod project_set_metadata;
 pub mod track_add;
 pub mod track_lock;
+pub mod track_mute;
 pub mod track_rename;
 
 /// Synthetic `UUIDv7` used as the `project_id` in [`default_fixtures`].
@@ -92,6 +93,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `marker.list` (§13.4)
 /// - `track.add` (§4.1)
 /// - `track.lock` (§4.6)
+/// - `track.mute` (§4.4)
 /// - `track.rename` (§4.7)
 ///
 /// Paired with [`default_fixtures`]: the two together clear the §0.8
@@ -173,6 +175,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(track_mute::TrackMuteVerb))
+        .expect(
+            "TrackMuteVerb is the twelfth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -199,6 +207,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         track_add_fixture(),
         track_rename_fixture(),
         track_lock_fixture(),
+        track_mute_fixture(),
     ]
 }
 
@@ -685,6 +694,49 @@ fn track_lock_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `track.mute` fixture used by [`default_fixtures`].
+///
+/// Starts from the `track_add_fixture()` post-state (which has one video
+/// track named `Video 1` and an unmuted state) and mutes that track.
+fn track_mute_fixture() -> RecordedEvent {
+    let prior = track_add_fixture().post_state;
+    let track = prior
+        .tracks
+        .first()
+        .expect("track_add fixture has exactly one track");
+
+    let args = track_mute::TrackMuteArgs {
+        project_id: DEFAULT_FIXTURE_PROJECT_ID
+            .parse()
+            .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7"),
+        track: track.id.to_string(),
+        muted: Some(true),
+    };
+
+    let (patch_value, _warnings, _data) = track_mute::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid track.mute patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("track.mute fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("track.mute fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        track_mute::data_envelope_from_post_state(&args, &post_state)
+            .expect("track.mute fixture expected_data"),
+    )
+    .expect("track.mute fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "track.mute".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -746,6 +798,7 @@ mod tests {
                 "project.set_metadata",
                 "track.add",
                 "track.lock",
+                "track.mute",
                 "track.rename",
             ]
         );

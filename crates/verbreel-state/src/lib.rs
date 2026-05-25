@@ -162,6 +162,9 @@ pub use verbs::track_add::{
 pub use verbs::track_lock::{
     DEFAULT_LOCKED, TrackLockArgs, TrackLockData, TrackLockError, TrackLockVerb,
 };
+pub use verbs::track_mute::{
+    DEFAULT_MUTED, TrackMuteArgs, TrackMuteData, TrackMuteError, TrackMuteVerb,
+};
 pub use verbs::track_rename::{
     TrackRenameArgs, TrackRenameData, TrackRenameError, TrackRenameVerb,
 };
