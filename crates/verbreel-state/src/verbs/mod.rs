@@ -50,6 +50,8 @@
 //!   (`marker.set`), §13.3 (`marker.remove`), and §13.4 (`marker.list`).
 //! - `spec/commands/project.md` §2.9 (`project.rename`) and §2.12
 //!   (`project.set_metadata`).
+//! - `spec/commands/text.md` §7.2 (`text.edit`) and §7.3
+//!   (`text.style`).
 //! - `spec/commands/conventions.md` §0.13 (metadata size caps).
 //! - `spec/commands/conventions.md` §0.8 (reconstructor purity).
 
@@ -83,6 +85,7 @@ pub mod project_set_canvas;
 pub mod project_set_fps;
 pub mod project_set_metadata;
 pub mod text_edit;
+pub mod text_style;
 pub mod track_add;
 pub mod track_hide;
 pub mod track_lock;
@@ -116,6 +119,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `effect.toggle` (§6.4)
 /// - `effect.list_available` (§6.5)
 /// - `text.edit` (§7.2)
+/// - `text.style` (§7.3)
 /// - `caption.edit` (§10.2, §7.2 alias)
 /// - `keyframe.list` (§8.4)
 /// - `project.set_metadata` (§2.12)
@@ -330,6 +334,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(text_style::TextStyleVerb))
+        .expect(
+            "TextStyleVerb is the thirty-second registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -351,6 +361,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         project_rename_fixture(),
         text_edit_fixture(),
         caption_edit_fixture(),
+        text_style_fixture(),
         marker_add_fixture(),
         marker_set_fixture(),
         marker_remove_fixture(),
@@ -453,6 +464,78 @@ fn caption_edit_fixture() -> RecordedEvent {
     let mut fixture = text_edit_fixture();
     fixture.verb = "caption.edit".to_string();
     fixture
+}
+
+/// Build the canonical `text.style` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with a single text track and a single
+/// text clip, then updates two safe style leaves.
+fn text_style_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let clip_id = "01900000-0000-7000-8000-0000000bb102";
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa102",
+        "kind": "text",
+        "name": "Captions",
+        "clips": [{
+            "id": clip_id,
+            "name": "Caption 2",
+            "asset_id": "00000000-0000-0000-0000-000000000000",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 1000,
+            "locked": false,
+            "text": {
+                "content": "Styled",
+                "font_family": "Arial",
+                "font_size_px": 24,
+                "color": "#ffffffff"
+            },
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(1000);
+
+    let args = text_style::TextStyleArgs {
+        project_id,
+        clip: clip_id.to_string(),
+        style: json!({
+            "color": "#ff0000ff",
+            "font_size_px": 96.0
+        }),
+    };
+
+    let (patch_value, _warnings, _data) = text_style::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid text.style patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("text.style fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("text.style fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        text_style::data_envelope_from_post_state(&args, &post_state)
+            .expect("text.style fixture expected_data"),
+    )
+    .expect("text.style fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "text.style".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
 }
 
 /// Build the canonical `clip.set_blend_mode` fixture used by [`default_fixtures`].
@@ -2210,6 +2293,7 @@ mod tests {
                 "project.set_fps",
                 "project.set_metadata",
                 "text.edit",
+                "text.style",
                 "track.add",
                 "track.hide",
                 "track.lock",
