@@ -68,6 +68,7 @@ pub mod clip_set_opacity;
 pub mod clip_set_transform;
 pub mod clip_set_volume;
 pub mod clip_unlink;
+pub mod effect_list_available;
 pub mod effect_toggle;
 pub mod marker_add;
 pub mod marker_list;
@@ -124,6 +125,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `track.reorder` (§4.3)
 /// - `track.set_pan` (§4.9)
 /// - `track.set_volume` (§4.8)
+/// - `effect.list_available` (§6.5)
 ///
 /// Paired with [`default_fixtures`]: the two together clear the §0.8
 /// reconstructor-purity startup gate by construction.
@@ -291,6 +293,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(effect_list_available::EffectListAvailableVerb))
+        .expect(
+            "EffectListAvailableVerb is the twenty-seventh registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -331,6 +339,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_set_volume_fixture(),
         clip_list_fixture(),
         clip_unlink_fixture(),
+        effect_list_available_fixture(),
         effect_toggle_fixture(),
     ]
 }
@@ -998,6 +1007,35 @@ fn effect_toggle_fixture() -> RecordedEvent {
         patch: patch_value,
         warnings: vec![],
         post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `effect.list_available` fixture used by
+/// [`default_fixtures`].
+fn effect_list_available_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = effect_list_available::EffectListAvailableArgs {
+        project_id,
+        category: None,
+    };
+
+    let (patch_value, _warnings, data) = effect_list_available::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid effect.list_available data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("effect.list_available fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "effect.list_available".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
         expected_data,
     }
 }
@@ -1912,6 +1950,7 @@ mod tests {
                 "clip.set_transform",
                 "clip.set_volume",
                 "clip.unlink",
+                "effect.list_available",
                 "effect.toggle",
                 "marker.add",
                 "marker.list",
