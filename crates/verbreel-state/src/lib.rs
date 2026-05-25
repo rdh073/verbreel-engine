@@ -171,6 +171,9 @@ pub use verbs::track_mute::{
 pub use verbs::track_rename::{
     TrackRenameArgs, TrackRenameData, TrackRenameError, TrackRenameVerb,
 };
+pub use verbs::track_set_volume::{
+    TrackSetVolumeArgs, TrackSetVolumeData, TrackSetVolumeError, TrackSetVolumeVerb,
+};
 pub use verbs::track_solo::{
     DEFAULT_SOLO, TrackSoloArgs, TrackSoloData, TrackSoloError, TrackSoloVerb,
 };
