@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use verbreel_state::verbs::keyframe_list::{compute_patch, data_envelope_from_post_state};
 use verbreel_state::{
     Keyframe, KeyframeListArgs, KeyframeListData, KeyframeListError, KeyframeListVerb,
-    MutateOutcome, Project, Verb, VerbError, VerbRegistry, default_fixtures,
-    default_registry, validate_reconstructors,
+    MutateOutcome, Project, Verb, VerbError, VerbRegistry, default_fixtures, default_registry,
+    validate_reconstructors,
 };
 use verbreel_types::Tick;
 
