@@ -72,6 +72,7 @@ pub mod clip_set_volume;
 pub mod clip_unlink;
 pub mod effect_list_available;
 pub mod effect_toggle;
+pub mod keyframe_list;
 pub mod marker_add;
 pub mod marker_list;
 pub mod marker_remove;
@@ -111,6 +112,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `clip.set_volume` (§5.11)
 /// - `clip.unlink` (§5.16)
 /// - `effect.toggle` (§6.4)
+/// - `keyframe.list` (§8.4)
 /// - `project.set_metadata` (§2.12)
 /// - `project.set_canvas` (§2.10)
 /// - `project.set_fps` (§2.11)
@@ -308,6 +310,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(keyframe_list::KeyframeListVerb))
+        .expect(
+            "KeyframeListVerb is the twenty-ninth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -351,6 +359,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         effect_list_available_fixture(),
         effect_toggle_fixture(),
         asset_list_fixture(),
+        keyframe_list_fixture(),
     ]
 }
 
@@ -1114,6 +1123,69 @@ fn asset_list_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "asset.list".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
+/// Build the canonical `keyframe.list` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with one text clip and three keyframes
+/// across two properties so the sort path is exercised.
+fn keyframe_list_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa701",
+        "kind": "text",
+        "name": "Text 1",
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb701",
+            "name": "Clip 1",
+            "asset_id": "00000000-0000-0000-0000-000000000000",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+            "text": {
+                "content": "Hello",
+                "font_family": "Arial",
+                "font_size_px": 24,
+            },
+            "keyframes": [
+                { "id": "01900000-0000-7000-8000-0000000cc701", "property": "opacity", "time_tk": 500, "value": 0.5 },
+                { "id": "01900000-0000-7000-8000-0000000cc702", "property": "opacity", "time_tk": 250, "value": 1.0 },
+                { "id": "01900000-0000-7000-8000-0000000cc703", "property": "transform.x", "time_tk": 250, "value": 12.0 },
+            ],
+        }],
+    });
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+
+    let args = keyframe_list::KeyframeListArgs {
+        project_id,
+        clip: "01900000-0000-7000-8000-0000000bb701".to_string(),
+        property: None,
+    };
+
+    let (patch_value, _warnings, _data) = keyframe_list::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid keyframe.list data");
+    let expected_data = serde_json::to_value(
+        keyframe_list::data_envelope_from_post_state(&args, &prior)
+            .expect("keyframe.list fixture expected_data"),
+    )
+    .expect("keyframe.list fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "keyframe.list".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings: vec![],
@@ -2035,6 +2107,7 @@ mod tests {
                 "clip.unlink",
                 "effect.list_available",
                 "effect.toggle",
+                "keyframe.list",
                 "marker.add",
                 "marker.list",
                 "marker.remove",

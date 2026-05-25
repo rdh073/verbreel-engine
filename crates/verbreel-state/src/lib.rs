@@ -159,6 +159,9 @@ pub use verbs::effect_list_available::{
 pub use verbs::effect_toggle::{
     EffectToggleArgs, EffectToggleData, EffectToggleError, EffectToggleVerb,
 };
+pub use verbs::keyframe_list::{
+    KeyframeListArgs, KeyframeListData, KeyframeListError, KeyframeListVerb,
+};
 pub use verbs::marker_add::{
     DEFAULT_MARKER_COLOR, LABEL_MAX as MARKER_LABEL_MAX, MarkerAddArgs, MarkerAddData,
     MarkerAddError, MarkerAddVerb, NOTE_MAX as MARKER_NOTE_MAX,
