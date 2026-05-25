@@ -171,6 +171,9 @@ pub use verbs::track_mute::{
 pub use verbs::track_rename::{
     TrackRenameArgs, TrackRenameData, TrackRenameError, TrackRenameVerb,
 };
+pub use verbs::track_reorder::{
+    TrackReorderArgs, TrackReorderData, TrackReorderError, TrackReorderVerb,
+};
 pub use verbs::track_set_pan::{
     TrackSetPanArgs, TrackSetPanData, TrackSetPanError, TrackSetPanVerb,
 };

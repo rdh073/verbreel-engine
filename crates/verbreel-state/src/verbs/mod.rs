@@ -72,6 +72,7 @@ pub mod track_hide;
 pub mod track_lock;
 pub mod track_mute;
 pub mod track_rename;
+pub mod track_reorder;
 pub mod track_set_pan;
 pub mod track_set_volume;
 pub mod track_solo;
@@ -101,6 +102,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `track.mute` (§4.4)
 /// - `track.solo` (§4.5)
 /// - `track.rename` (§4.7)
+/// - `track.reorder` (§4.3)
 /// - `track.set_pan` (§4.9)
 /// - `track.set_volume` (§4.8)
 ///
@@ -114,6 +116,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// programmer bug, surfaced loudly at the first call site rather than
 /// hidden behind a `Result` callers would unwrap anyway).
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn default_registry() -> VerbRegistry {
     let mut registry = VerbRegistry::new();
     registry
@@ -213,6 +216,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(track_reorder::TrackReorderVerb))
+        .expect(
+            "TrackReorderVerb is the seventeenth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -244,7 +253,71 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         track_hide_fixture(),
         track_set_volume_fixture(),
         track_set_pan_fixture(),
+        track_reorder_fixture(),
     ]
+}
+
+/// Build the canonical `track.reorder` fixture used by [`default_fixtures`].
+///
+/// Starts from an empty synthetic project, then adds two video tracks.
+/// Reorders the second track to kind index `0`.
+fn track_reorder_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    for _ in 0..2 {
+        let add_args = track_add::TrackAddArgs {
+            project_id,
+            kind: crate::track::TrackKind::Video,
+            name: None,
+            index: None,
+        };
+
+        let (add_patch_val, _warnings) = track_add::compute_patch(&prior, &add_args)
+            .expect("track.add fixture should produce a valid patch");
+        let add_patch: json_patch::Patch =
+            serde_json::from_value(add_patch_val).expect("track.add fixture patch parses");
+        prior = prior
+            .apply(&add_patch)
+            .expect("track.add fixture patch applies cleanly");
+    }
+
+    let track_id = prior
+        .tracks
+        .get(1)
+        .expect("track.reorder fixture should have two tracks");
+
+    let args = track_reorder::TrackReorderArgs {
+        project_id,
+        track: track_id.id.to_string(),
+        to_index: 0,
+    };
+
+    let (patch_value, _warnings, _data) = track_reorder::compute_patch(&prior, &args)
+        .expect("track.reorder fixture should produce a valid patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("track.reorder fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("track.reorder fixture patch applies cleanly");
+
+    let expected_data = serde_json::to_value(
+        track_reorder::data_envelope_from_patch_and_post_state(&patch_value, &args, &post_state)
+            .expect("track.reorder fixture expected_data"),
+    )
+    .expect("track.reorder fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "track.reorder".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
 }
 
 /// Build the canonical `project.set_metadata` fixture used by
@@ -1020,6 +1093,7 @@ mod tests {
                 "track.lock",
                 "track.mute",
                 "track.rename",
+                "track.reorder",
                 "track.set_pan",
                 "track.set_volume",
                 "track.solo",
