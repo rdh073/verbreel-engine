@@ -134,6 +134,9 @@ pub use tracker::Tracker;
 pub use transform::Transform;
 pub use verbs::clip_lock::{ClipLockArgs, ClipLockData, ClipLockError, ClipLockVerb};
 pub use verbs::clip_rename::{ClipRenameArgs, ClipRenameData, ClipRenameError, ClipRenameVerb};
+pub use verbs::clip_set_opacity::{
+    ClipSetOpacityArgs, ClipSetOpacityData, ClipSetOpacityError, ClipSetOpacityVerb,
+};
 pub use verbs::marker_add::{
     DEFAULT_MARKER_COLOR, LABEL_MAX as MARKER_LABEL_MAX, MarkerAddArgs, MarkerAddData,
     MarkerAddError, MarkerAddVerb, NOTE_MAX as MARKER_NOTE_MAX,
