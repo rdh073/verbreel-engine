@@ -77,6 +77,7 @@ pub mod effect_list_available;
 pub mod effect_toggle;
 pub mod keyframe_add;
 pub mod keyframe_list;
+pub mod keyframe_set;
 pub mod marker_add;
 pub mod marker_list;
 pub mod marker_remove;
@@ -124,6 +125,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `caption.edit` (§10.2, §7.2 alias)
 /// - `keyframe.add` (§8.1)
 /// - `keyframe.list` (§8.4)
+/// - `keyframe.set` (§8.3)
 /// - `project.set_metadata` (§2.12)
 /// - `project.set_canvas` (§2.10)
 /// - `project.set_fps` (§2.11)
@@ -348,6 +350,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(keyframe_set::KeyframeSetVerb))
+        .expect(
+            "KeyframeSetVerb is the thirty-fourth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -396,6 +404,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         asset_list_fixture(),
         keyframe_add_fixture(),
         keyframe_list_fixture(),
+        keyframe_set_fixture(),
     ]
 }
 
@@ -1468,6 +1477,51 @@ fn keyframe_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `keyframe.set` fixture used by [`default_fixtures`].
+///
+/// Starts from the `keyframe.add` fixture's post-state and updates the
+/// opacity keyframe value from `0.5` to `0.8`.
+fn keyframe_set_fixture() -> RecordedEvent {
+    let add_fixture = keyframe_add_fixture();
+    let prior = add_fixture.post_state;
+    let keyframe_id = prior.tracks[0].clips[0].keyframes[0].id;
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let args = keyframe_set::KeyframeSetArgs {
+        project_id,
+        keyframe: keyframe_id.to_string(),
+        time_tk: None,
+        value: Some(json!(0.8)),
+        easing: None,
+        bezier: None,
+    };
+
+    let (patch_value, warnings, _data) = keyframe_set::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid keyframe.set patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("keyframe.set fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("keyframe.set fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        keyframe_set::data_envelope_from_post_state(&args, &post_state)
+            .expect("keyframe.set fixture expected_data"),
+    )
+    .expect("keyframe.set fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "keyframe.set".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
 /// Build the canonical `track.reorder` fixture used by [`default_fixtures`].
 ///
 /// Starts from an empty synthetic project, then adds two video tracks.
@@ -2384,6 +2438,7 @@ mod tests {
                 "effect.toggle",
                 "keyframe.add",
                 "keyframe.list",
+                "keyframe.set",
                 "marker.add",
                 "marker.list",
                 "marker.remove",
