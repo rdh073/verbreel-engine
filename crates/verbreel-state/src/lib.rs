@@ -140,6 +140,10 @@ pub use verbs::clip_set_blend_mode::{
 pub use verbs::clip_set_opacity::{
     ClipSetOpacityArgs, ClipSetOpacityData, ClipSetOpacityError, ClipSetOpacityVerb,
 };
+pub use verbs::clip_set_transform::{
+    ClipSetTransformArgs, ClipSetTransformData, ClipSetTransformError, ClipSetTransformVerb,
+    PartialTransform,
+};
 pub use verbs::clip_set_volume::{
     ClipSetVolumeArgs, ClipSetVolumeData, ClipSetVolumeError, ClipSetVolumeVerb,
 };
