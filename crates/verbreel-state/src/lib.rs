@@ -149,6 +149,10 @@ pub use verbs::clip_set_volume::{
     ClipSetVolumeArgs, ClipSetVolumeData, ClipSetVolumeError, ClipSetVolumeVerb,
 };
 pub use verbs::clip_unlink::{ClipUnlinkArgs, ClipUnlinkData, ClipUnlinkError, ClipUnlinkVerb};
+pub use verbs::effect_list_available::{
+    AvailableEffect, EffectCategory, EffectListAvailableArgs, EffectListAvailableData,
+    EffectListAvailableError, EffectListAvailableVerb,
+};
 pub use verbs::effect_toggle::{
     EffectToggleArgs, EffectToggleData, EffectToggleError, EffectToggleVerb,
 };
