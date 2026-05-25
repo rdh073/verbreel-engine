@@ -144,6 +144,9 @@ pub use verbs::clip_set_blend_mode::{
 pub use verbs::clip_set_fade::{
     ClipSetFadeArgs, ClipSetFadeData, ClipSetFadeError, ClipSetFadeVerb,
 };
+pub use verbs::clip_set_mask::{
+    ClipSetMaskArgs, ClipSetMaskData, ClipSetMaskError, ClipSetMaskVerb,
+};
 pub use verbs::clip_set_opacity::{
     ClipSetOpacityArgs, ClipSetOpacityData, ClipSetOpacityError, ClipSetOpacityVerb,
 };
