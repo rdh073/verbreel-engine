@@ -83,6 +83,7 @@ pub mod clip_set_transform;
 pub mod clip_set_volume;
 pub mod clip_unlink;
 pub mod effect_list_available;
+pub mod effect_remove;
 pub mod effect_reorder;
 pub mod effect_set_param;
 pub mod effect_toggle;
@@ -349,6 +350,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(effect_remove::EffectRemoveVerb))
+        .expect(
+            "EffectRemoveVerb is the forty-fourth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(effect_reorder::EffectReorderVerb))
         .expect(
             "EffectReorderVerb is the forty-second registration in \
@@ -473,6 +480,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_list_fixture(),
         clip_unlink_fixture(),
         effect_list_available_fixture(),
+        effect_remove_fixture(),
         effect_reorder_fixture(),
         effect_set_param_fixture(),
         effect_toggle_fixture(),
@@ -1703,6 +1711,86 @@ fn effect_list_available_fixture() -> RecordedEvent {
         patch: patch_value,
         warnings: vec![],
         post_state: prior,
+        expected_data,
+    }
+}
+
+/// Build the canonical `effect.remove` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with one clip carrying one unmanaged
+/// effect and one keyframe targeting that effect, then removes both via the
+/// §6.2 cascade.
+fn effect_remove_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa231",
+        "kind": "text",
+        "name": "Text 1",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb231",
+            "name": "Clip 1",
+            "asset_id": "00000000-0000-0000-0000-000000000000",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+            "text": {
+                "content": "Hello",
+                "font_family": "Arial",
+                "font_size_px": 24,
+            },
+            "effects": [{
+                "id": "01900000-0000-7000-8000-0000000cc231",
+                "kind": "color_correct",
+                "enabled": true,
+                "params": { "brightness": 0.1 },
+            }],
+            "keyframes": [{
+                "id": "01900000-0000-7000-8000-0000000dd231",
+                "property": "effects[01900000-0000-7000-8000-0000000cc231].params.brightness",
+                "time_tk": 120_000,
+                "value": 0.25,
+                "easing": "linear",
+            }],
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+
+    let args = effect_remove::EffectRemoveArgs {
+        project_id,
+        effect: "01900000-0000-7000-8000-0000000cc231".to_string(),
+    };
+
+    let (patch_value, warnings, _data) = effect_remove::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid effect.remove patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("effect.remove fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("effect.remove fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        effect_remove::data_envelope_from_args_warnings(&args, &warnings)
+            .expect("effect.remove fixture expected_data"),
+    )
+    .expect("effect.remove fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "effect.remove".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
         expected_data,
     }
 }
@@ -3271,6 +3359,7 @@ mod tests {
                 "clip.set_volume",
                 "clip.unlink",
                 "effect.list_available",
+                "effect.remove",
                 "effect.reorder",
                 "effect.set_param",
                 "effect.toggle",
