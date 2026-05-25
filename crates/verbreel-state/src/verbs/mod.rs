@@ -60,6 +60,7 @@ use crate::project::Project;
 use crate::reconstructor::{RecordedEvent, VerbRegistry};
 use verbreel_types::Tick;
 
+pub mod clip_list;
 pub mod clip_lock;
 pub mod clip_rename;
 pub mod clip_set_blend_mode;
@@ -95,6 +96,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// The canonical set of verbs shipped by this engine build.
 ///
 /// Canonical kernel verbs currently shipped:
+/// - `clip.list` (§5.14)
 /// - `clip.lock` (§5.13)
 /// - `clip.rename` (§5.17)
 /// - `clip.set_blend_mode` (§5.18)
@@ -268,6 +270,10 @@ pub fn default_registry() -> VerbRegistry {
             "ClipSetTransformVerb is the twenty-third registration in \
              default_registry(); cannot collide with prior verbs",
         );
+    registry.register(Arc::new(clip_list::ClipListVerb)).expect(
+        "ClipListVerb is the twenty-fourth registration in \
+             default_registry(); cannot collide with prior verbs",
+    );
     registry
 }
 
@@ -307,6 +313,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_set_transform_fixture(),
         clip_set_opacity_fixture(),
         clip_set_volume_fixture(),
+        clip_list_fixture(),
     ]
 }
 
@@ -1186,6 +1193,85 @@ fn marker_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `clip.list` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with two tracks and three clips in
+/// intentionally unsorted insertion order, so the sort path is exercised.
+fn clip_list_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_audio = serde_json::from_value(json!({
+        "id": "01900000-0000-7000-8000-0000000aa101",
+        "kind": "audio",
+        "name": "Audio 1",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb201",
+            "name": "Audio Clip A",
+            "asset_id": "01900000-0000-7000-8000-0000000dd001",
+            "track_position_tk": 2_500,
+            "source_in_tk": 0,
+            "source_out_tk": 1_000,
+        }, {
+            "id": "01900000-0000-7000-8000-0000000bb101",
+            "name": "Audio Clip B",
+            "asset_id": "01900000-0000-7000-8000-0000000dd001",
+            "track_position_tk": 500,
+            "source_in_tk": 0,
+            "source_out_tk": 1_000,
+        }],
+    }))
+    .expect("audio track for clip.list fixture parses");
+
+    let track_video = serde_json::from_value(json!({
+        "id": "01900000-0000-7000-8000-0000000aa201",
+        "kind": "video",
+        "name": "Video 1",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb301",
+            "name": "Video Clip",
+            "asset_id": "01900000-0000-7000-8000-0000000dd002",
+            "track_position_tk": 1_500,
+            "source_in_tk": 0,
+            "source_out_tk": 1_000,
+        }],
+    }))
+    .expect("video track for clip.list fixture parses");
+
+    prior.tracks.push(track_audio);
+    prior.tracks.push(track_video);
+    prior.duration_tk = Tick::new(3_500);
+
+    let args = clip_list::ClipListArgs {
+        project_id,
+        track: None,
+        at_tk: None,
+    };
+
+    let (patch_value, _warnings, _data) = clip_list::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.list patch");
+    let post_state = prior;
+    let expected_data = serde_json::to_value(
+        clip_list::data_envelope_from_post_state(&args, &post_state)
+            .expect("clip.list fixture expected_data"),
+    )
+    .expect("clip.list fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.list".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
 /// Build the canonical `track.add` fixture used by [`default_fixtures`].
 ///
 /// Starts from an empty synthetic project, then inserts a first video
@@ -1590,6 +1676,7 @@ mod tests {
         assert_eq!(
             report.verbs_checked,
             vec![
+                "clip.list",
                 "clip.lock",
                 "clip.rename",
                 "clip.set_blend_mode",
