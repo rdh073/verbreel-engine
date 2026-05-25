@@ -168,6 +168,9 @@ pub use verbs::track_mute::{
 pub use verbs::track_rename::{
     TrackRenameArgs, TrackRenameData, TrackRenameError, TrackRenameVerb,
 };
+pub use verbs::track_solo::{
+    DEFAULT_SOLO, TrackSoloArgs, TrackSoloData, TrackSoloError, TrackSoloVerb,
+};
 // Deprecated alias kept for one slice cycle (Slice B3 rename).
 #[allow(deprecated)]
 pub use verbs::project_set_metadata::ProjectSetMetadataReconstructor;
