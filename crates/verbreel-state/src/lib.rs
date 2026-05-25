@@ -162,6 +162,9 @@ pub use verbs::effect_list_available::{
     AvailableEffect, EffectCategory, EffectListAvailableArgs, EffectListAvailableData,
     EffectListAvailableError, EffectListAvailableVerb,
 };
+pub use verbs::effect_remove::{
+    EffectRemoveArgs, EffectRemoveData, EffectRemoveError, EffectRemoveVerb,
+};
 pub use verbs::effect_reorder::{
     EffectReorderArgs, EffectReorderData, EffectReorderError, EffectReorderVerb, ToIndex,
 };
