@@ -159,6 +159,9 @@ pub use verbs::project_set_metadata::{
 pub use verbs::track_add::{
     TRACK_NAME_MAX, TrackAddArgs, TrackAddData, TrackAddError, TrackAddVerb,
 };
+pub use verbs::track_hide::{
+    DEFAULT_HIDDEN, TrackHideArgs, TrackHideData, TrackHideError, TrackHideVerb,
+};
 pub use verbs::track_lock::{
     DEFAULT_LOCKED, TrackLockArgs, TrackLockData, TrackLockError, TrackLockVerb,
 };
