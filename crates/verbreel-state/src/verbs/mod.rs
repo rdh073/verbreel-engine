@@ -74,6 +74,7 @@ pub mod caption_edit;
 pub mod clip_delete;
 pub mod clip_list;
 pub mod clip_lock;
+pub mod clip_move;
 pub mod clip_rename;
 pub mod clip_reverse;
 pub mod clip_set_blend_mode;
@@ -286,6 +287,10 @@ pub fn default_registry() -> VerbRegistry {
         "ClipLockVerb is the eighteenth registration in \
              default_registry(); cannot collide with prior verbs",
     );
+    registry.register(Arc::new(clip_move::ClipMoveVerb)).expect(
+        "ClipMoveVerb is the forty-sixth registration in \
+             default_registry(); cannot collide with prior verbs",
+    );
     registry
         .register(Arc::new(clip_rename::ClipRenameVerb))
         .expect(
@@ -476,6 +481,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         track_set_pan_fixture(),
         track_reorder_fixture(),
         clip_lock_fixture(),
+        clip_move_fixture(),
         clip_rename_fixture(),
         clip_reverse_fixture(),
         clip_set_blend_mode_fixture(),
@@ -1259,6 +1265,95 @@ fn clip_lock_fixture() -> RecordedEvent {
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `clip.move` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with one video clip, then repositions
+/// that clip on the same track.
+fn clip_move_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let track_id = "01900000-0000-7000-8000-0000000aa506";
+    let clip_id = "01900000-0000-7000-8000-0000000bb506";
+    let asset_id = "01900000-0000-7000-8000-0000000dd506";
+
+    let track_raw = json!({
+        "id": track_id,
+        "kind": "video",
+        "name": "Video Move",
+        "locked": false,
+        "clips": [{
+            "id": clip_id,
+            "name": "Move Clip",
+            "asset_id": asset_id,
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 240_000,
+            "locked": false,
+        }],
+    });
+    prior
+        .tracks
+        .push(serde_json::from_value(track_raw).expect("manual video track parses"));
+    prior.duration_tk = Tick::new(240_000);
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": asset_id,
+            "kind": "video",
+            "hash": "36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da",
+            "path": "assets/36/36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da.mp4",
+            "original_filename": "video-clip-move.mp4",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 240_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("video clip fixture asset parses"),
+    );
+
+    let args = clip_move::ClipMoveArgs {
+        project_id,
+        clip: clip_id.to_string(),
+        track_position_tk: Some(240_000),
+        to_track: None,
+    };
+
+    let (patch_value, warnings, _data) = clip_move::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.move patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.move fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.move fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_move::data_envelope_from_post_state(&args, &post_state)
+            .expect("clip.move fixture expected_data"),
+    )
+    .expect("clip.move fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.move".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
         post_state,
         expected_data,
     }
@@ -3499,6 +3594,7 @@ mod tests {
                 "clip.delete",
                 "clip.list",
                 "clip.lock",
+                "clip.move",
                 "clip.rename",
                 "clip.reverse",
                 "clip.set_blend_mode",
