@@ -148,6 +148,7 @@ pub use verbs::clip_set_transform::{
 pub use verbs::clip_set_volume::{
     ClipSetVolumeArgs, ClipSetVolumeData, ClipSetVolumeError, ClipSetVolumeVerb,
 };
+pub use verbs::clip_unlink::{ClipUnlinkArgs, ClipUnlinkData, ClipUnlinkError, ClipUnlinkVerb};
 pub use verbs::marker_add::{
     DEFAULT_MARKER_COLOR, LABEL_MAX as MARKER_LABEL_MAX, MarkerAddArgs, MarkerAddData,
     MarkerAddError, MarkerAddVerb, NOTE_MAX as MARKER_NOTE_MAX,

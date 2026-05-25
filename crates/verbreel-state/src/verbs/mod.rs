@@ -67,6 +67,7 @@ pub mod clip_set_blend_mode;
 pub mod clip_set_opacity;
 pub mod clip_set_transform;
 pub mod clip_set_volume;
+pub mod clip_unlink;
 pub mod marker_add;
 pub mod marker_list;
 pub mod marker_remove;
@@ -103,6 +104,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `clip.set_opacity` (§5.10)
 /// - `clip.set_transform` (§5.9)
 /// - `clip.set_volume` (§5.11)
+/// - `clip.unlink` (§5.16)
 /// - `project.set_metadata` (§2.12)
 /// - `project.set_canvas` (§2.10)
 /// - `project.set_fps` (§2.11)
@@ -275,6 +277,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
     );
     registry
+        .register(Arc::new(clip_unlink::ClipUnlinkVerb))
+        .expect(
+            "ClipUnlinkVerb is the twenty-fifth registration in \
+         default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -314,6 +322,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_set_opacity_fixture(),
         clip_set_volume_fixture(),
         clip_list_fixture(),
+        clip_unlink_fixture(),
     ]
 }
 
@@ -766,6 +775,143 @@ fn clip_set_volume_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "clip.set_volume".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `clip.unlink` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with one video clip and one audio clip
+/// in the same link group, then unlinks the group.
+#[allow(clippy::too_many_lines)]
+fn clip_unlink_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let group_id = "01900000-0000-7000-8000-0000000000ab";
+    let video_clip_id = "01900000-0000-7000-8000-0000000bb301";
+    let audio_clip_id = "01900000-0000-7000-8000-0000000bb302";
+    let video_track_id = "01900000-0000-7000-8000-0000000aa301";
+    let audio_track_id = "01900000-0000-7000-8000-0000000aa302";
+    let video_asset_id = "01900000-0000-7000-8000-0000000dd001";
+    let audio_asset_id = "01900000-0000-7000-8000-0000000dd002";
+
+    let video_track = json!({
+        "id": video_track_id,
+        "kind": "video",
+        "name": "Video Link",
+        "locked": false,
+        "clips": [{
+            "id": video_clip_id,
+            "name": "Linked Video",
+            "asset_id": video_asset_id,
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 240_000,
+            "locked": false,
+            "link_group": group_id,
+        }],
+    });
+    let audio_track = json!({
+        "id": audio_track_id,
+        "kind": "audio",
+        "name": "Audio Link",
+        "locked": false,
+        "clips": [{
+            "id": audio_clip_id,
+            "name": "Linked Audio",
+            "asset_id": audio_asset_id,
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 240_000,
+            "volume": 1.0,
+            "locked": false,
+            "link_group": group_id,
+        }],
+    });
+    prior
+        .tracks
+        .push(serde_json::from_value(video_track).expect("manual video track parses"));
+    prior
+        .tracks
+        .push(serde_json::from_value(audio_track).expect("manual audio track parses"));
+    prior.duration_tk = Tick::new(240_000);
+
+    prior
+        .assets
+        .push(serde_json::from_value(json!({
+            "id": video_asset_id,
+            "kind": "video",
+            "hash": "36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da",
+            "path": "assets/36/36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da.mp4",
+            "original_filename": "video-clip-unlink.mp4",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 240_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("video clip fixture asset parses"));
+    prior
+        .assets
+        .push(serde_json::from_value(json!({
+            "id": audio_asset_id,
+            "kind": "audio",
+            "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+            "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.m4a",
+            "original_filename": "audio-clip-unlink.m4a",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 240_000,
+                "audio_codec": "aac",
+                "audio_channels": 2,
+                "audio_sample_rate_hz": 48000,
+                "container": "m4a",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("audio clip fixture asset parses"));
+
+    let args = clip_unlink::ClipUnlinkArgs {
+        project_id,
+        clip: video_clip_id.to_string(),
+    };
+
+    let (patch_value, _warnings, _data) = clip_unlink::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.unlink patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.unlink fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.unlink fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_unlink::data_envelope_from_patch_and_post_state(&patch_value, &post_state)
+            .expect("clip.unlink fixture expected_data"),
+    )
+    .expect("clip.unlink fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.unlink".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings: vec![],
@@ -1683,6 +1829,7 @@ mod tests {
                 "clip.set_opacity",
                 "clip.set_transform",
                 "clip.set_volume",
+                "clip.unlink",
                 "marker.add",
                 "marker.list",
                 "marker.remove",
