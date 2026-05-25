@@ -72,6 +72,7 @@ pub mod track_hide;
 pub mod track_lock;
 pub mod track_mute;
 pub mod track_rename;
+pub mod track_set_pan;
 pub mod track_set_volume;
 pub mod track_solo;
 
@@ -100,6 +101,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `track.mute` (§4.4)
 /// - `track.solo` (§4.5)
 /// - `track.rename` (§4.7)
+/// - `track.set_pan` (§4.9)
 /// - `track.set_volume` (§4.8)
 ///
 /// Paired with [`default_fixtures`]: the two together clear the §0.8
@@ -205,6 +207,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(track_set_pan::TrackSetPanVerb))
+        .expect(
+            "TrackSetPanVerb is the sixteenth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -235,6 +243,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         track_solo_fixture(),
         track_hide_fixture(),
         track_set_volume_fixture(),
+        track_set_pan_fixture(),
     ]
 }
 
@@ -899,6 +908,54 @@ fn track_set_volume_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `track.set_pan` fixture used by [`default_fixtures`].
+///
+/// Build an audio track via `track.add` first, then set its `pan` to
+/// `-0.5`.
+fn track_set_pan_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+    let mut prior = synthetic_empty_project(project_id);
+    // Build an audio track via track_add::compute_patch.
+    let add_args = track_add::TrackAddArgs {
+        project_id,
+        kind: crate::track::TrackKind::Audio,
+        name: None,
+        index: None,
+    };
+    let (add_patch_val, _warnings) = track_add::compute_patch(&prior, &add_args)
+        .expect("track.add audio fixture must produce a valid patch");
+    let add_patch: json_patch::Patch =
+        serde_json::from_value(add_patch_val).expect("track.add patch is valid RFC 6902");
+    prior = prior.apply(&add_patch).expect("apply add patch");
+
+    let track_id = prior.tracks[0].id.to_string();
+    let args = track_set_pan::TrackSetPanArgs {
+        project_id,
+        track: track_id,
+        pan: -0.5,
+    };
+    let (patch_value, _warnings, _data) = track_set_pan::compute_patch(&prior, &args)
+        .expect("set_pan fixture must produce a valid patch");
+    let patch: json_patch::Patch =
+        serde_json::from_value(patch_value.clone()).expect("set_pan patch is valid RFC 6902");
+    let post_state = prior.apply(&patch).expect("apply set_pan patch");
+    let expected_data = serde_json::to_value(
+        track_set_pan::data_envelope_from_post_state(&args, &post_state).expect("set_pan envelope"),
+    )
+    .expect("set_pan expected_data serializes");
+
+    RecordedEvent {
+        verb: "track.set_pan".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -963,6 +1020,7 @@ mod tests {
                 "track.lock",
                 "track.mute",
                 "track.rename",
+                "track.set_pan",
                 "track.set_volume",
                 "track.solo",
             ]
