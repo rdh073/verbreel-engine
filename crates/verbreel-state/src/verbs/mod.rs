@@ -62,6 +62,7 @@ use verbreel_types::Tick;
 
 pub mod clip_lock;
 pub mod clip_rename;
+pub mod clip_set_blend_mode;
 pub mod clip_set_opacity;
 pub mod clip_set_volume;
 pub mod marker_add;
@@ -95,6 +96,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// Canonical kernel verbs currently shipped:
 /// - `clip.lock` (§5.13)
 /// - `clip.rename` (§5.17)
+/// - `clip.set_blend_mode` (§5.18)
 /// - `clip.set_opacity` (§5.10)
 /// - `clip.set_volume` (§5.11)
 /// - `project.set_metadata` (§2.12)
@@ -253,6 +255,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(clip_set_blend_mode::ClipSetBlendModeVerb))
+        .expect(
+            "ClipSetBlendModeVerb is the twenty-second registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -287,9 +295,96 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         track_reorder_fixture(),
         clip_lock_fixture(),
         clip_rename_fixture(),
+        clip_set_blend_mode_fixture(),
         clip_set_opacity_fixture(),
         clip_set_volume_fixture(),
     ]
+}
+
+/// Build the canonical `clip.set_blend_mode` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with a single video track and a single
+/// clip, then sets that clip's blend mode.
+fn clip_set_blend_mode_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa103",
+        "kind": "video",
+        "name": "Video 3",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb303",
+            "name": "Clip 3",
+            "asset_id": "01900000-0000-7000-8000-0000000cc303",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": "01900000-0000-7000-8000-0000000cc303",
+            "kind": "video",
+            "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+            "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.mp4",
+            "original_filename": "video-clip-set-blend-mode.mp4",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 480_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("clip.set_blend_mode fixture asset parses"),
+    );
+
+    let args = clip_set_blend_mode::ClipSetBlendModeArgs {
+        project_id,
+        clip: "01900000-0000-7000-8000-0000000bb303".to_string(),
+        blend_mode: crate::clip::BlendMode::Multiply,
+    };
+
+    let (patch_value, _warnings, _data) = clip_set_blend_mode::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.set_blend_mode patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.set_blend_mode fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.set_blend_mode fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_set_blend_mode::data_envelope_from_post_state(&args, &post_state)
+            .expect("clip.set_blend_mode fixture expected_data"),
+    )
+    .expect("clip.set_blend_mode fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.set_blend_mode".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
 }
 
 /// Build the canonical `clip.lock` fixture used by [`default_fixtures`].
@@ -1404,6 +1499,7 @@ mod tests {
             vec![
                 "clip.lock",
                 "clip.rename",
+                "clip.set_blend_mode",
                 "clip.set_opacity",
                 "clip.set_volume",
                 "marker.add",

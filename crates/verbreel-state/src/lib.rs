@@ -134,6 +134,9 @@ pub use tracker::Tracker;
 pub use transform::Transform;
 pub use verbs::clip_lock::{ClipLockArgs, ClipLockData, ClipLockError, ClipLockVerb};
 pub use verbs::clip_rename::{ClipRenameArgs, ClipRenameData, ClipRenameError, ClipRenameVerb};
+pub use verbs::clip_set_blend_mode::{
+    ClipSetBlendModeArgs, ClipSetBlendModeData, ClipSetBlendModeError, ClipSetBlendModeVerb,
+};
 pub use verbs::clip_set_opacity::{
     ClipSetOpacityArgs, ClipSetOpacityData, ClipSetOpacityError, ClipSetOpacityVerb,
 };
