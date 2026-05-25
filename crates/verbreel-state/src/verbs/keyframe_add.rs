@@ -300,7 +300,7 @@ fn validate_mask_property(clip: &Clip, property: &str) -> Result<(), KeyframeAdd
     }
 }
 
-fn validate_value(property: &str, value: &Value) -> Result<(), KeyframeAddError> {
+pub(crate) fn validate_value(property: &str, value: &Value) -> Result<(), KeyframeAddError> {
     match property {
         "opacity" => validate_number_range(property, value, Some(0.0), Some(1.0)),
         "volume" => validate_number_range(property, value, Some(0.0), Some(4.0)),
@@ -385,7 +385,7 @@ fn validate_number_range(
     Ok(())
 }
 
-fn parse_easing(
+pub(crate) fn parse_easing(
     easing: Option<&str>,
     bezier: Option<[f64; 4]>,
     property: &str,
