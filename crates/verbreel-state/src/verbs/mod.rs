@@ -62,6 +62,7 @@ use verbreel_types::Tick;
 
 pub mod clip_lock;
 pub mod clip_rename;
+pub mod clip_set_opacity;
 pub mod marker_add;
 pub mod marker_list;
 pub mod marker_remove;
@@ -93,6 +94,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// Canonical kernel verbs currently shipped:
 /// - `clip.lock` (§5.13)
 /// - `clip.rename` (§5.17)
+/// - `clip.set_opacity` (§5.10)
 /// - `project.set_metadata` (§2.12)
 /// - `project.set_canvas` (§2.10)
 /// - `project.set_fps` (§2.11)
@@ -237,6 +239,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(clip_set_opacity::ClipSetOpacityVerb))
+        .expect(
+            "ClipSetOpacityVerb is the twentieth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -271,6 +279,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         track_reorder_fixture(),
         clip_lock_fixture(),
         clip_rename_fixture(),
+        clip_set_opacity_fixture(),
     ]
 }
 
@@ -400,6 +409,73 @@ fn clip_rename_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "clip.rename".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `clip.set_opacity` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with a single text track and a single
+/// clip, then sets that clip's opacity.
+fn clip_set_opacity_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa103",
+        "kind": "text",
+        "name": "Text 3",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb203",
+            "name": "Clip 3",
+            "asset_id": "00000000-0000-0000-0000-000000000000",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+            "text": {
+                "content": "Hello",
+                "font_family": "Arial",
+                "font_size_px": 24
+            },
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+
+    let args = clip_set_opacity::ClipSetOpacityArgs {
+        project_id,
+        clip: "01900000-0000-7000-8000-0000000bb203".to_string(),
+        opacity: 0.5,
+    };
+
+    let (patch_value, _warnings, _data) = clip_set_opacity::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.set_opacity patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.set_opacity fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.set_opacity fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_set_opacity::data_envelope_from_post_state(&args, &post_state)
+            .expect("clip.set_opacity fixture expected_data"),
+    )
+    .expect("clip.set_opacity fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.set_opacity".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings: vec![],
@@ -1233,6 +1309,7 @@ mod tests {
             vec![
                 "clip.lock",
                 "clip.rename",
+                "clip.set_opacity",
                 "marker.add",
                 "marker.list",
                 "marker.remove",
