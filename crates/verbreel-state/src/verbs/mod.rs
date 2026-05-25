@@ -45,6 +45,7 @@
 //!
 //! ## Spec references
 //!
+//! - `spec/commands/asset.md` §3.2 (`asset.list`).
 //! - `spec/commands/marker.md` §13.1 (`marker.add`), §13.2
 //!   (`marker.set`), §13.3 (`marker.remove`), and §13.4 (`marker.list`).
 //! - `spec/commands/project.md` §2.9 (`project.rename`) and §2.12
@@ -60,6 +61,7 @@ use crate::project::Project;
 use crate::reconstructor::{RecordedEvent, VerbRegistry};
 use verbreel_types::Tick;
 
+pub mod asset_list;
 pub mod clip_list;
 pub mod clip_lock;
 pub mod clip_rename;
@@ -99,6 +101,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// The canonical set of verbs shipped by this engine build.
 ///
 /// Canonical kernel verbs currently shipped:
+/// - `asset.list` (§3.2)
 /// - `clip.list` (§5.14)
 /// - `clip.lock` (§5.13)
 /// - `clip.rename` (§5.17)
@@ -299,6 +302,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(asset_list::AssetListVerb))
+        .expect(
+            "AssetListVerb is the twenty-eighth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -341,6 +350,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_unlink_fixture(),
         effect_list_available_fixture(),
         effect_toggle_fixture(),
+        asset_list_fixture(),
     ]
 }
 
@@ -1032,6 +1042,78 @@ fn effect_list_available_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "effect.list_available".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
+/// Build the canonical `asset.list` fixture used by [`default_fixtures`].
+///
+/// Starts from an empty synthetic project and injects two assets (audio
+/// and video), then computes the deterministic read-only envelope.
+fn asset_list_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    prior.assets.push(
+        serde_json::from_value(json!({
+                "id": "01900000-0000-7000-8000-00000000aaaa",
+                "kind": "video",
+                "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+                "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.mp4",
+                "original_filename": "video.mp4",
+                "imported_at": "2026-05-01T00:00:00Z",
+                "metadata": {
+                    "duration_tk": 480_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": { "mtime_ms": 1_700_000_000_000_i64, "size_bytes": 1024 }
+            }
+        }))
+        .expect("video fixture asset parses"),
+    );
+    prior.assets.push(
+        serde_json::from_value(json!({
+                "id": "01900000-0000-7000-8000-00000000bbbb",
+                "kind": "audio",
+                "hash": "36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da",
+                "path": "assets/36/36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da.mp3",
+            "original_filename": "audio.mp3",
+            "imported_at": "2026-04-01T00:00:00Z",
+            "metadata": {
+                "duration_tk": 240_000,
+                "audio_codec": "mp3",
+                "audio_channels": 2,
+                "audio_sample_rate_hz": 48000,
+                "container": "mp3",
+                "fingerprint": { "mtime_ms": 1_700_000_000_001_i64, "size_bytes": 2048 }
+            }
+        }))
+        .expect("audio fixture asset parses"),
+    );
+
+    let args = asset_list::AssetListArgs {
+        project_id,
+        kind: None,
+    };
+
+    let (patch_value, _warnings, data) = asset_list::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid asset.list data");
+    let expected_data =
+        serde_json::to_value(&data).expect("asset.list fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "asset.list".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings: vec![],
@@ -1942,6 +2024,7 @@ mod tests {
         assert_eq!(
             report.verbs_checked,
             vec![
+                "asset.list",
                 "clip.list",
                 "clip.lock",
                 "clip.rename",
