@@ -141,6 +141,9 @@ pub use verbs::clip_rename::{ClipRenameArgs, ClipRenameData, ClipRenameError, Cl
 pub use verbs::clip_set_blend_mode::{
     ClipSetBlendModeArgs, ClipSetBlendModeData, ClipSetBlendModeError, ClipSetBlendModeVerb,
 };
+pub use verbs::clip_set_fade::{
+    ClipSetFadeArgs, ClipSetFadeData, ClipSetFadeError, ClipSetFadeVerb,
+};
 pub use verbs::clip_set_opacity::{
     ClipSetOpacityArgs, ClipSetOpacityData, ClipSetOpacityError, ClipSetOpacityVerb,
 };

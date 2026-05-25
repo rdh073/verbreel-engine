@@ -76,6 +76,7 @@ pub mod clip_list;
 pub mod clip_lock;
 pub mod clip_rename;
 pub mod clip_set_blend_mode;
+pub mod clip_set_fade;
 pub mod clip_set_opacity;
 pub mod clip_set_transform;
 pub mod clip_set_volume;
@@ -301,6 +302,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(clip_set_fade::ClipSetFadeVerb))
+        .expect(
+            "ClipSetFadeVerb is the fortieth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(clip_set_transform::ClipSetTransformVerb))
         .expect(
             "ClipSetTransformVerb is the twenty-third registration in \
@@ -432,6 +439,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_lock_fixture(),
         clip_rename_fixture(),
         clip_set_blend_mode_fixture(),
+        clip_set_fade_fixture(),
         clip_set_transform_fixture(),
         clip_set_opacity_fixture(),
         clip_set_volume_fixture(),
@@ -748,6 +756,76 @@ fn clip_set_blend_mode_fixture() -> RecordedEvent {
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `clip.set_fade` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with a single text track and a single
+/// text clip, then sets both fade durations and curves.
+fn clip_set_fade_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa304",
+        "kind": "text",
+        "name": "Text 4",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb304",
+            "name": "Fade Clip",
+            "asset_id": "00000000-0000-0000-0000-000000000000",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+            "text": {
+                "content": "Fade",
+                "font_family": "Arial",
+                "font_size_px": 24
+            },
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+
+    let args = clip_set_fade::ClipSetFadeArgs {
+        project_id,
+        clip: "01900000-0000-7000-8000-0000000bb304".to_string(),
+        fade_in_tk: Some(8_000),
+        fade_out_tk: Some(16_000),
+        fade_in_curve: Some(crate::clip::FadeCurve::Exp),
+        fade_out_curve: Some(crate::clip::FadeCurve::Log),
+    };
+
+    let (patch_value, warnings, _data) = clip_set_fade::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.set_fade patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.set_fade fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.set_fade fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_set_fade::data_envelope_from_post_state(&args, &post_state)
+            .expect("clip.set_fade fixture expected_data"),
+    )
+    .expect("clip.set_fade fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.set_fade".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
         post_state,
         expected_data,
     }
@@ -2899,6 +2977,7 @@ mod tests {
                 "clip.lock",
                 "clip.rename",
                 "clip.set_blend_mode",
+                "clip.set_fade",
                 "clip.set_opacity",
                 "clip.set_transform",
                 "clip.set_volume",
