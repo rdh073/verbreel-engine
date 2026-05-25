@@ -138,6 +138,9 @@ pub use transform::Transform;
 pub use verbs::clip_list::{ClipListArgs, ClipListData, ClipListError, ClipListVerb};
 pub use verbs::clip_lock::{ClipLockArgs, ClipLockData, ClipLockError, ClipLockVerb};
 pub use verbs::clip_rename::{ClipRenameArgs, ClipRenameData, ClipRenameError, ClipRenameVerb};
+pub use verbs::clip_reverse::{
+    ClipReverseArgs, ClipReverseData, ClipReverseError, ClipReverseVerb,
+};
 pub use verbs::clip_set_blend_mode::{
     ClipSetBlendModeArgs, ClipSetBlendModeData, ClipSetBlendModeError, ClipSetBlendModeVerb,
 };
