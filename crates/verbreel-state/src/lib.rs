@@ -135,6 +135,9 @@ pub use text_element::{TextAlign, TextElement};
 pub use track::{Track, TrackKind};
 pub use tracker::Tracker;
 pub use transform::Transform;
+pub use verbs::caption_burn_off::{
+    CaptionBurnOffArgs, CaptionBurnOffData, CaptionBurnOffError, CaptionBurnOffVerb,
+};
 pub use verbs::clip_duplicate::{
     ClipDuplicateArgs, ClipDuplicateData, ClipDuplicateError, ClipDuplicateVerb, SiblingDuplicate,
 };
