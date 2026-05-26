@@ -95,9 +95,11 @@ pub fn compute_patch(
 impl From<RenderQueueStatusError> for VerbError {
     fn from(value: RenderQueueStatusError) -> Self {
         match value {
-            RenderQueueStatusError::QueueJobNotFound { .. } => VerbError::BadArgs {
-                detail: value.to_string(),
-            },
+            // QueueJobNotFound is a runtime-state error (queue miss), not an
+            // arg-shape failure. Mapping to Custom keeps validate_command (§1.4)
+            // honest: BadArgs there means "args malformed" and would mis-report
+            // well-formed {project_id, queue_job_id} as invalid.
+            RenderQueueStatusError::QueueJobNotFound { .. } => VerbError::Custom(value.to_string()),
         }
     }
 }

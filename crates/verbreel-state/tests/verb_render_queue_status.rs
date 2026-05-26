@@ -178,9 +178,10 @@ fn patch_is_empty_via_verb_trait_when_compute_patch_errors() {
             &json!({ "project_id": FIXTURE_PROJECT_ID, "queue_job_id": A_VALID_V7 }),
         )
         .expect_err("v1 floor: verb always errors");
-    // Confirm we got the mapped E_QUEUE_JOB_NOT_FOUND via BadArgs.
-    let VerbError::BadArgs { detail } = err else {
-        panic!("expected BadArgs, got {err:?}");
+    // Confirm we got the mapped E_QUEUE_JOB_NOT_FOUND via Custom (runtime
+    // state error, not arg-shape — keeps validate_command (§1.4) honest).
+    let VerbError::Custom(detail) = err else {
+        panic!("expected Custom, got {err:?}");
     };
     assert!(
         detail.contains("E_QUEUE_JOB_NOT_FOUND"),
@@ -259,8 +260,8 @@ fn verb_trait_surface_lookup_via_default_registry() {
         )
         .expect_err("v1 floor: always errors");
 
-    let VerbError::BadArgs { detail } = err else {
-        panic!("expected BadArgs, got {err:?}");
+    let VerbError::Custom(detail) = err else {
+        panic!("expected Custom, got {err:?}");
     };
     assert!(detail.contains("E_QUEUE_JOB_NOT_FOUND"));
 }
