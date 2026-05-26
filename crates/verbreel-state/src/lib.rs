@@ -257,6 +257,10 @@ pub use verbs::project_set_metadata::{
 pub use verbs::schema::{
     SchemaArgs, SchemaData, SchemaError as SchemaVerbError, SchemaTarget, SchemaVerb,
 };
+pub use verbs::stock_list_providers::{
+    Provider, ProviderKind, StockListProvidersArgs, StockListProvidersData,
+    StockListProvidersError, StockListProvidersVerb, StockMediaKind,
+};
 pub use verbs::text_add::{
     StyleArg, TextAddArgs, TextAddData, TextAddError, TextAddVerb, W_TEXT_ADD_ENVELOPE_CODE,
 };
