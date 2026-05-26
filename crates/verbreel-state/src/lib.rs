@@ -278,6 +278,10 @@ pub use verbs::render_queue_list::{
 pub use verbs::render_queue_status::{
     RenderQueueStatusArgs, RenderQueueStatusError, RenderQueueStatusVerb,
 };
+pub use verbs::render_status::{
+    RenderJobError, RenderJobState, RenderStatusArgs, RenderStatusData, RenderStatusError,
+    RenderStatusVerb,
+};
 pub use verbs::schema::{
     SchemaArgs, SchemaData, SchemaError as SchemaVerbError, SchemaTarget, SchemaVerb,
 };
