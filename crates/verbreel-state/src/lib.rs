@@ -135,6 +135,9 @@ pub use text_element::{TextAlign, TextElement};
 pub use track::{Track, TrackKind};
 pub use tracker::Tracker;
 pub use transform::Transform;
+pub use verbs::clip_duplicate::{
+    ClipDuplicateArgs, ClipDuplicateData, ClipDuplicateError, ClipDuplicateVerb, SiblingDuplicate,
+};
 pub use verbs::clip_list::{ClipListArgs, ClipListData, ClipListError, ClipListVerb};
 pub use verbs::clip_lock::{ClipLockArgs, ClipLockData, ClipLockError, ClipLockVerb};
 pub use verbs::clip_move::{ClipMoveArgs, ClipMoveData, ClipMoveError, ClipMoveVerb};
