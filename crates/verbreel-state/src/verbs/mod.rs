@@ -103,6 +103,7 @@ pub mod effect_remove;
 pub mod effect_reorder;
 pub mod effect_set_param;
 pub mod effect_toggle;
+pub mod font_list;
 pub mod help;
 pub mod keyframe_add;
 pub mod keyframe_list;
@@ -165,6 +166,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `effect.reorder` (§6.6)
 /// - `effect.set_param` (§6.3)
 /// - `effect.toggle` (§6.4)
+/// - `font.list` (§7.5)
 /// - `text.animate` (§7.4)
 /// - `text.edit` (§7.2)
 /// - `text.style` (§7.3)
@@ -581,6 +583,10 @@ pub fn default_registry() -> VerbRegistry {
             "StockListProvidersVerb is the sixty-seventh registration in \
              default_registry(); cannot collide with prior verbs",
         );
+    registry.register(Arc::new(font_list::FontListVerb)).expect(
+        "FontListVerb is the sixty-eighth registration in \
+             default_registry(); cannot collide with prior verbs",
+    );
     registry
 }
 
@@ -663,6 +669,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         validate_command_fixture(),
         schema_fixture(),
         stock_list_providers_fixture(),
+        font_list_fixture(),
     ]
 }
 
@@ -5160,6 +5167,36 @@ fn stock_list_providers_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `font.list` fixture used by [`default_fixtures`].
+///
+/// `font.list` ignores project state, so the prior is just the empty
+/// synthetic project and the patch is empty. Expected data comes from
+/// a forward `compute_patch` against that same prior — currently an
+/// empty `fonts` list per the v1 floor.
+fn font_list_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = font_list::FontListArgs { project_id };
+
+    let (patch_value, _warnings, data) = font_list::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid font.list data");
+    let expected_data =
+        serde_json::to_value(&data).expect("font.list fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "font.list".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5244,6 +5281,7 @@ mod tests {
                 "effect.reorder",
                 "effect.set_param",
                 "effect.toggle",
+                "font.list",
                 "help",
                 "keyframe.add",
                 "keyframe.list",
