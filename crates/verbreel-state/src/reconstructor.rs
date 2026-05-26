@@ -308,6 +308,15 @@ impl VerbRegistry {
         verbs.sort_unstable();
         verbs
     }
+
+    /// Iterate over `(verb_id, verb)` pairs in unspecified order.
+    ///
+    /// Callers that need a deterministic order must sort by the verb
+    /// id themselves; this iterator reflects the underlying
+    /// [`HashMap`] order.
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, Arc<dyn Verb>)> + '_ {
+        self.map.iter().map(|(k, v)| (*k, Arc::clone(v)))
+    }
 }
 
 /// A recorded event exercised against the startup gate.
