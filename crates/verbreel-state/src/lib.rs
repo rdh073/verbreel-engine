@@ -215,6 +215,10 @@ pub use verbs::marker_remove::{
     MARKERS_MAX_BATCH, MarkerRemoveArgs, MarkerRemoveData, MarkerRemoveError, MarkerRemoveVerb,
 };
 pub use verbs::marker_set::{MarkerSetArgs, MarkerSetData, MarkerSetError, MarkerSetVerb};
+pub use verbs::project_info::{
+    ProjectInfoArgs, ProjectInfoCanvas, ProjectInfoData, ProjectInfoError, ProjectInfoTrackCounts,
+    ProjectInfoVerb,
+};
 pub use verbs::project_rename::{
     PROJECT_NAME_MAX, PROJECT_NAME_MIN, ProjectRenameArgs, ProjectRenameData, ProjectRenameError,
     ProjectRenameVerb,
