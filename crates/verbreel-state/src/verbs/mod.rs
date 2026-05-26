@@ -87,6 +87,7 @@ pub mod clip_set_volume;
 pub mod clip_split;
 pub mod clip_trim;
 pub mod clip_unlink;
+pub mod effect_add;
 pub mod effect_list_available;
 pub mod effect_remove;
 pub mod effect_reorder;
@@ -375,6 +376,12 @@ pub fn default_registry() -> VerbRegistry {
          default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(effect_add::EffectAddVerb))
+        .expect(
+            "EffectAddVerb is the fiftieth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(effect_list_available::EffectListAvailableVerb))
         .expect(
             "EffectListAvailableVerb is the twenty-seventh registration in \
@@ -515,6 +522,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_duplicate_fixture(),
         clip_list_fixture(),
         clip_unlink_fixture(),
+        effect_add_fixture(),
         effect_list_available_fixture(),
         effect_remove_fixture(),
         effect_reorder_fixture(),
@@ -2220,6 +2228,75 @@ fn effect_toggle_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `effect.add` fixture used by
+/// [`default_fixtures`].
+fn effect_add_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa251",
+        "kind": "text",
+        "name": "Text 1",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb251",
+            "name": "Clip 1",
+            "asset_id": "00000000-0000-0000-0000-000000000000",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+            "text": {
+                "content": "Hello",
+                "font_family": "Arial",
+                "font_size_px": 24,
+            },
+            "effects": [],
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+
+    let args = effect_add::EffectAddArgs {
+        project_id,
+        target: "clip:01900000-0000-7000-8000-0000000bb251".to_string(),
+        kind: "blur".to_string(),
+        params: None,
+        in_tk: None,
+        out_tk: None,
+    };
+
+    let (patch_value, warnings, _data) = effect_add::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid effect.add patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("effect.add fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("effect.add fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        effect_add::data_envelope_from_args_warnings(&args, &warnings)
+            .expect("effect.add fixture expected_data"),
+    )
+    .expect("effect.add fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "effect.add".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
 /// Build the canonical `effect.list_available` fixture used by
 /// [`default_fixtures`].
 fn effect_list_available_fixture() -> RecordedEvent {
@@ -3897,6 +3974,7 @@ mod tests {
                 "clip.split",
                 "clip.trim",
                 "clip.unlink",
+                "effect.add",
                 "effect.list_available",
                 "effect.remove",
                 "effect.reorder",
