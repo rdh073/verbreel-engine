@@ -119,6 +119,7 @@ pub mod project_set_canvas;
 pub mod project_set_fps;
 pub mod project_set_metadata;
 pub mod schema;
+pub mod stock_list_providers;
 pub mod text_add;
 pub mod text_animate;
 pub mod text_edit;
@@ -575,6 +576,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
     );
     registry
+        .register(Arc::new(stock_list_providers::StockListProvidersVerb))
+        .expect(
+            "StockListProvidersVerb is the sixty-seventh registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -655,6 +662,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         help_fixture(),
         validate_command_fixture(),
         schema_fixture(),
+        stock_list_providers_fixture(),
     ]
 }
 
@@ -5122,6 +5130,36 @@ fn schema_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `stock.list_providers` fixture used by
+/// [`default_fixtures`].
+///
+/// `stock.list_providers` ignores project state, so the prior is just
+/// the empty synthetic project and the patch is empty. Expected data
+/// comes from a forward `compute_patch` against that same prior.
+fn stock_list_providers_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = stock_list_providers::StockListProvidersArgs { project_id };
+
+    let (patch_value, _warnings, data) = stock_list_providers::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid stock.list_providers data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("stock.list_providers fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "stock.list_providers".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5222,6 +5260,7 @@ mod tests {
                 "project.set_fps",
                 "project.set_metadata",
                 "schema",
+                "stock.list_providers",
                 "text.add",
                 "text.animate",
                 "text.edit",
