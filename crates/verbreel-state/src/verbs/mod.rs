@@ -136,6 +136,7 @@ pub mod track_reorder;
 pub mod track_set_pan;
 pub mod track_set_volume;
 pub mod track_solo;
+pub mod tracker_list;
 pub mod validate_command;
 
 /// Synthetic `UUIDv7` used as the `project_id` in [`default_fixtures`].
@@ -588,6 +589,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
     );
     registry
+        .register(Arc::new(tracker_list::TrackerListVerb))
+        .expect(
+            "TrackerListVerb is the sixty-ninth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -670,6 +677,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         schema_fixture(),
         stock_list_providers_fixture(),
         font_list_fixture(),
+        tracker_list_fixture(),
     ]
 }
 
@@ -5197,6 +5205,38 @@ fn font_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `tracker.list` fixture used by
+/// [`default_fixtures`].
+///
+/// Exercises the empty-trackers path — `Project.trackers: []`. The
+/// verb iterates the placeholder vec, so the empty path is
+/// structurally complete (the loop body never runs and the envelope
+/// resolves to `{trackers: []}`). Mirrors the `font.list` v1-floor
+/// fixture which also resolves to an empty list.
+fn tracker_list_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = tracker_list::TrackerListArgs { project_id };
+
+    let (patch_value, _warnings, data) = tracker_list::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid tracker.list data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("tracker.list fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "tracker.list".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5314,6 +5354,7 @@ mod tests {
                 "track.set_pan",
                 "track.set_volume",
                 "track.solo",
+                "tracker.list",
                 "validate_command",
             ]
         );

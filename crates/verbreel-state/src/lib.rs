@@ -298,6 +298,10 @@ pub use verbs::track_set_volume::{
 pub use verbs::track_solo::{
     DEFAULT_SOLO, TrackSoloArgs, TrackSoloData, TrackSoloError, TrackSoloVerb,
 };
+pub use verbs::tracker_list::{
+    TrackerCacheStatus, TrackerEntry, TrackerListArgs, TrackerListData, TrackerListError,
+    TrackerListVerb,
+};
 pub use verbs::validate_command::{
     SchemaError, ValidateCommandArgs, ValidateCommandData, ValidateCommandError,
     ValidateCommandVerb,
