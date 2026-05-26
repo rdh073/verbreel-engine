@@ -107,6 +107,7 @@ pub mod marker_add;
 pub mod marker_list;
 pub mod marker_remove;
 pub mod marker_set;
+pub mod project_info;
 pub mod project_rename;
 pub mod project_set_canvas;
 pub mod project_set_fps;
@@ -161,6 +162,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `keyframe.list` (§8.4)
 /// - `keyframe.remove` (§8.2)
 /// - `keyframe.set` (§8.3)
+/// - `project.info` (§2.4)
 /// - `project.set_metadata` (§2.12)
 /// - `project.set_canvas` (§2.10)
 /// - `project.set_fps` (§2.11)
@@ -509,6 +511,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(project_info::ProjectInfoVerb))
+        .expect(
+            "ProjectInfoVerb is the fifty-seventh registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -579,6 +587,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         keyframe_remove_fixture(),
         keyframe_set_fixture(),
         track_remove_fixture(),
+        project_info_fixture(),
     ]
 }
 
@@ -3240,6 +3249,46 @@ fn asset_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `project.info` fixture used by [`default_fixtures`].
+///
+/// Starts from the synthetic empty project (no tracks, no assets) and
+/// exercises the read-only summary envelope. The reconstructor must
+/// rebuild the same envelope from `(args, post_state)` alone — both
+/// deferred fields (`path = ""`, `event_count = 0`) are emitted as
+/// constants so the round-trip is trivially pure.
+fn project_info_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = project_info::ProjectInfoArgs { project_id };
+
+    let (patch_value, _warnings, data) = project_info::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid project.info data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("project.info fixture expected_data serializes to Value");
+
+    // Assert the envelope round-trips through data_envelope_from_post_state
+    // — this mirrors the asset_list_fixture shape but for project.info.
+    let round_trip = project_info::data_envelope_from_post_state(&args, &prior)
+        .expect("project.info round-trip via data_envelope_from_post_state");
+    assert_eq!(
+        data, round_trip,
+        "project.info fixture envelope must round-trip through reconstructor helper"
+    );
+
+    RecordedEvent {
+        verb: "project.info".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Build the canonical `keyframe.add` fixture used by [`default_fixtures`].
 ///
 /// Starts from a synthetic project with one video clip, then appends one
@@ -4593,6 +4642,7 @@ mod tests {
                 "marker.list",
                 "marker.remove",
                 "marker.set",
+                "project.info",
                 "project.rename",
                 "project.set_canvas",
                 "project.set_fps",
