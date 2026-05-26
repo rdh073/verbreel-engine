@@ -107,6 +107,7 @@ pub mod keyframe_add;
 pub mod keyframe_list;
 pub mod keyframe_remove;
 pub mod keyframe_set;
+pub mod list_capabilities;
 pub mod marker_add;
 pub mod marker_list;
 pub mod marker_remove;
@@ -551,6 +552,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(list_capabilities::ListCapabilitiesVerb))
+        .expect(
+            "ListCapabilitiesVerb is the sixty-third registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -627,6 +634,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         track_remove_fixture(),
         project_info_fixture(),
         timeline_snapshot_fixture(),
+        list_capabilities_fixture(),
     ]
 }
 
@@ -4957,6 +4965,36 @@ fn track_set_pan_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `list_capabilities` fixture used by
+/// [`default_fixtures`].
+///
+/// `list_capabilities` ignores project state, so the prior is just the
+/// empty synthetic project and the patch is empty. The expected data
+/// comes from a forward `compute_patch` against that same prior.
+fn list_capabilities_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = list_capabilities::ListCapabilitiesArgs { project_id };
+
+    let (patch_value, _warnings, data) = list_capabilities::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid list_capabilities data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("list_capabilities fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "list_capabilities".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5045,6 +5083,7 @@ mod tests {
                 "keyframe.list",
                 "keyframe.remove",
                 "keyframe.set",
+                "list_capabilities",
                 "marker.add",
                 "marker.list",
                 "marker.remove",
