@@ -212,6 +212,7 @@ pub use verbs::effect_set_param::{
 pub use verbs::effect_toggle::{
     EffectToggleArgs, EffectToggleData, EffectToggleError, EffectToggleVerb,
 };
+pub use verbs::help::{HelpArgs, HelpData, HelpError, HelpVerb, VerbDoc};
 pub use verbs::keyframe_list::{
     KeyframeListArgs, KeyframeListData, KeyframeListError, KeyframeListVerb,
 };
