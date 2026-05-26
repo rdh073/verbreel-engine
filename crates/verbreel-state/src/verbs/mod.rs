@@ -72,6 +72,7 @@ use verbreel_types::Tick;
 pub mod asset_list;
 pub mod asset_remove;
 pub mod audio_fade;
+pub mod audio_volume;
 pub mod caption_burn_in;
 pub mod caption_burn_off;
 pub mod caption_edit;
@@ -458,6 +459,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(audio_volume::AudioVolumeVerb))
+        .expect(
+            "AudioVolumeVerb is the sixtieth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(keyframe_list::KeyframeListVerb))
         .expect(
             "KeyframeListVerb is the twenty-ninth registration in \
@@ -599,6 +606,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         asset_list_fixture(),
         asset_remove_fixture(),
         audio_fade_fixture(),
+        audio_volume_fixture(),
         keyframe_add_fixture(),
         keyframe_list_fixture(),
         keyframe_remove_fixture(),
@@ -3428,6 +3436,95 @@ fn audio_fade_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `audio.volume` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with one audio track and one audio
+/// clip, then exercises the `clip:` dispatch branch with an explicit
+/// `gain` value so reconstruction reads the post-state volume.
+fn audio_volume_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let asset_id = "01900000-0000-7000-8000-0000000cc902";
+    let clip_id = "01900000-0000-7000-8000-0000000bb902";
+
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": asset_id,
+            "kind": "audio",
+            "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+            "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.m4a",
+            "original_filename": "audio-volume.m4a",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 480_000,
+                "audio_codec": "aac",
+                "audio_channels": 2,
+                "audio_sample_rate_hz": 48_000,
+                "container": "m4a",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("audio.volume fixture asset parses"),
+    );
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa902",
+        "kind": "audio",
+        "name": "Audio 10",
+        "locked": false,
+        "clips": [{
+            "id": clip_id,
+            "name": "Volume Clip",
+            "asset_id": asset_id,
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+
+    let args = audio_volume::AudioVolumeArgs {
+        project_id,
+        target: format!("clip:{clip_id}"),
+        gain: Some(0.75),
+        db: None,
+    };
+
+    let (patch_value, warnings, _data) = audio_volume::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid audio.volume patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("audio.volume fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("audio.volume fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        audio_volume::data_envelope_from_post_state(&args, &post_state)
+            .expect("audio.volume fixture expected_data"),
+    )
+    .expect("audio.volume fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "audio.volume".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
 /// Build the canonical `project.info` fixture used by [`default_fixtures`].
 ///
 /// Starts from the synthetic empty project (no tracks, no assets) and
@@ -4787,6 +4884,7 @@ mod tests {
                 "asset.list",
                 "asset.remove",
                 "audio.fade",
+                "audio.volume",
                 "caption.burn_in",
                 "caption.burn_off",
                 "caption.edit",
