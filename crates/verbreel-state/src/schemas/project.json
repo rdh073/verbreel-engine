@@ -1,0 +1,694 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://verbreel.dev/schemas/v1/project.schema.json",
+  "title": "Verbreel Project",
+  "description": "Canonical, JSON-serializable representation of an Verbreel project. The GUI, CLI, and MCP server all read and write this exact shape through the headless engine. All time values are integer ticks at a fixed rate of 240,000 Hz — chosen as the LCM of every supported frame rate's denominator so every common rate (23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60 fps) lands on integer tick boundaries (see §0.2 for the worked table and rationale). IDs are UUIDv7 (RFC 9562). Colors are RGBA hex.",
+  "type": "object",
+  "required": [
+    "id",
+    "schema_version",
+    "tick_rate_hz",
+    "name",
+    "created_at",
+    "updated_at",
+    "canvas",
+    "fps_num",
+    "fps_den",
+    "duration_tk",
+    "tracks",
+    "assets"
+  ],
+  "properties": {
+    "id": { "$ref": "#/$defs/Uuid" },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+      "description": "SemVer 2.0.0 (semver.org/#backusnaur-form-grammar-for-valid-semver-versions). Accepts pre-release (`1.0.0-beta.1`, `2.0.0-rc.3`) and build-metadata (`1.0.0+build.5`, `1.2.3-beta.1+exp.sha.5114f85`) suffixes. The engine declares the supported range via `list_capabilities`; documents outside that range fail with E_SCHEMA_VERSION_UNSUPPORTED before schema validation runs. Pre-release versions are typically rejected by stable engines (the supported range is something like `>=1.0.0 <2.0.0` excluding pre-releases by SemVer's precedence rules); development engines can opt in with a wider range."
+    },
+    "tick_rate_hz": {
+      "type": "integer",
+      "const": 240000,
+      "description": "Ticks per second. Pinned to 240000 in schema_version 1.x. Future schemas may change this; carrying the value per-project makes migration unambiguous."
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "canvas": { "$ref": "#/$defs/Canvas" },
+    "fps_num": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Numerator of the project frame rate. Use 30000/1001 for NTSC 29.97, 60000/1001 for 59.94, 24000/1001 for 23.976."
+    },
+    "fps_den": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "duration_tk": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Effective timeline duration in ticks (240,000 ticks/sec). Derived from clip extents; persisted for fast load."
+    },
+    "tracks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/Track" },
+      "description": "Ordered top-down within each kind block. Index 0 of the video block is rendered last (top). Mixing for audio is additive across all unmuted tracks. Engine maintains kind-grouping: tracks of the same kind are contiguous in this array."
+    },
+    "assets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Asset" },
+      "description": "Content-addressed source media catalog for this project. Each entry records its `Asset.id`, `kind`, `hash`, `path` (relative to the project root, `assets/<aa>/<sha256>.<ext>`), and metadata. Clips reference assets by `Clip.asset_id`. Engine maintains uniqueness on `Asset.hash` (a file imported twice yields one record); record removal is `asset.remove` (which refuses when any clip references the asset)."
+    },
+    "markers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Marker" },
+      "default": []
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "maxProperties": 256,
+      "description": "Free-form key/value bag for tool-specific metadata. Engine ignores it at render / mutation time, but enforces two size caps to prevent unbounded growth: at most 256 top-level keys (this schema rule), and the serialized JSON of `Project.metadata` MUST be ≤ 65536 bytes (64 KiB) — enforced by the engine on `project.open` and on every `project.set_metadata` call. Over-cap documents fail with `E_SCHEMA_VIOLATION` (`details.field: \"/metadata\"`, `details.size_bytes`, `details.cap_bytes: 65536`). The cap exists to prevent cumulative growth via many small writes ending in a multi-megabyte metadata bag that bloats `project.save` and `project.open`. The cap is per-project; agents needing more space should store the data in a sidecar file under `assets/` (treat as opaque content-addressed media) or in their own external store and reference it from `metadata` by URI / hash. **Null-value semantics divergence**: per `project.set_metadata` (§2.12), passing `metadata: { key: null }` is interpreted as 'remove the key' — so a hand-edited project that legitimately stores a `null` value cannot round-trip through `set_metadata` without losing the entry. Persist `null` only by hand-editing the JSON directly (or by writing a sentinel string like `\"\\u0000\"` that the agent's higher-level layer interprets); the args-vs-storage divergence is the same pattern as `text.style`'s `shadow: null` rule (§7.3). The engine itself does not interpret stored `null` values — they are passed through as-is."
+    },
+    "last_saved_event_id": {
+      "anyOf": [
+        { "$ref": "#/$defs/Uuid" },
+        { "type": "null" }
+      ],
+      "default": null,
+      "description": "UUIDv7 of the most recent event whose patch is reflected in this on-disk `project.json` snapshot. `null` for a freshly-`project.create`'d project with no mutations yet saved. Updated by `project.save` immediately before the snapshot is written. Consumed by `project.open`'s load workflow (§2.2): events in `events.jsonl` whose `id` sorts strictly after this value are replayed against the snapshot. Optional in the schema for backwards compatibility with pre-v1.0 documents; engine treats absent or `null` as 'replay every event from the start of the log,' correct but slower."
+    },
+    "trackers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Tracker" },
+      "default": [],
+      "description": "Tracker records (v1.1-additive per §0.16 / §18.2). One entry per `tracker.create` call. Optional at the root level; a `1.0.x` document need not declare the field, and a `1.1.x` document with no trackers writes `[]`. v1.0 engines reading a document whose `schema_version` is `1.1.0` or higher with a non-empty `trackers[]` fail with `E_SCHEMA_VERSION_UNSUPPORTED` per §0.16; a `1.0.0`-declared document carrying the field passes `additionalProperties` validation on a v1.0 engine (the field is ignored) and is interpreted by v1.1 engines."
+    }
+  },
+  "additionalProperties": false,
+
+  "$defs": {
+    "Uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUIDv7 (RFC 9562). Lowercase. **Strict — UUIDv7 only**: the version nibble (first char of the third group, pinned to `7` in the regex) rejects UUIDv1/v2/v3/v4/v5/v6/v8 as well as the nil UUID. Readers familiar with the looser UUIDv4-style patterns common in other specs should note that pasting a v4 here fails schema validation; Verbreel requires v7's time-ordering property for event-log replay determinism. Every entity ID (Project, Track, Clip, Asset, Effect, Keyframe, Marker, event_id, link_group) uses this def. The nil-allowed sentinel form lives in `AssetRef` (below) and is only valid in places this document explicitly names."
+    },
+    "AssetRef": {
+      "type": "string",
+      "pattern": "^(00000000-0000-0000-0000-000000000000|[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
+      "description": "A UUIDv7 reference to an Asset.id, OR the nil UUID `00000000-0000-0000-0000-000000000000` (RFC 9562 §5.9) when the referencing clip is a text clip and therefore carries no asset. Used only by `Clip.asset_id`. Engines never mint the nil UUID for any other field; round-tripping a document through the engine never converts a non-nil AssetRef to nil or vice versa without an explicit user mutation (text↔non-text clip conversion is not supported in v1 — clips are created on the correct track from the start)."
+    },
+
+    "Color": {
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{8}$",
+      "description": "RGBA hex with explicit alpha. Always 8 hex digits, e.g. '#ff8800ff' or '#FF8800FF'. The pattern accepts either case so CLI users can type the form they prefer; the engine **normalizes to lowercase on persist** (every `project.save` and every patch op that writes a Color field rewrites it lowercase). In-memory and on-disk forms are therefore always lowercase; the case-insensitive pattern exists purely as an input convenience."
+    },
+
+    "Canvas": {
+      "type": "object",
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 16, "maximum": 8192 },
+        "height": { "type": "integer", "minimum": 16, "maximum": 8192 },
+        "background": {
+          "$ref": "#/$defs/Color",
+          "default": "#000000ff"
+        },
+        "pixel_aspect_num": { "type": "integer", "minimum": 1, "default": 1 },
+        "pixel_aspect_den": { "type": "integer", "minimum": 1, "default": 1 }
+      },
+      "additionalProperties": false
+    },
+
+    "Track": {
+      "type": "object",
+      "required": ["id", "kind", "name", "clips"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "kind": {
+          "enum": ["video", "audio", "text", "effect"],
+          "description": "Track kind. Examples: `video` — holds video clips (decoded frames composited onto the canvas); a video track may also carry track-level `effects[]` such as a color grade or LUT that apply across all clips on it. `audio` — holds audio clips (sample streams mixed into the master); track-level `effects[]` here are bus-style processors (a track-wide compressor or EQ). `text` — holds text clips (overlay caption clips, lower-thirds); track-level `effects[]` are typography or animation modifiers that affect every text clip on the track. `effect` — adjustment-layer track; carries **only** track-level `effects[]` (the `clips` array MUST be empty per §0.13). Effect tracks let an agent apply a global LUT or color-correct across the entire canvas without attaching it to individual clips. The disambiguation between *a video track with effects* and *an effect-kind track* is the `kind` field — `kind: \"effect\"` declares the track's purpose; `kind: \"video\" + effects: [...]` declares clip-bearing track that also carries track-level effects."
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "clips": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Clip" },
+          "description": "Clips on this track. Engine enforces that clip intervals on the same track do not overlap. Always empty when kind='effect'."
+        },
+        "muted": { "type": "boolean", "default": false },
+        "solo": { "type": "boolean", "default": false },
+        "locked": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, mutating verbs that target this track or any of its clips return E_LOCKED."
+        },
+        "hidden": { "type": "boolean", "default": false },
+        "volume": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 4,
+          "default": 1,
+          "description": "Linear gain. Only applies to audio tracks; ignored on video/text/effect."
+        },
+        "pan": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1,
+          "default": 0,
+          "description": "Stereo pan: -1 hard left, +1 hard right. Audio tracks only."
+        },
+        "effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Effect" },
+          "default": [],
+          "description": "Track-level effects (adjustment layers). Applied after all clip-level effects on this track."
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "Clip": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "asset_id",
+        "track_position_tk",
+        "source_in_tk",
+        "source_out_tk"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "asset_id": {
+          "$ref": "#/$defs/AssetRef",
+          "description": "References an Asset.id in this project's assets[]. For text-track clips (where `text` is set), this field carries the nil UUID `00000000-0000-0000-0000-000000000000` as a structural sentinel — the schema's required-field invariant is preserved without minting a fake asset."
+        },
+        "track_position_tk": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Start of this clip on the timeline, in ticks (240000/sec)."
+        },
+        "source_in_tk": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Start of the source media slice this clip displays. For video and audio clips, the in-point of the source-time slice (in ticks). For image and text clips, the engine **pins this to 0** on every write — image clips have no source time (they are still images displayed for `source_out_tk` ticks); text clips have no source asset at all (their `asset_id` is the nil-UUID sentinel — see §0.13). A hand-edited `project.json` carrying a non-zero `source_in_tk` on an image or text clip is silently **normalized to 0** by `project.open`'s reconciliation pass (one `W_CLIP_SOURCE_IN_NORMALIZED` warning per affected clip with `details.clip_id` and `details.from_value`). The schema permits any non-negative integer to keep validation permissive of hand-edits; engine enforcement is what guarantees the invariant."
+        },
+        "source_out_tk": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "End of the source slice (exclusive). Engine invariant: source_out_tk > source_in_tk. For image assets and text clips, this is the *display* duration in ticks."
+        },
+        "speed": {
+          "type": "number",
+          "minimum": 0.001,
+          "maximum": 100,
+          "default": 1,
+          "description": "Playback speed multiplier. Range `[0.001, 100]` — the positive lower bound prevents the §0.13 host-limit overflow where `(source_out_tk - source_in_tk) / speed > Number.MAX_SAFE_INTEGER` for arbitrarily small factors. At factor 0.001 (1000× slowdown), a source of up to ~9 × 10^12 ticks (≈37,000 years at 240 kHz) still fits the 53-bit integer range. Timeline duration = ceil((source_out_tk - source_in_tk) / speed). Audio pitch changes with speed unless a time_stretch effect is attached. The args-schema validator rejects out-of-range factors with `E_SCHEMA_VIOLATION` before the engine's §0.13 runtime check fires (the engine check is defense-in-depth; agents only need to handle `E_SCHEMA_VIOLATION`)."
+        },
+        "reversed": { "type": "boolean", "default": false },
+        "transform": { "$ref": "#/$defs/Transform" },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1 },
+        "volume": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 4,
+          "default": 1,
+          "description": "Per-clip linear gain. Multiplied with track.volume."
+        },
+        "fade_in_tk": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Engine invariant: fade_in_tk + fade_out_tk <= clip's timeline duration."
+        },
+        "fade_out_tk": { "type": "integer", "minimum": 0, "default": 0 },
+        "fade_in_curve": {
+          "enum": ["linear", "exp", "log"],
+          "default": "linear",
+          "description": "Fade-in interpolation curve. Applies to audio gain (and video opacity when used on a video clip). The enum values are Verbreel-level identifiers, not ffmpeg curve names. The engine's render pipeline maps them to ffmpeg `afade=curve=` values as follows (frozen for engine schema_version 1.x — the v1 engine pins these mappings so cross-build renders with `deterministic: true` produce the same audio gain envelope regardless of the linked ffmpeg's curve enum): linear → `tri` (triangular / true linear ramp); exp → `esin` (exponential sine — closest to a true exponential rise/fall in afade's enum; ffmpeg removed a literal `exp` curve in 4.x); log → `log` (logarithmic). Engines linked against an ffmpeg build that lacks any of these three target curves fail `list_capabilities` validation at startup — the v1 engine refuses to run rather than silently substituting a different curve."
+        },
+        "fade_out_curve": {
+          "enum": ["linear", "exp", "log"],
+          "default": "linear"
+        },
+        "effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Effect" },
+          "default": []
+        },
+        "keyframes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Keyframe" },
+          "default": []
+        },
+        "text": {
+          "$ref": "#/$defs/TextElement",
+          "description": "Present when this clip lives on a text track. `asset_id` is set to the zero-UUID for text clips."
+        },
+        "locked": { "type": "boolean", "default": false },
+        "link_group": {
+          "$ref": "#/$defs/Uuid",
+          "description": "All clips sharing a link_group UUID move and trim as a unit, symmetrically: a mutation on any member propagates to every other member. Engine-managed: auto-set by `clip.add` when placing a video-with-audio source, propagated by `clip.split`/`clip.duplicate`, and cleared by `clip.unlink` or automatically when group population drops to 1 (a lone surviving clip has no peers to link to). Hand-edited link_group UUIDs are reconciled at next mutation; a singleton group is cleared on contact."
+        },
+        "blend_mode": {
+          "enum": ["normal", "multiply", "screen", "overlay", "soft-light", "hard-light", "darken", "lighten", "difference", "color-dodge", "color-burn"],
+          "default": "normal",
+          "description": "**v1.1-additive field** (see §0.16). Per-clip compositor blend mode applied after `Clip.opacity` when this clip is layered against the underlying canvas / lower-track clips. v1.0 engines (without this field) treat every clip as `\"normal\"` straight alpha-over composite — the v1.1 default. **Render-time scope**: observable on video / image / text clips (every kind whose render output composites into the canvas). Inert on audio clips — the field is permitted on every kind for forward compatibility, parallel to `Clip.volume`'s any-kind permissiveness, but the audio renderer ignores it; `clip.set_blend_mode` against an audio clip succeeds with `W_BLEND_MODE_INERT_ON_AUDIO`. v1.1+ engines reading a 1.0 document treat absent `blend_mode` as `\"normal\"`. See §5.18."
+        },
+        "mask": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["kind", "params"],
+              "properties": {
+                "kind": { "enum": ["rect", "ellipse", "polygon", "asset"] },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "Per-kind params bag. Schema is permissive (`additionalProperties: true`) so each kind's nested shape is validated by the engine rather than the JSON Schema layer (matching `Effect.params`'s pattern). Expected shapes — rect: `{x, y, w, h}` (clip pixels, `w > 0`, `h > 0`); ellipse: `{cx, cy, rx, ry}` (clip pixels, `rx > 0`, `ry > 0`); polygon: `{points: [[x, y], ...]}` (3 ≤ vertices ≤ 256); asset: `{asset_id: <image-asset-uuidv7>, threshold?: number}` where `threshold ∈ [0, 1]` when present. Engine-side bounds violations surface as `E_MASK_INVALID_PARAMS` per §5.19."
+                },
+                "feather_px": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 0,
+                  "description": "Gaussian-style edge feather in clip pixels; `0` disables feathering."
+                },
+                "inverted": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "When true, flips the mask's pass / block regions."
+                }
+              },
+              "additionalProperties": false
+            }
+          ],
+          "default": null,
+          "description": "**v1.1-additive field** (see §0.16). Optional shape- or asset-driven alpha mask applied to the clip's render output before compositing into the canvas. v1.0 engines (without this field) composite the full clip rectangle. Mask alpha multiplies with `Clip.opacity` at the per-pixel compositor stage; mask coordinates are in clip-pixel space and move/scale with `Clip.transform`. Mask applies after `Clip.effects[]` (track-level effects compose with the mask as the chain runs); advanced effects (e.g. `chroma_key`) may opt into pre-mask input via their registered params. v1.1+ engines reading a 1.0 document treat absent `mask` as `null` (no mask applied). See §5.19."
+        },
+        "speed_curve": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "required": ["time_tk", "factor"],
+            "properties": {
+              "time_tk": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Source-time-relative tick measured from `Clip.source_in_tk` — `0` is the first source tick, `source_out_tk - source_in_tk` is the last. NOT timeline-relative."
+              },
+              "factor": {
+                "type": "number",
+                "minimum": 0.001,
+                "maximum": 100,
+                "description": "Multiplier applied on top of `Clip.speed` at this control point. Range matches `Clip.speed`'s `[0.001, 100]` bound."
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "**v1.1-additive field** (see §0.16). Optional non-uniform speed-ramp layered on top of `Clip.speed` (the scalar base rate). Control points MUST have strictly monotonic-ascending `time_tk` (source-time-relative). The instantaneous rate at source tick `t` is `Clip.speed * curve_lookup(t)`, where `curve_lookup` linearly interpolates between consecutive points (held at the boundary value for `t` outside the curve's `time_tk` range per §5.20). v1.0 engines (without this field) render at the scalar `Clip.speed` only — the v1.0 fallback. **Effective `Clip.timeline_duration_tk`** is recomputed from the closed-form integral `ceil(∫(1 / (Clip.speed * curve(t))) dt)` over the source range at every read; the integrated value MUST be ≤ `Number.MAX_SAFE_INTEGER` per §0.13's overflow invariant (the engine rejects calls that would overflow with `E_BAD_TIME`). This field does NOT violate the §0.13 'time-domain fields are not keyframable' invariant — the curve is evaluated by integration at patch-computation time, not by render-time interpolation, so the derived duration remains a pure function of `(source range, scalar speed, curve)`. Forbidden on text and image clips (the §0.13 `Clip.speed == 1` invariant on those kinds extends to forbidding non-absent `speed_curve`); engine rejects with `E_CLIP_KIND_MISMATCH`. Propagated across audio members of a link group (parallel to `time_stretch` per §5.7 / §5.15). See §5.20."
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "Transform": {
+      "type": "object",
+      "description": "2D affine transform applied to the clip's render output, in canvas pixels.",
+      "properties": {
+        "x": { "type": "number", "default": 0 },
+        "y": { "type": "number", "default": 0 },
+        "scale_x": { "type": "number", "default": 1 },
+        "scale_y": { "type": "number", "default": 1 },
+        "rotation_deg": { "type": "number", "default": 0 },
+        "anchor_x": {
+          "type": "number",
+          "default": 0.5,
+          "description": "Normalized anchor inside the clip (0=left, 1=right)."
+        },
+        "anchor_y": {
+          "type": "number",
+          "default": 0.5,
+          "description": "Normalized anchor inside the clip (0=top, 1=bottom)."
+        },
+        "skew_x_deg": { "type": "number", "default": 0 },
+        "skew_y_deg": { "type": "number", "default": 0 },
+        "flip_h": { "type": "boolean", "default": false },
+        "flip_v": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+
+    "Effect": {
+      "type": "object",
+      "required": ["id", "kind", "params"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Registered effect kind. See `effect.list_available`. Examples: 'blur', 'lut', 'eq', 'reverb', 'chroma_key', 'time_stretch', 'burned_caption', 'denoise', 'transition.crossfade'. **Three managed kinds with special semantics** (do not mutate via raw `effect.*` verbs — see §6.2): `time_stretch` is owned by `clip.set_speed --preserve_pitch` and propagated across audio members of link groups (§5.7, §5.15); `burned_caption` is owned by `caption.burn_in` and removed via `caption.burn_off` (§10.4, §10.5); `denoise` is owned by `audio.denoise` and removed via `audio.denoise --strength 0` (§9.4). Raw `effect.remove` / `effect.set_param` on any of these returns `E_EFFECT_MANAGED`."
+        },
+        "enabled": { "type": "boolean", "default": true },
+        "params": {
+          "type": "object",
+          "additionalProperties": true,
+          "maxProperties": 64,
+          "description": "Effect-specific parameters. Intentionally permissive at the project-schema level (additionalProperties: true) — per-effect schemas are registered with the engine and fetched via `effect.list_available` / `schema --target effect --name <kind>` (see §1.2, §6.5). Validated at `effect.add` / `effect.set_param` time against the registered schema for `kind`; mismatches surface as E_EFFECT_BAD_PARAMS. **Size cap**: at most 64 top-level keys (this schema rule), and the serialized JSON of any single `Effect.params` object MUST be ≤ 16384 bytes (16 KiB) — enforced by the engine on every `effect.add`/`effect.set_param` and on `project.open`. Over-cap documents fail with `E_EFFECT_BAD_PARAMS` (`details.size_bytes`, `details.cap_bytes: 16384`). The cap prevents an `effect.set_param` storm from accumulating large opaque blobs and bloating `project.save` — effects that need large reference data should expose a content-addressed asset reference (UUIDv7) instead of inlining the data. **v2 migration note**: bundling per-effect schemas under `$defs.EffectParams.<kind>` for offline validation is on the roadmap — see §0.15."
+        },
+        "in_tk": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Effect start, in the parent's timeline. For clip-attached effects: relative to the parent clip's track_position_tk. For track-attached effects: absolute project time. **Paired with `out_tk`**: both must be present together, or both absent (omit both for full duration of the parent). The schema's `dependentRequired` enforces this — supplying one without the other fails validation with `E_SCHEMA_VIOLATION`."
+        },
+        "out_tk": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Effect end (exclusive). Engine invariant: out_tk > in_tk. Paired with `in_tk` — see that field's description."
+        }
+      },
+      "dependentRequired": {
+        "in_tk": ["out_tk"],
+        "out_tk": ["in_tk"]
+      },
+      "additionalProperties": false
+    },
+
+    "TextElement": {
+      "type": "object",
+      "required": ["content"],
+      "properties": {
+        "content": { "type": "string", "maxLength": 8192 },
+        "font_family": {
+          "type": "string",
+          "default": "Inter",
+          "description": "Resolved against bundled fonts first, then system fonts. See `font.list`."
+        },
+        "font_size_px": { "type": "number", "minimum": 1, "default": 64 },
+        "font_weight": { "type": "integer", "minimum": 100, "maximum": 900, "default": 700 },
+        "italic": { "type": "boolean", "default": false },
+        "color": {
+          "$ref": "#/$defs/Color",
+          "default": "#ffffffff"
+        },
+        "bg_color": { "$ref": "#/$defs/Color" },
+        "stroke_color": { "$ref": "#/$defs/Color" },
+        "stroke_px": { "type": "number", "minimum": 0, "default": 0 },
+        "align": { "enum": ["left", "center", "right"], "default": "center" },
+        "letter_spacing": { "type": "number", "default": 0 },
+        "line_height": { "type": "number", "minimum": 0.5, "default": 1.2 },
+        "shadow": { "$ref": "#/$defs/Shadow" },
+        "padding_px": { "type": "number", "minimum": 0, "default": 0 }
+      },
+      "additionalProperties": false
+    },
+
+    "Shadow": {
+      "type": "object",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/Color",
+          "default": "#000000aa"
+        },
+        "blur_px": { "type": "number", "minimum": 0, "default": 4 },
+        "offset_x": { "type": "number", "default": 0 },
+        "offset_y": { "type": "number", "default": 2 }
+      },
+      "additionalProperties": false
+    },
+
+    "Keyframe": {
+      "type": "object",
+      "required": ["id", "property", "time_tk", "value"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "property": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(transform\\.(x|y|scale_x|scale_y|rotation_deg|anchor_x|anchor_y|skew_x_deg|skew_y_deg)|opacity|volume|mask\\.(feather_px|params\\.(x|y|w|h|cx|cy|rx|ry|threshold))|effects\\[[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\]\\.params(\\.[a-zA-Z_][a-zA-Z0-9_]*)+)$",
+          "description": "Dotted path within the parent **clip** (Keyframes are clip-scoped; the `keyframe.add` API takes `--clip <id>`). The schema's `pattern` constrains the *shape* — one of: a known `Clip.transform.*` leaf (x/y/scale_x/scale_y/rotation_deg/anchor_x/anchor_y/skew_x_deg/skew_y_deg), the `Clip` literals `opacity` / `volume`, a `mask.*` leaf (**v1.1-additive** per §0.16 — `mask.feather_px` plus the per-shape `mask.params.<leaf>` set: rect → `x`/`y`/`w`/`h`; ellipse → `cx`/`cy`/`rx`/`ry`; asset → `threshold`; polygon is deliberately not keyframable at v1.1 because `points[]` is an indexed array — see §8.1's v1 indexed-path limitation), or `effects[<uuidv7>].params.<dotted-path>` where the UUID is a full lowercase UUIDv7 referencing an effect on this clip and the params path is one or more dotted identifier segments. The `mask.*` additions are deliberately **additive** to the v1.0 regex — every v1.0 property path remains valid; the regex expansion adds new accepted forms without removing any. **v1 keyframable-field limitations** (each is a deliberate v1 trade-off; see §0.15 v2 migration notes for the roadmap): (a) Track-only fields (`Track.pan`, `Track.muted`, etc.) are not keyframable — there is no track-keyframe API surface; (b) Clip-level time-domain fields (`speed`, `reversed`, `source_in_tk`, `source_out_tk`, `track_position_tk`) are not keyframable — animating these would invalidate `Project.duration_tk` maintenance and the no-overlap invariant; agents that need speed ramps in v1.1+ use `Clip.speed_curve` (§5.20) which is integrated at patch-computation time and does NOT violate the invariant; (c) **`fade_in_tk` / `fade_out_tk` are not keyframable** — they participate in the §0.13 invariant `fade_in_tk + fade_out_tk ≤ clip timeline duration` which is maintained on write by every duration-shortening verb; allowing keyframe animation of either would let render-time interpolation violate the invariant unpredictably. Agents wanting time-varying fade behavior should keyframe `opacity` (for video) or `volume` (for audio) across the desired window — both are first-class keyframable and produce equivalent visible / audible results without coupling to the fade-curve enum. (d) Indexed `effects[<uuid>].params.gains[0]` paths are not in the v1 regex — only dotted leaf paths are addressable. Multi-band EQ keyframing requires the per-band effect kind to expose dotted-named params (`params.band1_gain` instead of `params.bands[0].gain`) at v1. The same indexed-path rule excludes `mask.params.points[i]` for polygon masks — agents needing polygon vertex animation should call `clip.set_mask` to replace the whole mask between snapshots. The engine additionally enforces **existence** (no dangling effect references — see §0.13; analogous to mask-leaf existence: a `mask.params.cx` keyframe is rejected when the clip's mask kind is `rect`) and **value-type compatibility** (the keyed property's declared type must match `Keyframe.value`), neither of which JSON Schema can express alone."
+        },
+        "time_tk": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Timeline-relative time, measured from the clip's track_position_tk in ticks. Independent of clip.speed and clip.reversed — keyframes describe what happens at time T on the timeline, not in the source media."
+        },
+        "value": {
+          "description": "JSON value matching the target property's type."
+        },
+        "easing": {
+          "enum": ["linear", "ease-in", "ease-out", "ease-in-out", "step", "cubic-bezier"],
+          "default": "linear"
+        },
+        "bezier": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "Required when easing='cubic-bezier'. [x1, y1, x2, y2]. Enforced by the schema's if/then conditional below. **Asymmetry note**: the if/then only enforces *required-when-bezier* — it does not *forbid* `bezier` for other easings (a deliberate v1 permissiveness so hand-edited documents that carry a leftover `bezier` from an easing swap validate without bricking). The engine's render pipeline ignores `bezier` whenever `easing != \"cubic-bezier\"`; agents should not write spurious `bezier` arrays under non-bezier easings because future schema versions may tighten this to a hard rejection (see §0.15). The keyframe.set verb does not strip the spurious array on its own."
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "easing": { "const": "cubic-bezier" } }, "required": ["easing"] },
+          "then": { "required": ["bezier"] }
+        }
+      ]
+    },
+
+    "Marker": {
+      "type": "object",
+      "required": ["id", "time_tk", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "time_tk": { "type": "integer", "minimum": 0 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "color": {
+          "$ref": "#/$defs/Color",
+          "default": "#ffaa00ff"
+        },
+        "note": { "type": "string", "maxLength": 4096 }
+      },
+      "additionalProperties": false
+    },
+
+    "Asset": {
+      "oneOf": [
+        { "$ref": "#/$defs/VideoAsset" },
+        { "$ref": "#/$defs/AudioAsset" },
+        { "$ref": "#/$defs/ImageAsset" },
+        { "$ref": "#/$defs/SubtitleAsset" }
+      ],
+      "description": "Variants are distinguished by their `kind` const field — JSON Schema 2020-12 has no formal `discriminator` keyword (that lives in OpenAPI 3.x), so validators evaluate every `oneOf` branch and exactly one must match. The `kind: const` field is what guarantees disjointness: a video asset cannot satisfy the audio variant's `kind: \"audio\"` const, etc. No parent `type: object` is declared — every variant declares its own; some older Draft-04/07 validators evaluate the parent's `type` before `oneOf` and surface confusing errors."
+    },
+
+    "VideoAsset": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "kind": { "const": "video" },
+        "hash": { "$ref": "#/$defs/Sha256" },
+        "path": { "$ref": "#/$defs/AssetPath" },
+        "original_filename": { "type": "string" },
+        "imported_at": { "type": "string", "format": "date-time" },
+        "metadata": { "$ref": "#/$defs/VideoAssetMetadata" }
+      },
+      "required": ["id", "kind", "hash", "path", "original_filename", "imported_at", "metadata"],
+      "additionalProperties": false
+    },
+    "AudioAsset": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "kind": { "const": "audio" },
+        "hash": { "$ref": "#/$defs/Sha256" },
+        "path": { "$ref": "#/$defs/AssetPath" },
+        "original_filename": { "type": "string" },
+        "imported_at": { "type": "string", "format": "date-time" },
+        "metadata": { "$ref": "#/$defs/AudioAssetMetadata" }
+      },
+      "required": ["id", "kind", "hash", "path", "original_filename", "imported_at", "metadata"],
+      "additionalProperties": false
+    },
+    "ImageAsset": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "kind": { "const": "image" },
+        "hash": { "$ref": "#/$defs/Sha256" },
+        "path": { "$ref": "#/$defs/AssetPath" },
+        "original_filename": { "type": "string" },
+        "imported_at": { "type": "string", "format": "date-time" },
+        "metadata": { "$ref": "#/$defs/ImageAssetMetadata" }
+      },
+      "required": ["id", "kind", "hash", "path", "original_filename", "imported_at", "metadata"],
+      "additionalProperties": false
+    },
+    "SubtitleAsset": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "kind": { "const": "subtitle" },
+        "hash": { "$ref": "#/$defs/Sha256" },
+        "path": { "$ref": "#/$defs/AssetPath" },
+        "original_filename": { "type": "string" },
+        "imported_at": { "type": "string", "format": "date-time" },
+        "metadata": { "$ref": "#/$defs/SubtitleAssetMetadata" }
+      },
+      "required": ["id", "kind", "hash", "path", "original_filename", "imported_at", "metadata"],
+      "additionalProperties": false
+    },
+
+    "Sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of the imported source bytes. Content-addresses the asset on disk."
+    },
+    "AssetPath": {
+      "type": "string",
+      "pattern": "^assets/[0-9a-f]{2}/[0-9a-f]{64}\\.[a-z0-9]+$",
+      "description": "POSIX path relative to project root, always of the form `assets/<aa>/<sha256>.<ext>` (content-addressed layout, see Appendix D). The regex enforces the **layout shape** — two hex chars, slash, sixty-four hex chars, dot, lowercase-alphanumeric extension of one or more characters — which is enough to catch path-escape bugs (`assets/../../etc/passwd`) and malformed paths at schema-validation time. `<ext>` is one or more lowercase alphanumeric chars (matching ffprobe's normalized extension table — typically 2-4 chars in practice, e.g. `mp4`, `mov`, `webm`, `png`, `wav`; the regex permits single-char extensions for forward-compat with future formats). JSON Schema regex cannot encode the additional invariant that the two-hex `<aa>` segment equals the first two characters of `<sha256>`; that check lives in the engine's import path (engines that write an `AssetPath` with a mismatched prefix violate an engine invariant, not the schema). `<ext>` is lowercased at import time."
+    },
+
+    "FileFingerprint": {
+      "type": "object",
+      "required": ["mtime_ms", "size_bytes"],
+      "properties": {
+        "mtime_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "POSIX mtime in milliseconds since epoch, captured at import. The `minimum: 0` constraint forbids pre-epoch timestamps; filesystems with clock skew producing negative `stat.mtime_ms` cause `asset.import` to record `0` (and surface a `W_ASSET_FINGERPRINT_CLAMPED` warning at import time so the agent knows the fingerprint is degraded). Engines that observe a negative on-disk `mtime_ms` during a fingerprint *check* treat the asset as `unverified` rather than rejecting the project, so a clock-skew incident does not orphan an entire project on re-open."
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Source file size at import. Engine uses (mtime_ms, size_bytes) as a fast-check on project.open; full SHA-256 verify is gated behind --strict."
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "VideoAssetMetadata": {
+      "type": "object",
+      "required": ["duration_tk", "width", "height", "fps_num", "fps_den", "video_codec", "container", "fingerprint"],
+      "properties": {
+        "duration_tk": { "type": "integer", "minimum": 1 },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "fps_num": { "type": "integer", "minimum": 1 },
+        "fps_den": { "type": "integer", "minimum": 1 },
+        "video_codec": { "type": "string" },
+        "audio_codec": { "type": "string" },
+        "audio_channels": { "type": "integer", "minimum": 1 },
+        "audio_sample_rate_hz": { "type": "integer", "minimum": 1 },
+        "bitrate_bps": { "type": "integer", "minimum": 0 },
+        "color_space": { "type": "string" },
+        "color_primaries": { "type": "string" },
+        "container": { "type": "string" },
+        "has_alpha": { "type": "boolean" },
+        "rotation_deg": {
+          "type": "integer",
+          "enum": [0, 90, 180, 270],
+          "description": "EXIF/container rotation. The engine applies this on decode; clips reference upright video."
+        },
+        "fingerprint": { "$ref": "#/$defs/FileFingerprint" }
+      },
+      "additionalProperties": false
+    },
+    "AudioAssetMetadata": {
+      "type": "object",
+      "required": ["duration_tk", "audio_codec", "audio_channels", "audio_sample_rate_hz", "container", "fingerprint"],
+      "properties": {
+        "duration_tk": { "type": "integer", "minimum": 1 },
+        "audio_codec": { "type": "string" },
+        "audio_channels": { "type": "integer", "minimum": 1 },
+        "audio_sample_rate_hz": { "type": "integer", "minimum": 1 },
+        "bitrate_bps": { "type": "integer", "minimum": 0 },
+        "container": { "type": "string" },
+        "fingerprint": { "$ref": "#/$defs/FileFingerprint" }
+      },
+      "additionalProperties": false
+    },
+    "ImageAssetMetadata": {
+      "type": "object",
+      "required": ["width", "height", "container", "fingerprint"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "container": {
+          "type": "string",
+          "description": "Image format: 'png', 'jpg', 'webp', 'avif', 'gif'."
+        },
+        "has_alpha": { "type": "boolean" },
+        "color_space": { "type": "string" },
+        "rotation_deg": { "type": "integer", "enum": [0, 90, 180, 270] },
+        "fingerprint": { "$ref": "#/$defs/FileFingerprint" }
+      },
+      "additionalProperties": false,
+      "description": "Images have no intrinsic duration. Clips set source_out_tk to the desired display duration."
+    },
+    "SubtitleAssetMetadata": {
+      "type": "object",
+      "required": ["container", "fingerprint"],
+      "properties": {
+        "container": {
+          "type": "string",
+          "description": "Subtitle format: 'srt', 'vtt', 'ass'."
+        },
+        "language": {
+          "type": "string",
+          "description": "BCP 47 language tag, e.g. 'en', 'en-US', 'id'."
+        },
+        "segment_count": { "type": "integer", "minimum": 0 },
+        "fingerprint": { "$ref": "#/$defs/FileFingerprint" }
+      },
+      "additionalProperties": false
+    },
+    "Tracker": {
+      "type": "object",
+      "required": ["id", "source_clip_id", "algorithm", "params", "cache_hash", "sample_count", "applied_to_clip_ids", "created_at"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Uuid" },
+        "source_clip_id": { "$ref": "#/$defs/Uuid", "description": "The clip this tracker analyzes. The engine does NOT hard-fail subsequent `project.open` calls if the clip is deleted — the tracker becomes orphaned and `tracker.list` surfaces `source_clip_exists: false` (see §18.4)." },
+        "algorithm": {
+          "type": "string",
+          "description": "Tracker algorithm kind. Engine-registered set per §18.6; v1.1 ships `object`, `face`, `optical_flow`. `hands` is reserved for v1.x. The schema accepts any string so a future engine can introduce new algorithms without a schema bump; the engine's `tracker.create` validates against the runtime-registered set via `E_TRACKER_UNKNOWN_ALGORITHM`."
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Algorithm-specific params blob. Validated by the engine against the algorithm's per-kind schema at `tracker.create` time; the JSON Schema layer is permissive (`additionalProperties: true`) the same way `Effect.params` is."
+        },
+        "cache_hash": {
+          "type": "string",
+          "description": "SHA-256 hex of the §18.7 cache key, or the empty string until first `tracker.run`. When non-empty, the engine writes the trace to `cache/trackers/<first-16-hex>.json`. Engines observing a non-empty `cache_hash` but no corresponding `cache/trackers/<first-16-hex>.json` file (operator cleanup, disk failure, cross-machine migration) treat the tracker as in dangling-cache state — see §18.2 and §18.4 for the per-verb recovery contract."
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": -1,
+          "description": "Total trace samples produced by the last successful `tracker.run`. `-1` until first run."
+        },
+        "applied_to_clip_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Uuid" },
+          "default": [],
+          "description": "Every clip id that has received a `tracker.apply` from this tracker, deduplicated, ordered by first apply. Maintained by `tracker.apply` and `tracker.remove`."
+        },
+        "created_at": { "type": "string", "format": "date-time" },
+        "last_run_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of the most recent successful `tracker.run`. Absent until first run; set by every successful run thereafter."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Tracker record (v1.1-additive per §18). One entry per `tracker.create` call, immutable except for the `cache_hash` / `sample_count` / `last_run_at` / `applied_to_clip_ids` bookkeeping fields written by `tracker.run` and `tracker.apply`."
+    }
+  }
+}
