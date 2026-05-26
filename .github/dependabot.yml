@@ -1,0 +1,45 @@
+version: 2
+updates:
+  # GitHub Actions — version drift on actions/checkout, dtolnay/rust-toolchain, etc.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "ci"
+    groups:
+      gha-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Cargo — Rust workspace deps, Cargo.lock at root.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "rust"
+    # Group routine bumps so it's not 30 PRs/week.
+    # Major bumps stay separate (one PR each, easier to review).
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+      cargo-dev-dependencies:
+        dependency-type: development
