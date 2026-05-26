@@ -119,6 +119,7 @@ pub mod text_add;
 pub mod text_animate;
 pub mod text_edit;
 pub mod text_style;
+pub mod timeline_snapshot;
 pub mod track_add;
 pub mod track_hide;
 pub mod track_lock;
@@ -539,6 +540,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(timeline_snapshot::TimelineSnapshotVerb))
+        .expect(
+            "TimelineSnapshotVerb is the sixty-first registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -613,6 +620,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         keyframe_set_fixture(),
         track_remove_fixture(),
         project_info_fixture(),
+        timeline_snapshot_fixture(),
     ]
 }
 
@@ -3565,6 +3573,60 @@ fn project_info_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `timeline.snapshot` fixture used by
+/// [`default_fixtures`].
+///
+/// Starts from the synthetic empty project with a non-`None`
+/// `last_saved_event_id` so the fixture exercises the "saved project"
+/// branch — `event_id == last_saved_event_id.to_string()` — rather than
+/// the `"empty"` sentinel branch. The reconstructor must rebuild the
+/// same envelope from `(args, post_state)` alone; for a read-only verb
+/// the patch is `[]` and the post-state equals the pre-state, so the
+/// round-trip is trivially pure.
+fn timeline_snapshot_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let saved_event_id: verbreel_types::EventId = "0190b8d3-15e3-7000-bd00-0000e0e0aa01"
+        .parse()
+        .expect("hard-coded fixture event id is a valid v7");
+    prior.last_saved_event_id = Some(saved_event_id);
+
+    let args = timeline_snapshot::TimelineSnapshotArgs { project_id };
+
+    let (patch_value, _warnings, data) = timeline_snapshot::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid timeline.snapshot data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("timeline.snapshot fixture expected_data serializes to Value");
+
+    // Sanity: the fixture exercises the saved-project branch.
+    assert_eq!(
+        data.event_id,
+        saved_event_id.to_string(),
+        "timeline.snapshot fixture must report event_id == last_saved_event_id"
+    );
+
+    // Round-trip via the reconstructor helper to mirror project.info's
+    // fixture-builder shape.
+    let round_trip = timeline_snapshot::data_envelope_from_post_state(&args, &prior)
+        .expect("timeline.snapshot round-trip via data_envelope_from_post_state");
+    assert_eq!(
+        data, round_trip,
+        "timeline.snapshot fixture envelope must round-trip through reconstructor helper"
+    );
+
+    RecordedEvent {
+        verb: "timeline.snapshot".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Build the canonical `keyframe.add` fixture used by [`default_fixtures`].
 ///
 /// Starts from a synthetic project with one video clip, then appends one
@@ -4930,6 +4992,7 @@ mod tests {
                 "text.animate",
                 "text.edit",
                 "text.style",
+                "timeline.snapshot",
                 "track.add",
                 "track.hide",
                 "track.lock",
