@@ -71,7 +71,7 @@ fn happy_path_returns_all_thirteen_v1_fields() {
     assert_eq!(data.tick_rate_hz, 240_000);
     assert!(!data.verbs.is_empty());
     assert!(!data.effects.is_empty());
-    assert!(data.render_presets.is_empty());
+    assert_eq!(data.render_presets.len(), 8);
     assert!(data.caption_languages.is_empty());
     assert!(data.caption_engine.is_empty());
     assert!(data.caption_models.is_empty());
@@ -166,10 +166,14 @@ fn engine_version_is_non_empty() {
 }
 
 #[test]
-fn render_presets_is_empty() {
+fn render_presets_advertises_bundled_set() {
     let prior = empty_project();
     let (_, _, data) = compute_patch(&prior, &args()).expect("happy path");
-    assert_eq!(data.render_presets, Vec::<String>::new());
+    // Wired through to render.list_presets bundle (§11.4) so agents probing
+    // capabilities see the available presets per §1.5 discovery contract.
+    assert_eq!(data.render_presets.len(), 8);
+    assert!(data.render_presets.contains(&"youtube-1080p".to_string()));
+    assert!(data.render_presets.contains(&"prores-master".to_string()));
 }
 
 #[test]

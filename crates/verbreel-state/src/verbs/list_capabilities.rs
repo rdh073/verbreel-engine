@@ -153,7 +153,10 @@ fn build_data() -> ListCapabilitiesData {
         tick_rate_hz: u64::from(verbreel_types::TICK_RATE_HZ),
         verbs: collect_verb_entries(),
         effects: collect_effect_entries(),
-        render_presets: Vec::new(),
+        render_presets: super::render_list_presets::bundled_presets()
+            .into_iter()
+            .map(|p| p.name)
+            .collect(),
         caption_languages: Vec::new(),
         caption_engine: String::new(),
         caption_models: Vec::new(),

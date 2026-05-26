@@ -119,6 +119,7 @@ pub mod project_rename;
 pub mod project_set_canvas;
 pub mod project_set_fps;
 pub mod project_set_metadata;
+pub mod render_list_presets;
 pub mod render_queue_cancel;
 pub mod render_queue_clear;
 pub mod render_queue_list;
@@ -637,6 +638,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(render_list_presets::RenderListPresetsVerb))
+        .expect(
+            "RenderListPresetsVerb is the seventy-sixth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -726,6 +733,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         render_queue_clear_fixture(),
         render_queue_status_fixture(),
         render_queue_cancel_fixture(),
+        render_list_presets_fixture(),
     ]
 }
 
@@ -5587,6 +5595,34 @@ fn render_queue_cancel_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `render.list_presets` fixture used by
+/// [`default_fixtures`].
+fn render_list_presets_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = render_list_presets::RenderListPresetsArgs {
+        project_id: Some(project_id),
+    };
+
+    let (patch_value, _warnings, data) = render_list_presets::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid render.list_presets data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("render.list_presets fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "render.list_presets".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5687,6 +5723,7 @@ mod tests {
                 "project.set_canvas",
                 "project.set_fps",
                 "project.set_metadata",
+                "render.list_presets",
                 "render.queue.cancel",
                 "render.queue.clear",
                 "render.queue.list",
