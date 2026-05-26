@@ -265,6 +265,9 @@ pub use verbs::render_queue_list::{
     QueueEntry, QueueJobState, QueueStateFilter, RenderQueueListArgs, RenderQueueListData,
     RenderQueueListError, RenderQueueListVerb,
 };
+pub use verbs::render_queue_status::{
+    RenderQueueStatusArgs, RenderQueueStatusError, RenderQueueStatusVerb,
+};
 pub use verbs::schema::{
     SchemaArgs, SchemaData, SchemaError as SchemaVerbError, SchemaTarget, SchemaVerb,
 };

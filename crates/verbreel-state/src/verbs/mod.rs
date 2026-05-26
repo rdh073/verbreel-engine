@@ -121,6 +121,7 @@ pub mod project_set_fps;
 pub mod project_set_metadata;
 pub mod render_queue_clear;
 pub mod render_queue_list;
+pub mod render_queue_status;
 pub mod schema;
 pub mod stock_list_providers;
 pub mod text_add;
@@ -623,6 +624,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(render_queue_status::RenderQueueStatusVerb))
+        .expect(
+            "RenderQueueStatusVerb is the seventy-fourth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -710,6 +717,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         tracker_remove_fixture(),
         render_queue_list_fixture(),
         render_queue_clear_fixture(),
+        render_queue_status_fixture(),
     ]
 }
 
@@ -5505,6 +5513,39 @@ fn render_queue_clear_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `render.queue.status` fixture used by
+/// [`default_fixtures`].
+///
+/// `render.queue.status` always errors with `E_QUEUE_JOB_NOT_FOUND` in
+/// the v1 floor (the queue persistence file is never read; see the
+/// module-level doc on `verbs::render_queue_status`). No successful
+/// event can ever be recorded, so the reconstructor's input tuple
+/// carries no semantically-meaningful payload — the verb's
+/// `reconstruct()` exercises args-deserialization and returns
+/// `Value::Null` to satisfy the §0.8 gate. The fixture records
+/// `expected_data: null` so the gate's canonical-SHA equality holds.
+fn render_queue_status_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = render_queue_status::RenderQueueStatusArgs {
+        project_id,
+        queue_job_id: "0190b8d3-15e3-7000-bd00-0000feedbeef".to_string(),
+    };
+
+    RecordedEvent {
+        verb: "render.queue.status".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5607,6 +5648,7 @@ mod tests {
                 "project.set_metadata",
                 "render.queue.clear",
                 "render.queue.list",
+                "render.queue.status",
                 "schema",
                 "stock.list_providers",
                 "text.add",
