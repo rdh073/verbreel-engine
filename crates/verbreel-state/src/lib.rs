@@ -257,6 +257,9 @@ pub use verbs::project_set_metadata::{
 // (a per-entry struct shipped earlier in the meta arc). Both types stay
 // reachable; the schema-verb error keeps its in-module spec-aligned
 // name.
+pub use verbs::render_queue_cancel::{
+    RenderQueueCancelArgs, RenderQueueCancelData, RenderQueueCancelError, RenderQueueCancelVerb,
+};
 pub use verbs::render_queue_clear::{
     CONFIRM_HINT, QueueClearStateFilter, RenderQueueClearArgs, RenderQueueClearData,
     RenderQueueClearError, RenderQueueClearVerb,
