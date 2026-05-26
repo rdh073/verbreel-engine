@@ -169,6 +169,7 @@ pub use verbs::clip_split::{
 };
 pub use verbs::clip_trim::{ClipTrimArgs, ClipTrimData, ClipTrimError, ClipTrimVerb};
 pub use verbs::clip_unlink::{ClipUnlinkArgs, ClipUnlinkData, ClipUnlinkError, ClipUnlinkVerb};
+pub use verbs::effect_add::{EffectAddArgs, EffectAddData, EffectAddError, EffectAddVerb};
 pub use verbs::effect_list_available::{
     AvailableEffect, EffectCategory, EffectListAvailableArgs, EffectListAvailableData,
     EffectListAvailableError, EffectListAvailableVerb,

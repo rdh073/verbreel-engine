@@ -84,6 +84,23 @@ pub enum EffectListAvailableError {
 /// ## Returns
 ///
 /// Entries are sorted lexicographically by `kind`.
+pub const V1_EFFECT_KINDS: &[&str] = &[
+    "blur",
+    "burned_caption",
+    "chroma_key",
+    "color_correct",
+    "compressor",
+    "crop",
+    "denoise",
+    "eq",
+    "lut",
+    "reverb",
+    "time_stretch",
+    "transition.crossfade",
+    "transition.dip_to_black",
+    "transition.wipe",
+];
+
 const BUNDLED_EFFECTS: &[(&str, &str, &str, &str)] = &[
     (
         "blur",
