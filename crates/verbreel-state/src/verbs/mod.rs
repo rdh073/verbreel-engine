@@ -84,6 +84,7 @@ pub mod clip_set_blend_mode;
 pub mod clip_set_fade;
 pub mod clip_set_mask;
 pub mod clip_set_opacity;
+pub mod clip_set_speed_curve;
 pub mod clip_set_transform;
 pub mod clip_set_volume;
 pub mod clip_split;
@@ -350,6 +351,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(clip_set_speed_curve::ClipSetSpeedCurveVerb))
+        .expect(
+            "ClipSetSpeedCurveVerb is the fifty-second registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(clip_set_transform::ClipSetTransformVerb))
         .expect(
             "ClipSetTransformVerb is the twenty-third registration in \
@@ -522,6 +529,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_set_blend_mode_fixture(),
         clip_set_fade_fixture(),
         clip_set_mask_fixture(),
+        clip_set_speed_curve_fixture(),
         clip_set_transform_fixture(),
         clip_set_opacity_fixture(),
         clip_set_volume_fixture(),
@@ -1276,6 +1284,101 @@ fn clip_set_mask_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "clip.set_mask".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `clip.set_speed_curve` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with a single video track and clip, then
+/// assigns a valid 2-point speed curve.
+fn clip_set_speed_curve_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa306",
+        "kind": "video",
+        "name": "Video 6",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb306",
+            "name": "Speed Curve Clip",
+            "asset_id": "01900000-0000-7000-8000-0000000cc306",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": "01900000-0000-7000-8000-0000000cc306",
+            "kind": "video",
+            "hash": "43ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+            "path": "assets/43/43ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.mp4",
+            "original_filename": "video-clip-set-speed-curve.mp4",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 480_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("clip.set_speed_curve fixture asset parses"),
+    );
+
+    let args = clip_set_speed_curve::ClipSetSpeedCurveArgs {
+        project_id,
+        clip: "01900000-0000-7000-8000-0000000bb306".to_string(),
+        points: Some(vec![
+            crate::clip::SpeedCurvePoint {
+                time_tk: Tick::new(0),
+                factor: 1.0,
+            },
+            crate::clip::SpeedCurvePoint {
+                time_tk: Tick::new(480_000),
+                factor: 2.0,
+            },
+        ]),
+    };
+
+    let (patch_value, warnings, _data) = clip_set_speed_curve::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.set_speed_curve patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.set_speed_curve fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.set_speed_curve fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_set_speed_curve::data_envelope_from_post_state(&args, &post_state)
+            .expect("clip.set_speed_curve fixture expected_data"),
+    )
+    .expect("clip.set_speed_curve fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.set_speed_curve".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings,
@@ -4105,6 +4208,7 @@ mod tests {
                 "clip.set_fade",
                 "clip.set_mask",
                 "clip.set_opacity",
+                "clip.set_speed_curve",
                 "clip.set_transform",
                 "clip.set_volume",
                 "clip.split",
