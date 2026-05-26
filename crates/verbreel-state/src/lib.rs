@@ -129,6 +129,7 @@ pub use verbs::asset_remove::{
     AssetRemoveArgs, AssetRemoveData, AssetRemoveError, AssetRemoveVerb,
     W_ASSET_REMOVE_ENVELOPE_CODE,
 };
+pub use verbs::audio_fade::{AudioFadeArgs, AudioFadeData, AudioFadeError, AudioFadeVerb};
 // Deprecated alias kept for one slice cycle (Slice B3 rename). Down-
 // stream crates pinned to `VerbReconstructor` keep compiling; new code
 // MUST use `Verb`.

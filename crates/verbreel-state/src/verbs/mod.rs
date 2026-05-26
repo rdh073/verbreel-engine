@@ -71,6 +71,7 @@ use verbreel_types::Tick;
 
 pub mod asset_list;
 pub mod asset_remove;
+pub mod audio_fade;
 pub mod caption_burn_in;
 pub mod caption_burn_off;
 pub mod caption_edit;
@@ -451,6 +452,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(audio_fade::AudioFadeVerb))
+        .expect(
+            "AudioFadeVerb is the fifty-ninth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(keyframe_list::KeyframeListVerb))
         .expect(
             "KeyframeListVerb is the twenty-ninth registration in \
@@ -591,6 +598,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         effect_toggle_fixture(),
         asset_list_fixture(),
         asset_remove_fixture(),
+        audio_fade_fixture(),
         keyframe_add_fixture(),
         keyframe_list_fixture(),
         keyframe_remove_fixture(),
@@ -3329,6 +3337,97 @@ fn asset_remove_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `audio.fade` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with a single audio track holding a
+/// single audio clip, then sets both fade durations and curves.
+fn audio_fade_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let asset_id = "01900000-0000-7000-8000-0000000cc901";
+    let clip_id = "01900000-0000-7000-8000-0000000bb901";
+
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": asset_id,
+            "kind": "audio",
+            "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+            "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.m4a",
+            "original_filename": "audio-fade.m4a",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 480_000,
+                "audio_codec": "aac",
+                "audio_channels": 2,
+                "audio_sample_rate_hz": 48_000,
+                "container": "m4a",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("audio.fade fixture asset parses"),
+    );
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa901",
+        "kind": "audio",
+        "name": "Audio 9",
+        "locked": false,
+        "clips": [{
+            "id": clip_id,
+            "name": "Fade Clip",
+            "asset_id": asset_id,
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+
+    let args = audio_fade::AudioFadeArgs {
+        project_id,
+        clip: clip_id.to_string(),
+        fade_in_tk: Some(8_001),
+        fade_out_tk: Some(16_001),
+        curve: None,
+        curve_in: Some(crate::clip::FadeCurve::Exp),
+        curve_out: Some(crate::clip::FadeCurve::Log),
+    };
+
+    let (patch_value, warnings, _data) = audio_fade::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid audio.fade patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("audio.fade fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("audio.fade fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        audio_fade::data_envelope_from_post_state(&args, &post_state)
+            .expect("audio.fade fixture expected_data"),
+    )
+    .expect("audio.fade fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "audio.fade".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
 /// Build the canonical `project.info` fixture used by [`default_fixtures`].
 ///
 /// Starts from the synthetic empty project (no tracks, no assets) and
@@ -4687,6 +4786,7 @@ mod tests {
             vec![
                 "asset.list",
                 "asset.remove",
+                "audio.fade",
                 "caption.burn_in",
                 "caption.burn_off",
                 "caption.edit",
