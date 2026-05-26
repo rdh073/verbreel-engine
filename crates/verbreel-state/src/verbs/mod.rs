@@ -70,6 +70,7 @@ use crate::reconstructor::{RecordedEvent, VerbRegistry};
 use verbreel_types::Tick;
 
 pub mod asset_list;
+pub mod caption_burn_in;
 pub mod caption_burn_off;
 pub mod caption_edit;
 pub use caption_burn_off::*;
@@ -461,6 +462,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(caption_burn_in::CaptionBurnInVerb))
+        .expect(
+            "CaptionBurnInVerb is the fifty-fifth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(caption_burn_off::CaptionBurnOffVerb))
         .expect(
             "CaptionBurnOffVerb is the fifty-first registration in \
@@ -520,6 +527,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         text_animate_fixture(),
         text_edit_fixture(),
         caption_edit_fixture(),
+        caption_burn_in_fixture(),
         caption_burn_off_fixture(),
         text_style_fixture(),
         marker_add_fixture(),
@@ -686,6 +694,124 @@ fn caption_edit_fixture() -> RecordedEvent {
     let mut fixture = text_edit_fixture();
     fixture.verb = "caption.edit".to_string();
     fixture
+}
+
+/// Build the canonical `caption.burn_in` fixture used by
+/// [`default_fixtures`].
+///
+/// Starts from a text track with one text clip and a video track with
+/// one video clip fully overlapping the text-clip range, then exercises
+/// the create-new path emitting exactly one `burned_caption` effect.
+#[allow(clippy::too_many_lines)]
+fn caption_burn_in_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let text_track_id = "01900000-0000-7000-8000-0000000aa161";
+    let video_track_id = "01900000-0000-7000-8000-0000000aa162";
+    let text_clip_id = "01900000-0000-7000-8000-0000000bb161";
+    let video_clip_id = "01900000-0000-7000-8000-0000000bb162";
+    let video_asset_id = "01900000-0000-7000-8000-0000000cc161";
+
+    prior
+        .assets
+        .push(serde_json::from_value(json!({
+            "id": video_asset_id,
+            "kind": "video",
+            "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+            "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.mp4",
+            "original_filename": "caption-burn-in.mp4",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 240_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("caption.burn_in fixture asset parses"));
+
+    let text_track = json!({
+        "id": text_track_id,
+        "kind": "text",
+        "name": "Captions",
+        "locked": false,
+        "clips": [{
+            "id": text_clip_id,
+            "name": "Caption Clip",
+            "asset_id": "00000000-0000-0000-0000-000000000000",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 240_000,
+            "locked": false,
+            "text": {
+                "content": "Caption",
+                "font_family": "Arial",
+                "font_size_px": 24,
+            },
+        }],
+    });
+    let video_track = json!({
+        "id": video_track_id,
+        "kind": "video",
+        "name": "Video",
+        "locked": false,
+        "clips": [{
+            "id": video_clip_id,
+            "name": "Shot",
+            "asset_id": video_asset_id,
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 240_000,
+            "locked": false,
+            "effects": [],
+        }],
+    });
+    prior
+        .tracks
+        .push(serde_json::from_value(text_track).expect("text track fixture parses"));
+    prior
+        .tracks
+        .push(serde_json::from_value(video_track).expect("video track fixture parses"));
+    prior.duration_tk = Tick::new(240_000);
+
+    let args = caption_burn_in::CaptionBurnInArgs {
+        project_id,
+        text_track: text_track_id.to_string(),
+        style: None,
+    };
+
+    let (patch_value, warnings, _data) = caption_burn_in::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid caption.burn_in patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("caption.burn_in fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("caption.burn_in fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        caption_burn_in::data_envelope_from_warnings(&warnings)
+            .expect("caption.burn_in fixture expected_data"),
+    )
+    .expect("caption.burn_in fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "caption.burn_in".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
 }
 
 /// Build the canonical `caption.burn_off` fixture used by
@@ -4343,6 +4469,7 @@ mod tests {
             report.verbs_checked,
             vec![
                 "asset.list",
+                "caption.burn_in",
                 "caption.burn_off",
                 "caption.edit",
                 "clip.delete",

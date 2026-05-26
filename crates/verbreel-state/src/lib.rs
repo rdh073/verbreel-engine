@@ -135,6 +135,10 @@ pub use text_element::{TextAlign, TextElement};
 pub use track::{Track, TrackKind};
 pub use tracker::Tracker;
 pub use transform::Transform;
+pub use verbs::caption_burn_in::{
+    CaptionBurnInArgs, CaptionBurnInData, CaptionBurnInError, CaptionBurnInVerb,
+    W_CAPTION_BURN_DEDUP_CODE, W_CAPTION_BURN_IN_ENVELOPE_CODE,
+};
 pub use verbs::caption_burn_off::{
     CaptionBurnOffArgs, CaptionBurnOffData, CaptionBurnOffError, CaptionBurnOffVerb,
 };
