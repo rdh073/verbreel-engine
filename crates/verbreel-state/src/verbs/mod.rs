@@ -96,6 +96,7 @@ pub mod clip_set_volume;
 pub mod clip_split;
 pub mod clip_trim;
 pub mod clip_unlink;
+pub mod describe;
 pub mod effect_add;
 pub mod effect_list_available;
 pub mod effect_remove;
@@ -405,6 +406,10 @@ pub fn default_registry() -> VerbRegistry {
             "ClipUnlinkVerb is the twenty-fifth registration in \
          default_registry(); cannot collide with prior verbs",
         );
+    registry.register(Arc::new(describe::DescribeVerb)).expect(
+        "DescribeVerb is the sixty-second registration in \
+             default_registry(); cannot collide with prior verbs",
+    );
     registry
         .register(Arc::new(effect_add::EffectAddVerb))
         .expect(
@@ -604,6 +609,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_duplicate_fixture(),
         clip_list_fixture(),
         clip_unlink_fixture(),
+        describe_fixture(),
         effect_add_fixture(),
         effect_list_available_fixture(),
         effect_remove_fixture(),
@@ -3573,6 +3579,65 @@ fn project_info_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `describe` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with one audio asset and exercises
+/// the `asset:<UUID>` lookup branch — the simplest happy path that
+/// doesn't require constructing a clip + track + asset chain. The
+/// reconstructor must rebuild the same `{kind, entity}` envelope from
+/// `(args, post_state)` alone; for a read-only verb the patch is `[]`
+/// and the post-state equals the pre-state.
+fn describe_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let asset_id = "01900000-0000-7000-8000-0000000cca01";
+
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": asset_id,
+            "kind": "audio",
+            "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+            "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.m4a",
+            "original_filename": "describe.m4a",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 240_000,
+                "audio_codec": "aac",
+                "audio_channels": 2,
+                "audio_sample_rate_hz": 48_000,
+                "container": "m4a",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 512,
+                }
+            }
+        }))
+        .expect("describe fixture asset parses"),
+    );
+
+    let args = describe::DescribeArgs {
+        project_id,
+        target: format!("asset:{asset_id}"),
+    };
+
+    let (patch_value, _warnings, data) = describe::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid describe data");
+    let expected_data =
+        serde_json::to_value(&data).expect("describe fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "describe".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Build the canonical `timeline.snapshot` fixture used by
 /// [`default_fixtures`].
 ///
@@ -4969,6 +5034,7 @@ mod tests {
                 "clip.split",
                 "clip.trim",
                 "clip.unlink",
+                "describe",
                 "effect.add",
                 "effect.list_available",
                 "effect.remove",
