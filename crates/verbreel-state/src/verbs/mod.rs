@@ -74,6 +74,7 @@ pub mod caption_burn_in;
 pub mod caption_burn_off;
 pub mod caption_edit;
 pub use caption_burn_off::*;
+pub mod clip_add;
 pub mod clip_delete;
 pub mod clip_duplicate;
 pub mod clip_list;
@@ -371,6 +372,10 @@ pub fn default_registry() -> VerbRegistry {
             "ClipSetTransformVerb is the twenty-third registration in \
              default_registry(); cannot collide with prior verbs",
         );
+    registry.register(Arc::new(clip_add::ClipAddVerb)).expect(
+        "ClipAddVerb is the fifty-sixth registration in \
+             default_registry(); cannot collide with prior verbs",
+    );
     registry
         .register(Arc::new(clip_delete::ClipDeleteVerb))
         .expect(
@@ -557,6 +562,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_set_volume_fixture(),
         clip_split_fixture(),
         clip_trim_fixture(),
+        clip_add_fixture(),
         clip_delete_fixture(),
         clip_duplicate_fixture(),
         clip_list_fixture(),
@@ -2291,6 +2297,88 @@ fn clip_trim_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "clip.trim".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `clip.add` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with one empty video track and one
+/// video asset, then places the asset at position 0 with default source
+/// bounds.
+fn clip_add_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let track_id = "01900000-0000-7000-8000-0000000aa5a0";
+    let asset_id = "01900000-0000-7000-8000-0000000dd5a0";
+
+    let video_track = json!({
+        "id": track_id,
+        "kind": "video",
+        "name": "Video Add",
+        "locked": false,
+        "clips": [],
+    });
+    prior
+        .tracks
+        .push(serde_json::from_value(video_track).expect("manual video track parses"));
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": asset_id,
+            "kind": "video",
+            "hash": "36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da",
+            "path": "assets/36/36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da.mp4",
+            "original_filename": "video-clip-add.mp4",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 240_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("clip.add fixture asset parses"),
+    );
+
+    let args = clip_add::ClipAddArgs {
+        project_id,
+        asset_id: asset_id.to_string(),
+        track: track_id.to_string(),
+        track_position_tk: 0,
+        source_in_tk: None,
+        source_out_tk: None,
+        name: None,
+    };
+
+    let (patch_value, warnings, _data) = clip_add::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.add patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.add fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.add fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_add::data_envelope_from_warnings(&warnings).expect("clip.add fixture expected_data"),
+    )
+    .expect("clip.add fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.add".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings,
@@ -4472,6 +4560,7 @@ mod tests {
                 "caption.burn_in",
                 "caption.burn_off",
                 "caption.edit",
+                "clip.add",
                 "clip.delete",
                 "clip.duplicate",
                 "clip.list",

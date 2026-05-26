@@ -142,6 +142,10 @@ pub use verbs::caption_burn_in::{
 pub use verbs::caption_burn_off::{
     CaptionBurnOffArgs, CaptionBurnOffData, CaptionBurnOffError, CaptionBurnOffVerb,
 };
+pub use verbs::clip_add::{
+    ClipAddArgs, ClipAddData, ClipAddError, ClipAddVerb, DEFAULT_IMAGE_DURATION_TK,
+    W_CLIP_ADD_ENVELOPE_CODE,
+};
 pub use verbs::clip_duplicate::{
     ClipDuplicateArgs, ClipDuplicateData, ClipDuplicateError, ClipDuplicateVerb, SiblingDuplicate,
 };
