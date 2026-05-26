@@ -136,6 +136,7 @@ pub mod track_reorder;
 pub mod track_set_pan;
 pub mod track_set_volume;
 pub mod track_solo;
+pub mod tracker_create;
 pub mod tracker_list;
 pub mod tracker_remove;
 pub mod validate_command;
@@ -602,6 +603,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(tracker_create::TrackerCreateVerb))
+        .expect(
+            "TrackerCreateVerb is the seventy-first registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -684,6 +691,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         schema_fixture(),
         stock_list_providers_fixture(),
         font_list_fixture(),
+        tracker_create_fixture(),
         tracker_list_fixture(),
         tracker_remove_fixture(),
     ]
@@ -5213,6 +5221,112 @@ fn font_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `tracker.create` fixture used by
+/// [`default_fixtures`].
+///
+/// Starts from a synthetic project carrying a single video track with a
+/// single video clip spanning `[0, 240_000)` ticks, then creates an
+/// `object`-algorithm tracker with a valid `bbox+at_tk` inside that
+/// window. Exercises the envelope-warning round-trip — the
+/// reconstructor recovers `tracker_id`, `source_clip_id`, and
+/// `algorithm` from the warning rather than from post-state (which
+/// could not disambiguate multiple trackers sharing identical
+/// placeholder fields).
+fn tracker_create_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let video_track_id = "01900000-0000-7000-8000-0000000aa701";
+    let video_clip_id = "01900000-0000-7000-8000-0000000bb701";
+    let video_asset_id = "01900000-0000-7000-8000-0000000cc701";
+
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": video_asset_id,
+            "kind": "video",
+            "hash": "36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da",
+            "path": "assets/36/36edd72e6e1929f34401d60618f260e1a1e6869e3789619618eb08e6c063d1da.mp4",
+            "original_filename": "tracker-create.mp4",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 240_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("tracker.create fixture asset parses"),
+    );
+
+    let video_track = json!({
+        "id": video_track_id,
+        "kind": "video",
+        "name": "Video Tracker Source",
+        "locked": false,
+        "clips": [{
+            "id": video_clip_id,
+            "name": "Source Clip",
+            "asset_id": video_asset_id,
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 240_000,
+            "locked": false,
+        }],
+    });
+    prior
+        .tracks
+        .push(serde_json::from_value(video_track).expect("tracker.create fixture track parses"));
+    prior.duration_tk = Tick::new(240_000);
+
+    let args = tracker_create::TrackerCreateArgs {
+        project_id,
+        clip: video_clip_id.to_string(),
+        algorithm: tracker_create::TrackerAlgorithm::Object,
+        params: Some(json!({
+            "object_bbox_at_tk": {
+                "x": 640.0,
+                "y": 360.0,
+                "w": 120.0,
+                "h": 160.0,
+                "at_tk": 0,
+            }
+        })),
+    };
+
+    let (patch_value, warnings, _data) = tracker_create::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid tracker.create patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("tracker.create fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("tracker.create fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        tracker_create::data_envelope_from_args_warnings(&args, &warnings)
+            .expect("tracker.create fixture expected_data"),
+    )
+    .expect("tracker.create fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "tracker.create".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
 /// Build the canonical `tracker.list` fixture used by
 /// [`default_fixtures`].
 ///
@@ -5419,6 +5533,7 @@ mod tests {
                 "track.set_pan",
                 "track.set_volume",
                 "track.solo",
+                "tracker.create",
                 "tracker.list",
                 "tracker.remove",
                 "validate_command",
