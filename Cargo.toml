@@ -96,7 +96,7 @@ hyper         = { version = "1", features = ["server", "http2"] }
 clap          = { version = "4", features = ["derive", "env", "cargo"] }
 
 # MCP
-rmcp          = { version = "0.16", features = ["server", "transport-io", "transport-streamable-http-server"] }
+rmcp          = { version = "1.7", features = ["server", "transport-io", "transport-streamable-http-server"] }
 
 # Render (Research 01)
 wgpu          = { version = "29" }
