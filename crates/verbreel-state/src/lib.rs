@@ -80,6 +80,7 @@ pub mod marker;
 pub mod newtypes;
 pub mod project;
 pub mod reconstructor;
+pub(crate) mod schemas;
 pub mod shadow;
 pub mod text_element;
 pub mod track;
@@ -247,6 +248,14 @@ pub use verbs::project_set_fps::{
 };
 pub use verbs::project_set_metadata::{
     ProjectSetMetadataArgs, ProjectSetMetadataData, ProjectSetMetadataError, ProjectSetMetadataVerb,
+};
+// `SchemaError` from this module is aliased to `SchemaVerbError` at the
+// crate root to avoid colliding with `validate_command::SchemaError`
+// (a per-entry struct shipped earlier in the meta arc). Both types stay
+// reachable; the schema-verb error keeps its in-module spec-aligned
+// name.
+pub use verbs::schema::{
+    SchemaArgs, SchemaData, SchemaError as SchemaVerbError, SchemaTarget, SchemaVerb,
 };
 pub use verbs::text_add::{
     StyleArg, TextAddArgs, TextAddData, TextAddError, TextAddVerb, W_TEXT_ADD_ENVELOPE_CODE,
