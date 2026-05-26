@@ -39,6 +39,7 @@ jsonptr.workspace = true
 # AssetPath, AssetRef. Patterns mirror `spec/project-schema.json`
 # `$defs/Sha256` / `$defs/AssetPath` / `$defs/AssetRef`.
 regex.workspace = true
+unicode-segmentation.workspace = true
 # Phase 2 events-integration (#31): ProjectStore lifecycle uses
 # `tempfile + rename + parent-dir fsync` for the atomic project.json
 # write per §2.3.

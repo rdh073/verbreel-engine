@@ -222,6 +222,9 @@ pub use verbs::project_set_fps::{
 pub use verbs::project_set_metadata::{
     ProjectSetMetadataArgs, ProjectSetMetadataData, ProjectSetMetadataError, ProjectSetMetadataVerb,
 };
+pub use verbs::text_add::{
+    StyleArg, TextAddArgs, TextAddData, TextAddError, TextAddVerb, W_TEXT_ADD_ENVELOPE_CODE,
+};
 pub use verbs::text_edit::{TextEditArgs, TextEditData, TextEditError, TextEditVerb};
 pub use verbs::track_add::{
     TRACK_NAME_MAX, TrackAddArgs, TrackAddData, TrackAddError, TrackAddVerb,

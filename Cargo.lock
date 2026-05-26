@@ -2603,6 +2603,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unicode-segmentation"
+version = "1.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9629274872b2bfaf8d66f5f15725007f635594914870f65218920345aa11aa8c"
+
+[[package]]
 name = "unicode-width"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2807,6 +2813,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tracing",
+ "unicode-segmentation",
  "uuid",
  "verbreel-args",
  "verbreel-canon",
