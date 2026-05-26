@@ -50,7 +50,7 @@ uuid          = { version = "1.23", features = ["v7", "serde", "rng-getrandom"] 
 # each leaf crate that depends on uuid repeats the target-cfg dependency. See
 # spec/research/02-engine-language.md §7.
 getrandom     = { version = "0.4", default-features = false }
-sha2          = { version = "0.10" }
+sha2          = { version = "0.11" }
 
 # Errors + observability
 thiserror     = { version = "2" }
