@@ -84,6 +84,7 @@ pub mod clip_set_blend_mode;
 pub mod clip_set_fade;
 pub mod clip_set_mask;
 pub mod clip_set_opacity;
+pub mod clip_set_speed;
 pub mod clip_set_speed_curve;
 pub mod clip_set_transform;
 pub mod clip_set_volume;
@@ -317,6 +318,18 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(clip_set_speed::ClipSetSpeedVerb))
+        .expect(
+            "ClipSetSpeedVerb is the fifty-third registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
+        .register(Arc::new(clip_set_speed_curve::ClipSetSpeedCurveVerb))
+        .expect(
+            "ClipSetSpeedCurveVerb is the fifty-second registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(clip_set_volume::ClipSetVolumeVerb))
         .expect(
             "ClipSetVolumeVerb is the twenty-first registration in \
@@ -348,12 +361,6 @@ pub fn default_registry() -> VerbRegistry {
         .register(Arc::new(clip_set_mask::ClipSetMaskVerb))
         .expect(
             "ClipSetMaskVerb is the forty-first registration in \
-             default_registry(); cannot collide with prior verbs",
-        );
-    registry
-        .register(Arc::new(clip_set_speed_curve::ClipSetSpeedCurveVerb))
-        .expect(
-            "ClipSetSpeedCurveVerb is the fifty-second registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
@@ -529,6 +536,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_set_blend_mode_fixture(),
         clip_set_fade_fixture(),
         clip_set_mask_fixture(),
+        clip_set_speed_fixture(),
         clip_set_speed_curve_fixture(),
         clip_set_transform_fixture(),
         clip_set_opacity_fixture(),
@@ -1379,6 +1387,96 @@ fn clip_set_speed_curve_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "clip.set_speed_curve".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `clip.set_speed` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with a single 10-second video clip
+/// at scalar speed 1.0, then sets `factor=2.0`.
+fn clip_set_speed_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let clip_id = "01900000-0000-7000-8000-0000000bb307";
+    let asset_id = "01900000-0000-7000-8000-0000000cc307";
+
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": asset_id,
+            "kind": "video",
+            "hash": "54ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+            "path": "assets/54/54ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.mp4",
+            "original_filename": "video-clip-set-speed.mp4",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 2_400_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("clip.set_speed fixture asset parses"),
+    );
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa307",
+        "kind": "video",
+        "name": "Video 7",
+        "locked": false,
+        "clips": [{
+            "id": clip_id,
+            "name": "Speed Clip",
+            "asset_id": asset_id,
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 2_400_000,
+            "speed": 1.0,
+            "locked": false,
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(2_400_000);
+
+    let args = clip_set_speed::ClipSetSpeedArgs {
+        project_id,
+        clip: clip_id.to_string(),
+        factor: 2.0,
+    };
+
+    let (patch_value, warnings, _data) = clip_set_speed::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.set_speed patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.set_speed fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.set_speed fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_set_speed::data_envelope_from_post_state(&args, &post_state)
+            .expect("clip.set_speed fixture expected_data"),
+    )
+    .expect("clip.set_speed fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.set_speed".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings,
@@ -4208,6 +4306,7 @@ mod tests {
                 "clip.set_fade",
                 "clip.set_mask",
                 "clip.set_opacity",
+                "clip.set_speed",
                 "clip.set_speed_curve",
                 "clip.set_transform",
                 "clip.set_volume",
