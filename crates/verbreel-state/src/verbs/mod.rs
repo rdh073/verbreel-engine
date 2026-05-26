@@ -119,6 +119,7 @@ pub mod project_rename;
 pub mod project_set_canvas;
 pub mod project_set_fps;
 pub mod project_set_metadata;
+pub mod render_queue_clear;
 pub mod render_queue_list;
 pub mod schema;
 pub mod stock_list_providers;
@@ -616,6 +617,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(render_queue_clear::RenderQueueClearVerb))
+        .expect(
+            "RenderQueueClearVerb is the seventy-third registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -702,6 +709,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         tracker_list_fixture(),
         tracker_remove_fixture(),
         render_queue_list_fixture(),
+        render_queue_clear_fixture(),
     ]
 }
 
@@ -5460,6 +5468,43 @@ fn render_queue_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `render.queue.clear` fixture used by
+/// [`default_fixtures`].
+///
+/// `render.queue.clear` ignores project state, so the prior is just the
+/// empty synthetic project and the patch is empty. The default-args
+/// (None / None) path bypasses the confirm gate (filter defaults to
+/// terminal states only) and produces empty `removed` / `canceled`
+/// arrays per the v1 floor (queue persistence file mutation is
+/// deferred — see the module-level doc on `verbs::render_queue_clear`).
+fn render_queue_clear_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = render_queue_clear::RenderQueueClearArgs {
+        project_id,
+        state_filter: None,
+        confirm: None,
+    };
+
+    let (patch_value, _warnings, data) = render_queue_clear::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid render.queue.clear data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("render.queue.clear fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "render.queue.clear".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5560,6 +5605,7 @@ mod tests {
                 "project.set_canvas",
                 "project.set_fps",
                 "project.set_metadata",
+                "render.queue.clear",
                 "render.queue.list",
                 "schema",
                 "stock.list_providers",
