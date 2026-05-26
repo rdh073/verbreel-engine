@@ -119,6 +119,7 @@ pub mod project_rename;
 pub mod project_set_canvas;
 pub mod project_set_fps;
 pub mod project_set_metadata;
+pub mod render_queue_list;
 pub mod schema;
 pub mod stock_list_providers;
 pub mod text_add;
@@ -609,6 +610,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(render_queue_list::RenderQueueListVerb))
+        .expect(
+            "RenderQueueListVerb is the seventy-second registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -694,6 +701,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         tracker_create_fixture(),
         tracker_list_fixture(),
         tracker_remove_fixture(),
+        render_queue_list_fixture(),
     ]
 }
 
@@ -5416,6 +5424,42 @@ fn tracker_remove_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `render.queue.list` fixture used by
+/// [`default_fixtures`].
+///
+/// `render.queue.list` ignores project state, so the prior is just the
+/// empty synthetic project and the patch is empty. Expected data comes
+/// from a forward `compute_patch` against that same prior — currently
+/// an empty `items` list per the v1 floor (queue persistence file
+/// reading is deferred — see the module-level doc on
+/// `verbs::render_queue_list`).
+fn render_queue_list_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = render_queue_list::RenderQueueListArgs {
+        project_id,
+        state_filter: None,
+    };
+
+    let (patch_value, _warnings, data) = render_queue_list::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid render.queue.list data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("render.queue.list fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "render.queue.list".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5516,6 +5560,7 @@ mod tests {
                 "project.set_canvas",
                 "project.set_fps",
                 "project.set_metadata",
+                "render.queue.list",
                 "schema",
                 "stock.list_providers",
                 "text.add",

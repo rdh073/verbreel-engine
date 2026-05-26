@@ -257,6 +257,10 @@ pub use verbs::project_set_metadata::{
 // (a per-entry struct shipped earlier in the meta arc). Both types stay
 // reachable; the schema-verb error keeps its in-module spec-aligned
 // name.
+pub use verbs::render_queue_list::{
+    QueueEntry, QueueJobState, QueueStateFilter, RenderQueueListArgs, RenderQueueListData,
+    RenderQueueListError, RenderQueueListVerb,
+};
 pub use verbs::schema::{
     SchemaArgs, SchemaData, SchemaError as SchemaVerbError, SchemaTarget, SchemaVerb,
 };
