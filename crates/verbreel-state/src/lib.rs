@@ -125,6 +125,10 @@ pub use reconstructor::{
 pub use verbs::asset_list::{
     AssetKindFilter, AssetListArgs, AssetListData, AssetListError, AssetListVerb,
 };
+pub use verbs::asset_remove::{
+    AssetRemoveArgs, AssetRemoveData, AssetRemoveError, AssetRemoveVerb,
+    W_ASSET_REMOVE_ENVELOPE_CODE,
+};
 // Deprecated alias kept for one slice cycle (Slice B3 rename). Down-
 // stream crates pinned to `VerbReconstructor` keep compiling; new code
 // MUST use `Verb`.

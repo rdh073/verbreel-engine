@@ -70,6 +70,7 @@ use crate::reconstructor::{RecordedEvent, VerbRegistry};
 use verbreel_types::Tick;
 
 pub mod asset_list;
+pub mod asset_remove;
 pub mod caption_burn_in;
 pub mod caption_burn_off;
 pub mod caption_edit;
@@ -139,6 +140,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 ///
 /// Canonical kernel verbs currently shipped:
 /// - `asset.list` (§3.2)
+/// - `asset.remove` (§3.4)
 /// - `clip.delete` (§5.5)
 /// - `clip.list` (§5.14)
 /// - `clip.lock` (§5.13)
@@ -443,6 +445,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(asset_remove::AssetRemoveVerb))
+        .expect(
+            "AssetRemoveVerb is the fifty-eighth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(keyframe_list::KeyframeListVerb))
         .expect(
             "KeyframeListVerb is the twenty-ninth registration in \
@@ -582,6 +590,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         effect_set_param_fixture(),
         effect_toggle_fixture(),
         asset_list_fixture(),
+        asset_remove_fixture(),
         keyframe_add_fixture(),
         keyframe_list_fixture(),
         keyframe_remove_fixture(),
@@ -3249,6 +3258,77 @@ fn asset_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `asset.remove` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with one orphan video asset (no clip
+/// references it) and exercises the non-cascade happy path. The asset
+/// record is removed; the bytes are deliberately left on disk per spec
+/// §3.4. The reconstructor reads back the `W_ASSET_REMOVE_ENVELOPE`
+/// warning to rebuild the data envelope, mirroring `track.remove` and
+/// `clip.delete`.
+fn asset_remove_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let asset_id = "01900000-0000-7000-8000-0000000cc801";
+
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": asset_id,
+            "kind": "video",
+            "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+            "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.mp4",
+            "original_filename": "asset-remove.mp4",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 240_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("asset.remove fixture asset parses"),
+    );
+
+    let args = asset_remove::AssetRemoveArgs {
+        project_id,
+        asset_id: asset_id.to_string(),
+        cascade: None,
+    };
+
+    let (patch_value, warnings, _data) = asset_remove::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid asset.remove patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("asset.remove fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("asset.remove fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        asset_remove::data_envelope_from_args_warnings(&args, &warnings)
+            .expect("asset.remove fixture expected_data"),
+    )
+    .expect("asset.remove fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "asset.remove".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
 /// Build the canonical `project.info` fixture used by [`default_fixtures`].
 ///
 /// Starts from the synthetic empty project (no tracks, no assets) and
@@ -4606,6 +4686,7 @@ mod tests {
             report.verbs_checked,
             vec![
                 "asset.list",
+                "asset.remove",
                 "caption.burn_in",
                 "caption.burn_off",
                 "caption.edit",
