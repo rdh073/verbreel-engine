@@ -133,6 +133,7 @@ pub mod track_reorder;
 pub mod track_set_pan;
 pub mod track_set_volume;
 pub mod track_solo;
+pub mod validate_command;
 
 /// Synthetic `UUIDv7` used as the `project_id` in [`default_fixtures`].
 /// Hard-coded so the fixture is deterministic — `ProjectId::now()` would
@@ -563,6 +564,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
     );
     registry
+        .register(Arc::new(validate_command::ValidateCommandVerb))
+        .expect(
+            "ValidateCommandVerb is the sixty-fifth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -641,6 +648,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         timeline_snapshot_fixture(),
         list_capabilities_fixture(),
         help_fixture(),
+        validate_command_fixture(),
     ]
 }
 
@@ -5035,13 +5043,52 @@ fn help_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `validate_command` fixture used by
+/// [`default_fixtures`].
+///
+/// `validate_command` ignores project state, so the prior is just the
+/// empty synthetic project and the patch is empty. The fixture
+/// exercises the Valid path against `marker.add` with a minimum-shape
+/// valid args object.
+fn validate_command_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = validate_command::ValidateCommandArgs {
+        project_id,
+        verb: "marker.add".to_string(),
+        args: json!({
+            "project_id": project_id.to_string(),
+            "time_tk": 0_i64,
+            "label": "fixture",
+        }),
+    };
+
+    let (patch_value, _warnings, data) = validate_command::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid validate_command data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("validate_command fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "validate_command".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
 /// `include_str!`) and don't need a `Project::default` impl. Every
 /// field matches the schema's required-with-defaults shape used in
 /// `tests/fixtures/empty_project_create.json`.
-fn synthetic_empty_project(project_id: verbreel_types::ProjectId) -> Project {
+pub(crate) fn synthetic_empty_project(project_id: verbreel_types::ProjectId) -> Project {
     let raw = json!({
         "id": project_id.to_string(),
         "schema_version": crate::project::SCHEMA_VERSION,
@@ -5149,6 +5196,7 @@ mod tests {
                 "track.set_pan",
                 "track.set_volume",
                 "track.solo",
+                "validate_command",
             ]
         );
     }

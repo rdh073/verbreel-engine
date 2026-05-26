@@ -282,6 +282,10 @@ pub use verbs::track_set_volume::{
 pub use verbs::track_solo::{
     DEFAULT_SOLO, TrackSoloArgs, TrackSoloData, TrackSoloError, TrackSoloVerb,
 };
+pub use verbs::validate_command::{
+    SchemaError, ValidateCommandArgs, ValidateCommandData, ValidateCommandError,
+    ValidateCommandVerb,
+};
 // Deprecated alias kept for one slice cycle (Slice B3 rename).
 #[allow(deprecated)]
 pub use verbs::project_set_metadata::ProjectSetMetadataReconstructor;
