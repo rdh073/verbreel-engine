@@ -161,6 +161,9 @@ pub use verbs::clip_set_transform::{
 pub use verbs::clip_set_volume::{
     ClipSetVolumeArgs, ClipSetVolumeData, ClipSetVolumeError, ClipSetVolumeVerb,
 };
+pub use verbs::clip_split::{
+    ClipSplitArgs, ClipSplitData, ClipSplitError, ClipSplitVerb, SiblingSplit,
+};
 pub use verbs::clip_trim::{ClipTrimArgs, ClipTrimData, ClipTrimError, ClipTrimVerb};
 pub use verbs::clip_unlink::{ClipUnlinkArgs, ClipUnlinkData, ClipUnlinkError, ClipUnlinkVerb};
 pub use verbs::effect_list_available::{
