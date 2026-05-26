@@ -160,6 +160,9 @@ pub use verbs::clip_set_mask::{
 pub use verbs::clip_set_opacity::{
     ClipSetOpacityArgs, ClipSetOpacityData, ClipSetOpacityError, ClipSetOpacityVerb,
 };
+pub use verbs::clip_set_speed::{
+    ClipSetSpeedArgs, ClipSetSpeedData, ClipSetSpeedError, ClipSetSpeedVerb,
+};
 pub use verbs::clip_set_speed_curve::{
     ClipSetSpeedCurveArgs, ClipSetSpeedCurveData, ClipSetSpeedCurveError, ClipSetSpeedCurveVerb,
 };
