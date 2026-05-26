@@ -137,6 +137,7 @@ pub mod track_set_pan;
 pub mod track_set_volume;
 pub mod track_solo;
 pub mod tracker_list;
+pub mod tracker_remove;
 pub mod validate_command;
 
 /// Synthetic `UUIDv7` used as the `project_id` in [`default_fixtures`].
@@ -595,6 +596,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(tracker_remove::TrackerRemoveVerb))
+        .expect(
+            "TrackerRemoveVerb is the seventieth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -678,6 +685,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         stock_list_providers_fixture(),
         font_list_fixture(),
         tracker_list_fixture(),
+        tracker_remove_fixture(),
     ]
 }
 
@@ -5237,6 +5245,63 @@ fn tracker_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `tracker.remove` fixture used by
+/// [`default_fixtures`].
+///
+/// Starts from a synthetic project carrying a single tracker placeholder
+/// record with empty `cache_path`, then removes it. Exercises the
+/// envelope-warning path with `cache_path: None` (the v1-floor common
+/// case — no `tracker.run` has populated the cache).
+fn tracker_remove_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let tracker_id = "01900000-0000-7000-8000-0000000ee001";
+
+    prior.trackers.push(
+        serde_json::from_value(json!({
+            "tracker_id": tracker_id,
+            "source_clip_id": "",
+            "algorithm": "object",
+            "applied_to_clip_ids": [],
+            "cache_hash": "",
+            "cache_path": "",
+        }))
+        .expect("tracker.remove fixture tracker parses"),
+    );
+
+    let args = tracker_remove::TrackerRemoveArgs {
+        project_id,
+        tracker_id: tracker_id.to_string(),
+        purge_cache: Some(true),
+    };
+
+    let (patch_value, warnings, _data) = tracker_remove::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid tracker.remove patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("tracker.remove fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("tracker.remove fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        tracker_remove::data_envelope_from_args_warnings(&args, &warnings)
+            .expect("tracker.remove fixture expected_data"),
+    )
+    .expect("tracker.remove fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "tracker.remove".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5355,6 +5420,7 @@ mod tests {
                 "track.set_volume",
                 "track.solo",
                 "tracker.list",
+                "tracker.remove",
                 "validate_command",
             ]
         );
