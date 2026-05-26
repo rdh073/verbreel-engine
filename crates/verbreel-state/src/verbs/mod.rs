@@ -103,6 +103,7 @@ pub mod effect_remove;
 pub mod effect_reorder;
 pub mod effect_set_param;
 pub mod effect_toggle;
+pub mod help;
 pub mod keyframe_add;
 pub mod keyframe_list;
 pub mod keyframe_remove;
@@ -557,6 +558,10 @@ pub fn default_registry() -> VerbRegistry {
             "ListCapabilitiesVerb is the sixty-third registration in \
              default_registry(); cannot collide with prior verbs",
         );
+    registry.register(Arc::new(help::HelpVerb)).expect(
+        "HelpVerb is the sixty-fourth registration in \
+             default_registry(); cannot collide with prior verbs",
+    );
     registry
 }
 
@@ -635,6 +640,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         project_info_fixture(),
         timeline_snapshot_fixture(),
         list_capabilities_fixture(),
+        help_fixture(),
     ]
 }
 
@@ -4995,6 +5001,40 @@ fn list_capabilities_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `help` fixture used by [`default_fixtures`].
+///
+/// `help` ignores project state, so the prior is just the empty
+/// synthetic project and the patch is empty. The fixture exercises the
+/// no-topic branch (`topic = None`) which returns the noun list — the
+/// non-trivial dispatch case most useful for the §0.8 reconstructor
+/// gate.
+fn help_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = help::HelpArgs {
+        project_id,
+        topic: None,
+    };
+
+    let (patch_value, _warnings, data) =
+        help::compute_patch(&prior, &args).expect("default fixture must produce a valid help data");
+    let expected_data =
+        serde_json::to_value(&data).expect("help fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "help".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5079,6 +5119,7 @@ mod tests {
                 "effect.reorder",
                 "effect.set_param",
                 "effect.toggle",
+                "help",
                 "keyframe.add",
                 "keyframe.list",
                 "keyframe.remove",
