@@ -109,6 +109,7 @@ pub mod project_rename;
 pub mod project_set_canvas;
 pub mod project_set_fps;
 pub mod project_set_metadata;
+pub mod text_add;
 pub mod text_animate;
 pub mod text_edit;
 pub mod text_style;
@@ -439,6 +440,10 @@ pub fn default_registry() -> VerbRegistry {
             "KeyframeListVerb is the twenty-ninth registration in \
              default_registry(); cannot collide with prior verbs",
         );
+    registry.register(Arc::new(text_add::TextAddVerb)).expect(
+        "TextAddVerb is the fifty-fourth registration in \
+             default_registry(); cannot collide with prior verbs",
+    );
     registry
         .register(Arc::new(text_animate::TextAnimateVerb))
         .expect(
@@ -511,6 +516,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         project_set_canvas_fixture(),
         project_set_fps_fixture(),
         project_rename_fixture(),
+        text_add_fixture(),
         text_animate_fixture(),
         text_edit_fixture(),
         caption_edit_fixture(),
@@ -560,6 +566,50 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         keyframe_set_fixture(),
         track_remove_fixture(),
     ]
+}
+
+/// Build the canonical `text.add` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with no text track, then adds a
+/// one-second text clip and lets the verb auto-create `Text 1`.
+fn text_add_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = text_add::TextAddArgs {
+        project_id,
+        content: "Hello world".to_string(),
+        track_position_tk: 0,
+        duration_tk: 240_000,
+        track: None,
+        style: None,
+        name: None,
+    };
+
+    let (patch_value, warnings, _data) = text_add::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid text.add patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("text.add fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("text.add fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        text_add::data_envelope_from_warnings(&warnings).expect("text.add fixture expected_data"),
+    )
+    .expect("text.add fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "text.add".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
 }
 
 /// Build the canonical `text.edit` fixture used by [`default_fixtures`].
@@ -4331,6 +4381,7 @@ mod tests {
                 "project.set_canvas",
                 "project.set_fps",
                 "project.set_metadata",
+                "text.add",
                 "text.animate",
                 "text.edit",
                 "text.style",
