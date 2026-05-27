@@ -145,6 +145,9 @@ pub use verbs::asset_remove::{
 pub use verbs::asset_verify::{
     AssetVerifyArgs, AssetVerifyData, AssetVerifyError, AssetVerifyMode, AssetVerifyVerb,
 };
+pub use verbs::audio_extract::{
+    AudioExtractArgs, AudioExtractCodec, AudioExtractData, AudioExtractError, AudioExtractVerb,
+};
 pub use verbs::audio_fade::{AudioFadeArgs, AudioFadeData, AudioFadeError, AudioFadeVerb};
 pub use verbs::audio_volume::{
     AudioVolumeArgs, AudioVolumeData, AudioVolumeError, AudioVolumeTargetKind, AudioVolumeVerb,
