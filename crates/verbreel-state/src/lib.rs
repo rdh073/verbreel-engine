@@ -130,6 +130,7 @@ pub use verbs::asset_import::{
 pub use verbs::asset_list::{
     AssetKindFilter, AssetListArgs, AssetListData, AssetListError, AssetListVerb,
 };
+pub use verbs::asset_probe::{AssetProbeArgs, AssetProbeData, AssetProbeError, AssetProbeVerb};
 pub use verbs::asset_remove::{
     AssetRemoveArgs, AssetRemoveData, AssetRemoveError, AssetRemoveVerb,
     W_ASSET_REMOVE_ENVELOPE_CODE,
