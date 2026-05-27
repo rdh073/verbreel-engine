@@ -385,6 +385,10 @@ pub use verbs::stock_list_providers::{
     Provider, ProviderKind, StockListProvidersArgs, StockListProvidersData,
     StockListProvidersError, StockListProvidersVerb, StockMediaKind,
 };
+pub use verbs::stock_search::{
+    StockSearchArgs, StockSearchData, StockSearchDimensions, StockSearchError, StockSearchFilters,
+    StockSearchItem, StockSearchLicense, StockSearchVerb,
+};
 pub use verbs::template_apply::{
     TemplateApplyArgs, TemplateApplyData, TemplateApplyError, TemplateApplyVerb,
     TemplateTrackStrategy,

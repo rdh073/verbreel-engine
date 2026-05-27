@@ -160,6 +160,7 @@ pub mod render_start;
 pub mod render_status;
 pub mod schema;
 pub mod stock_list_providers;
+pub mod stock_search;
 pub mod template_apply;
 pub mod template_describe;
 pub mod template_from_project;
@@ -736,56 +737,62 @@ pub fn default_registry() -> VerbRegistry {
             "StockListProvidersVerb is the sixty-seventh registration in \
              default_registry(); cannot collide with prior verbs",
         );
+    registry
+        .register(Arc::new(stock_search::StockSearchVerb))
+        .expect(
+            "StockSearchVerb is the sixty-eighth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
     registry.register(Arc::new(font_list::FontListVerb)).expect(
-        "FontListVerb is the sixty-eighth registration in \
+        "FontListVerb is the sixty-ninth registration in \
              default_registry(); cannot collide with prior verbs",
     );
     registry
         .register(Arc::new(tracker_list::TrackerListVerb))
         .expect(
-            "TrackerListVerb is the sixty-ninth registration in \
+            "TrackerListVerb is the seventieth registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
         .register(Arc::new(tracker_remove::TrackerRemoveVerb))
         .expect(
-            "TrackerRemoveVerb is the seventieth registration in \
+            "TrackerRemoveVerb is the seventy-first registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
         .register(Arc::new(tracker_create::TrackerCreateVerb))
         .expect(
-            "TrackerCreateVerb is the seventy-first registration in \
+            "TrackerCreateVerb is the seventy-second registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
         .register(Arc::new(render_queue_list::RenderQueueListVerb))
         .expect(
-            "RenderQueueListVerb is the seventy-second registration in \
+            "RenderQueueListVerb is the seventy-third registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
         .register(Arc::new(render_queue_clear::RenderQueueClearVerb))
         .expect(
-            "RenderQueueClearVerb is the seventy-third registration in \
+            "RenderQueueClearVerb is the seventy-fourth registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
         .register(Arc::new(render_queue_status::RenderQueueStatusVerb))
         .expect(
-            "RenderQueueStatusVerb is the seventy-fourth registration in \
+            "RenderQueueStatusVerb is the seventy-fifth registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
         .register(Arc::new(render_queue_cancel::RenderQueueCancelVerb))
         .expect(
-            "RenderQueueCancelVerb is the seventy-fifth registration in \
+            "RenderQueueCancelVerb is the seventy-sixth registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
         .register(Arc::new(render_list_presets::RenderListPresetsVerb))
         .expect(
-            "RenderListPresetsVerb is the seventy-sixth registration in \
+            "RenderListPresetsVerb is the seventy-seventh registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
@@ -796,13 +803,13 @@ pub fn default_registry() -> VerbRegistry {
     registry
         .register(Arc::new(render_cancel::RenderCancelVerb))
         .expect(
-            "RenderCancelVerb is the seventy-seventh registration in \
+            "RenderCancelVerb is the seventy-eighth registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
         .register(Arc::new(render_status::RenderStatusVerb))
         .expect(
-            "RenderStatusVerb is the seventy-eighth registration in \
+            "RenderStatusVerb is the seventy-ninth registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
@@ -832,7 +839,7 @@ pub fn default_registry() -> VerbRegistry {
     registry
         .register(Arc::new(preview_session_close::PreviewSessionCloseVerb))
         .expect(
-            "PreviewSessionCloseVerb is the eighty-first registration in \
+            "PreviewSessionCloseVerb is the eighty-second registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
@@ -840,7 +847,7 @@ pub fn default_registry() -> VerbRegistry {
             preview_session_frame_at::PreviewSessionFrameAtVerb,
         ))
         .expect(
-            "PreviewSessionFrameAtVerb is the eighty-second registration in \
+            "PreviewSessionFrameAtVerb is the eighty-third registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
@@ -880,7 +887,7 @@ pub fn default_registry() -> VerbRegistry {
     registry
         .register(Arc::new(project_list::ProjectListVerb))
         .expect(
-            "ProjectListVerb is the eighty-fourth registration in \
+            "ProjectListVerb is the eighty-fifth registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
@@ -988,6 +995,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         validate_command_fixture(),
         schema_fixture(),
         stock_list_providers_fixture(),
+        stock_search_fixture(),
         font_list_fixture(),
         tracker_create_fixture(),
         tracker_list_fixture(),
@@ -5894,6 +5902,43 @@ fn stock_list_providers_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `stock.search` fixture used by
+/// [`default_fixtures`].
+///
+/// `stock.search` v1 floor is read-only and uses local provider-only
+/// registration, so the canonical fixture is a well-formed local call
+/// that returns empty items with empty patch/warnings.
+fn stock_search_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = stock_search::StockSearchArgs {
+        project_id,
+        provider_id: "local".to_string(),
+        query: "sunset".to_string(),
+        kind: "video".to_string(),
+        limit: 25,
+        filters: stock_search::StockSearchFilters::default(),
+    };
+
+    let (patch_value, _warnings, data) = stock_search::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid stock.search data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("stock.search fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "stock.search".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Build the canonical `font.list` fixture used by [`default_fixtures`].
 ///
 /// `font.list` ignores project state, so the prior is just the empty
@@ -7215,6 +7260,7 @@ mod tests {
                 "render.status",
                 "schema",
                 "stock.list_providers",
+                "stock.search",
                 "template.apply",
                 "template.describe",
                 "template.from_project",
