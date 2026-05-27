@@ -233,6 +233,10 @@ pub use verbs::marker_remove::{
     MARKERS_MAX_BATCH, MarkerRemoveArgs, MarkerRemoveData, MarkerRemoveError, MarkerRemoveVerb,
 };
 pub use verbs::marker_set::{MarkerSetArgs, MarkerSetData, MarkerSetError, MarkerSetVerb};
+pub use verbs::preview_session_close::{
+    PreviewSessionCloseArgs, PreviewSessionCloseData, PreviewSessionCloseError,
+    PreviewSessionCloseVerb,
+};
 pub use verbs::project_info::{
     ProjectInfoArgs, ProjectInfoCanvas, ProjectInfoData, ProjectInfoError, ProjectInfoTrackCounts,
     ProjectInfoVerb,
