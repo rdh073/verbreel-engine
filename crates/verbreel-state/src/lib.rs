@@ -296,6 +296,11 @@ pub use verbs::preview_thumbnail::{
 pub use verbs::preview_waveform::{
     PreviewWaveformArgs, PreviewWaveformData, PreviewWaveformError, PreviewWaveformVerb,
 };
+#[cfg(feature = "native")]
+pub use verbs::project_duplicate::{
+    ProjectDuplicateArgs, ProjectDuplicateData, ProjectDuplicateError,
+    duplicate as project_duplicate,
+};
 pub use verbs::project_forget::{
     ProjectForgetArgs, ProjectForgetData, ProjectForgetError, forget as project_forget,
 };
