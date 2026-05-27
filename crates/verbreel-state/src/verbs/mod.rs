@@ -159,6 +159,7 @@ pub mod render_queue_status;
 pub mod render_start;
 pub mod render_status;
 pub mod schema;
+pub mod stock_describe;
 pub mod stock_import;
 pub mod stock_list_providers;
 pub mod stock_search;
@@ -749,6 +750,11 @@ pub fn default_registry() -> VerbRegistry {
         .expect(
             "StockImportVerb registration in default_registry() cannot collide with prior verbs",
         );
+    registry
+        .register(Arc::new(stock_describe::StockDescribeVerb))
+        .expect(
+            "StockDescribeVerb registration in default_registry() cannot collide with prior verbs",
+        );
     registry.register(Arc::new(font_list::FontListVerb)).expect(
         "FontListVerb is the sixty-ninth registration in \
              default_registry(); cannot collide with prior verbs",
@@ -1003,6 +1009,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         stock_list_providers_fixture(),
         stock_search_fixture(),
         stock_import_fixture(),
+        stock_describe_fixture(),
         font_list_fixture(),
         tracker_create_fixture(),
         tracker_list_fixture(),
@@ -5978,6 +5985,37 @@ fn stock_import_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `stock.describe` fixture used by
+/// [`default_fixtures`].
+///
+/// `stock.describe` v1 floor always errors for well-formed calls
+/// (`local` provider resolves to `E_STOCK_NOT_FOUND`), so no
+/// successful event can be recorded. The reconstructor path only
+/// checks arg shape and returns `Value::Null`; this fixture records
+/// `expected_data: null`.
+fn stock_describe_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = stock_describe::StockDescribeArgs {
+        project_id,
+        provider_id: "local".to_string(),
+        stock_id: "local:v1-fixture-stock-id".to_string(),
+    };
+
+    RecordedEvent {
+        verb: "stock.describe".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `font.list` fixture used by [`default_fixtures`].
 ///
 /// `font.list` ignores project state, so the prior is just the empty
@@ -7298,6 +7336,7 @@ mod tests {
                 "render.start",
                 "render.status",
                 "schema",
+                "stock.describe",
                 "stock.import",
                 "stock.list_providers",
                 "stock.search",
