@@ -45,6 +45,18 @@ fn args_local() -> StockSearchArgs {
     }
 }
 
+fn assert_local_floor_ok(prior: &Project, raw_args: Value) {
+    let verb = StockSearchVerb;
+    let (patch, data, warnings) = verb
+        .compute_patch(prior, &raw_args)
+        .expect("well-formed local args should hit v1 empty-result floor");
+    assert!(patch.is_empty());
+    assert!(warnings.is_empty());
+    let typed: StockSearchData =
+        serde_json::from_value(data).expect("data deserializes to StockSearchData");
+    assert!(typed.items.is_empty());
+}
+
 #[test]
 fn args_deserialize_minimal_and_defaults_apply() {
     let typed: StockSearchArgs =
@@ -87,6 +99,23 @@ fn args_deserialize_explicit_filters() {
     assert_eq!(typed.filters.duration_max_tk, Some(200));
     assert_eq!(typed.filters.aspect, "16:9");
     assert_eq!(typed.filters.license, "cc0");
+}
+
+#[test]
+fn filters_defaults_when_empty_object_provided() {
+    let raw = json!({
+        "project_id": FIXTURE_PROJECT_ID,
+        "provider_id": "local",
+        "query": "ocean waves",
+        "kind": "audio",
+        "filters": {},
+    });
+
+    let typed: StockSearchArgs = serde_json::from_value(raw).expect("filters empty object parses");
+    assert_eq!(typed.filters.duration_min_tk, None);
+    assert_eq!(typed.filters.duration_max_tk, None);
+    assert_eq!(typed.filters.aspect, "any");
+    assert_eq!(typed.filters.license, "any");
 }
 
 #[test]
@@ -398,6 +427,98 @@ fn local_provider_returns_empty_patch_warnings_and_items() {
 }
 
 #[test]
+fn accepted_kind_literals_hit_local_empty_result_floor() {
+    let prior = empty_project();
+    for kind in ["video", "audio", "image", "sticker", "music"] {
+        assert_local_floor_ok(
+            &prior,
+            json!({
+                "project_id": FIXTURE_PROJECT_ID,
+                "provider_id": "local",
+                "query": "catalog query",
+                "kind": kind,
+            }),
+        );
+    }
+}
+
+#[test]
+fn accepted_aspect_literals_hit_local_empty_result_floor() {
+    let prior = empty_project();
+    for aspect in ["16:9", "9:16", "1:1", "any"] {
+        assert_local_floor_ok(
+            &prior,
+            json!({
+                "project_id": FIXTURE_PROJECT_ID,
+                "provider_id": "local",
+                "query": "catalog query",
+                "kind": "video",
+                "filters": { "aspect": aspect },
+            }),
+        );
+    }
+}
+
+#[test]
+fn accepted_license_literals_hit_local_empty_result_floor() {
+    let prior = empty_project();
+    for license in ["cc0", "cc-by", "royalty-free", "any"] {
+        assert_local_floor_ok(
+            &prior,
+            json!({
+                "project_id": FIXTURE_PROJECT_ID,
+                "provider_id": "local",
+                "query": "catalog query",
+                "kind": "image",
+                "filters": { "license": license },
+            }),
+        );
+    }
+}
+
+#[test]
+fn limit_boundaries_are_accepted() {
+    let prior = empty_project();
+    for limit in [1, 100] {
+        assert_local_floor_ok(
+            &prior,
+            json!({
+                "project_id": FIXTURE_PROJECT_ID,
+                "provider_id": "local",
+                "query": "catalog query",
+                "kind": "video",
+                "limit": limit,
+            }),
+        );
+    }
+}
+
+#[test]
+fn duration_boundary_values_are_accepted() {
+    let prior = empty_project();
+    assert_local_floor_ok(
+        &prior,
+        json!({
+            "project_id": FIXTURE_PROJECT_ID,
+            "provider_id": "local",
+            "query": "catalog query",
+            "kind": "music",
+            "filters": { "duration_min_tk": 0 },
+        }),
+    );
+    assert_local_floor_ok(
+        &prior,
+        json!({
+            "project_id": FIXTURE_PROJECT_ID,
+            "provider_id": "local",
+            "query": "catalog query",
+            "kind": "music",
+            "filters": { "duration_max_tk": 0 },
+        }),
+    );
+}
+
+#[test]
 fn data_envelope_key_is_items_only() {
     let prior = empty_project();
     let (_, _, data) = compute_patch(&prior, &args_local()).expect("local succeeds");
@@ -479,6 +600,52 @@ fn future_item_serialization_includes_optional_present_fields() {
             .and_then(Value::as_object)
             .and_then(|l| l.get("attribution_text")),
         Some(&json!("Photo by Alice"))
+    );
+}
+
+#[test]
+fn future_item_serialization_includes_all_required_item_and_license_keys() {
+    let item = StockSearchItem {
+        stock_id: "provider:required-shape".to_string(),
+        provider_id: "local".to_string(),
+        kind: StockMediaKind::Sticker,
+        title: "Required Key Shape".to_string(),
+        duration_tk: None,
+        dimensions: None,
+        preview_url: "https://example.invalid/shape.jpg".to_string(),
+        license: StockSearchLicense {
+            spdx: "royalty-free".to_string(),
+            attribution_required: false,
+            attribution_text: None,
+            source_url: "https://example.invalid/shape".to_string(),
+        },
+    };
+
+    let value = serde_json::to_value(item).expect("item -> Value");
+    let obj = value.as_object().expect("item object");
+    let mut item_keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+    item_keys.sort_unstable();
+    assert_eq!(
+        item_keys,
+        vec![
+            "kind",
+            "license",
+            "preview_url",
+            "provider_id",
+            "stock_id",
+            "title",
+        ]
+    );
+
+    let license_obj = obj
+        .get("license")
+        .and_then(Value::as_object)
+        .expect("license object");
+    let mut license_keys: Vec<&str> = license_obj.keys().map(String::as_str).collect();
+    license_keys.sort_unstable();
+    assert_eq!(
+        license_keys,
+        vec!["attribution_required", "source_url", "spdx"]
     );
 }
 
