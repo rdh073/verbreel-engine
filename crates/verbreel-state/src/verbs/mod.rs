@@ -150,6 +150,7 @@ pub mod text_edit;
 pub mod text_style;
 pub mod timeline_diff;
 pub mod timeline_snapshot;
+pub mod timeline_undo;
 pub mod track_add;
 pub mod track_hide;
 pub mod track_lock;
@@ -653,6 +654,11 @@ pub fn default_registry() -> VerbRegistry {
             "TimelineDiffVerb registration in default_registry() cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(timeline_undo::TimelineUndoVerb))
+        .expect(
+            "TimelineUndoVerb registration in default_registry() cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(list_capabilities::ListCapabilitiesVerb))
         .expect(
             "ListCapabilitiesVerb is the sixty-third registration in \
@@ -847,6 +853,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         project_info_fixture(),
         timeline_snapshot_fixture(),
         timeline_diff_fixture(),
+        timeline_undo_fixture(),
         list_capabilities_fixture(),
         help_fixture(),
         validate_command_fixture(),
@@ -4228,6 +4235,35 @@ fn timeline_diff_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `timeline.undo` fixture used by
+/// [`default_fixtures`].
+///
+/// `timeline.undo` always errors with `E_NOTHING_TO_UNDO` for
+/// well-formed args in this v1 floor. No successful event is recorded,
+/// so `reconstruct()` deserializes args and returns `Value::Null`; the
+/// fixture records `expected_data: null` for the §0.8 gate.
+fn timeline_undo_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = timeline_undo::TimelineUndoArgs {
+        project_id,
+        steps: None,
+    };
+
+    RecordedEvent {
+        verb: "timeline.undo".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `keyframe.add` fixture used by [`default_fixtures`].
 ///
 /// Starts from a synthetic project with one video clip, then appends one
@@ -6492,6 +6528,7 @@ mod tests {
                 "text.style",
                 "timeline.diff",
                 "timeline.snapshot",
+                "timeline.undo",
                 "track.add",
                 "track.hide",
                 "track.lock",

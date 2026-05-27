@@ -350,6 +350,9 @@ pub use verbs::timeline_diff::{
 pub use verbs::timeline_snapshot::{
     TimelineSnapshotArgs, TimelineSnapshotData, TimelineSnapshotError, TimelineSnapshotVerb,
 };
+pub use verbs::timeline_undo::{
+    TimelineUndoArgs, TimelineUndoData, TimelineUndoError, TimelineUndoVerb,
+};
 pub use verbs::track_add::{
     TRACK_NAME_MAX, TrackAddArgs, TrackAddData, TrackAddError, TrackAddVerb,
 };
