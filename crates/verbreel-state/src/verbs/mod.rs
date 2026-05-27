@@ -124,6 +124,7 @@ pub mod marker_add;
 pub mod marker_list;
 pub mod marker_remove;
 pub mod marker_set;
+pub mod preview_frame;
 pub mod preview_session_close;
 pub mod project_forget;
 pub mod project_info;
@@ -671,6 +672,12 @@ pub fn default_registry() -> VerbRegistry {
             "TimelineHistoryVerb registration in default_registry() cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(preview_frame::PreviewFrameVerb))
+        .expect(
+            "PreviewFrameVerb is the seventy-ninth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(list_capabilities::ListCapabilitiesVerb))
         .expect(
             "ListCapabilitiesVerb is the sixty-third registration in \
@@ -768,13 +775,13 @@ pub fn default_registry() -> VerbRegistry {
     registry
         .register(Arc::new(preview_session_close::PreviewSessionCloseVerb))
         .expect(
-            "PreviewSessionCloseVerb is the seventy-ninth registration in \
+            "PreviewSessionCloseVerb is the eightieth registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
         .register(Arc::new(project_list::ProjectListVerb))
         .expect(
-            "ProjectListVerb is the eightieth registration in \
+            "ProjectListVerb is the eighty-first registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
@@ -868,6 +875,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         timeline_undo_fixture(),
         timeline_redo_fixture(),
         timeline_history_fixture(),
+        preview_frame_fixture(),
         list_capabilities_fixture(),
         help_fixture(),
         validate_command_fixture(),
@@ -6375,6 +6383,42 @@ fn render_status_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `preview.frame` fixture used by
+/// [`default_fixtures`].
+///
+/// `preview.frame` validates only local argument bounds in v1
+/// (`at_tk >= 0`, optional `width_px ∈ [1, 8192]`) and then always
+/// errors with `E_IO` because renderer/cache runtime is deferred. No
+/// successful event can ever be recorded, so the reconstructor's input
+/// tuple carries no semantically-meaningful payload — the verb's
+/// `reconstruct()` exercises args-deserialization and returns
+/// `Value::Null` to satisfy the §0.8 gate. The fixture records
+/// `expected_data: null` so the gate's canonical-SHA equality holds.
+fn preview_frame_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = preview_frame::PreviewFrameArgs {
+        project_id,
+        at_tk: 0,
+        out_path: None,
+        width_px: None,
+        deterministic: false,
+    };
+
+    RecordedEvent {
+        verb: "preview.frame".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `preview.session.close` fixture used by
 /// [`default_fixtures`].
 ///
@@ -6582,6 +6626,7 @@ mod tests {
                 "marker.list",
                 "marker.remove",
                 "marker.set",
+                "preview.frame",
                 "preview.session.close",
                 "project.info",
                 "project.list",
