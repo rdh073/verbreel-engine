@@ -239,6 +239,10 @@ pub use verbs::clip_split::{
 };
 pub use verbs::clip_trim::{ClipTrimArgs, ClipTrimData, ClipTrimError, ClipTrimVerb};
 pub use verbs::clip_unlink::{ClipUnlinkArgs, ClipUnlinkData, ClipUnlinkError, ClipUnlinkVerb};
+pub use verbs::compound_create::{
+    COMPOUND_CREATE_CLIPS_MAX, CompoundCreateArgs, CompoundCreateData, CompoundCreateError,
+    CompoundCreateVerb,
+};
 pub use verbs::describe::{DescribeArgs, DescribeData, DescribeError, DescribeKind, DescribeVerb};
 pub use verbs::effect_add::{EffectAddArgs, EffectAddData, EffectAddError, EffectAddVerb};
 pub use verbs::effect_list_available::{
