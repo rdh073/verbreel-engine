@@ -148,6 +148,10 @@ pub use verbs::asset_verify::{
 pub use verbs::audio_denoise::{
     AudioDenoiseArgs, AudioDenoiseData, AudioDenoiseError, AudioDenoiseVerb,
 };
+pub use verbs::audio_detect_beats::{
+    AudioAnalysisTargetKind, AudioDetectBeatsAlgorithm, AudioDetectBeatsArgs, AudioDetectBeatsData,
+    AudioDetectBeatsError, AudioDetectBeatsStage, AudioDetectBeatsVerb,
+};
 pub use verbs::audio_extract::{
     AudioExtractArgs, AudioExtractCodec, AudioExtractData, AudioExtractError, AudioExtractVerb,
 };
