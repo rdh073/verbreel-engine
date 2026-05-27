@@ -134,6 +134,8 @@ pub mod preview_session_seek;
 pub mod preview_thumbnail;
 pub mod preview_waveform;
 #[cfg(feature = "native")]
+pub mod project_close;
+#[cfg(feature = "native")]
 pub mod project_duplicate;
 pub mod project_forget;
 pub mod project_info;

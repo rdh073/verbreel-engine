@@ -297,6 +297,10 @@ pub use verbs::preview_waveform::{
     PreviewWaveformArgs, PreviewWaveformData, PreviewWaveformError, PreviewWaveformVerb,
 };
 #[cfg(feature = "native")]
+pub use verbs::project_close::{
+    ProjectCloseArgs, ProjectCloseData, ProjectCloseError, close as project_close,
+};
+#[cfg(feature = "native")]
 pub use verbs::project_duplicate::{
     ProjectDuplicateArgs, ProjectDuplicateData, ProjectDuplicateError,
     duplicate as project_duplicate,
