@@ -126,6 +126,7 @@ pub mod marker_remove;
 pub mod marker_set;
 pub mod preview_frame;
 pub mod preview_session_close;
+pub mod preview_waveform;
 pub mod project_forget;
 pub mod project_info;
 pub mod project_list;
@@ -678,6 +679,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(preview_waveform::PreviewWaveformVerb))
+        .expect(
+            "PreviewWaveformVerb registration in default_registry() cannot collide with prior \
+             verbs",
+        );
+    registry
         .register(Arc::new(list_capabilities::ListCapabilitiesVerb))
         .expect(
             "ListCapabilitiesVerb is the sixty-third registration in \
@@ -876,6 +883,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         timeline_redo_fixture(),
         timeline_history_fixture(),
         preview_frame_fixture(),
+        preview_waveform_fixture(),
         list_capabilities_fixture(),
         help_fixture(),
         validate_command_fixture(),
@@ -6419,6 +6427,42 @@ fn preview_frame_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `preview.waveform` fixture used by
+/// [`default_fixtures`].
+///
+/// `preview.waveform` validates only local selector/range constraints
+/// in v1 (qualified `target`, optional `samples ∈ [1, 100000]`) and
+/// then always errors with `E_IO` because waveform/runtime cache
+/// execution is deferred. No successful event can ever be recorded, so
+/// the reconstructor's input tuple carries no semantically-meaningful
+/// payload — the verb's `reconstruct()` exercises args-deserialization
+/// and returns `Value::Null` to satisfy the §0.8 gate. The fixture
+/// records `expected_data: null` so the gate's canonical-SHA equality
+/// holds.
+fn preview_waveform_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = preview_waveform::PreviewWaveformArgs {
+        project_id,
+        target: "asset:0190b8d3-15e3-7000-bd00-0000feedbeef".to_string(),
+        samples: None,
+        out_path: None,
+    };
+
+    RecordedEvent {
+        verb: "preview.waveform".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `preview.session.close` fixture used by
 /// [`default_fixtures`].
 ///
@@ -6628,6 +6672,7 @@ mod tests {
                 "marker.set",
                 "preview.frame",
                 "preview.session.close",
+                "preview.waveform",
                 "project.info",
                 "project.list",
                 "project.rename",
