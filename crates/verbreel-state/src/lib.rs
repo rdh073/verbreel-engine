@@ -123,6 +123,9 @@ pub use reconstructor::{
     ReconstructError, RecordedEvent, RegistryError, ValidationError, ValidationReport, Verb,
     VerbError, VerbRegistry, validate_reconstructors,
 };
+pub use verbs::asset_gc::{
+    AssetGcArgs, AssetGcData, AssetGcError, AssetGcVerb, NEITHER_HINT as ASSET_GC_NEITHER_HINT,
+};
 pub use verbs::asset_import::{
     AssetImportArgs, AssetImportData, AssetImportError, AssetImportVerb, ImportMode,
     PATHS_MAX_BATCH, SCHEMA_VIOLATION_HINT as ASSET_IMPORT_SCHEMA_VIOLATION_HINT,

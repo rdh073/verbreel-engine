@@ -69,6 +69,7 @@ use crate::project::Project;
 use crate::reconstructor::{RecordedEvent, VerbRegistry};
 use verbreel_types::Tick;
 
+pub mod asset_gc;
 pub mod asset_import;
 pub mod asset_list;
 pub mod asset_probe;
@@ -503,6 +504,10 @@ pub fn default_registry() -> VerbRegistry {
             "AssetRemoveVerb is the fifty-eighth registration in \
              default_registry(); cannot collide with prior verbs",
         );
+    registry.register(Arc::new(asset_gc::AssetGcVerb)).expect(
+        "AssetGcVerb is the eighty-seventh registration in \
+             default_registry(); cannot collide with prior verbs",
+    );
     registry
         .register(Arc::new(audio_fade::AudioFadeVerb))
         .expect(
@@ -763,6 +768,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         effect_reorder_fixture(),
         effect_set_param_fixture(),
         effect_toggle_fixture(),
+        asset_gc_fixture(),
         asset_import_fixture(),
         asset_list_fixture(),
         asset_probe_fixture(),
@@ -5918,6 +5924,42 @@ fn project_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `asset.gc` fixture used by [`default_fixtures`].
+///
+/// `asset.gc` ignores project state, so the prior is just the empty
+/// synthetic project and the patch is empty. The single-project scope
+/// path is the only one that returns Ok in v1 (the cross-validation
+/// matrix sends every other path to an error before reaching data
+/// emission); the fixture exercises it with `project_id: Some(_),
+/// global: None` and records the empty data envelope.
+fn asset_gc_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = asset_gc::AssetGcArgs {
+        project_id: Some(project_id),
+        global: None,
+        suppress_orphan_risk: None,
+    };
+
+    let (patch_value, _warnings, data) = asset_gc::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid asset.gc data");
+    let expected_data =
+        serde_json::to_value(&data).expect("asset.gc fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "asset.gc".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5969,6 +6011,7 @@ mod tests {
         assert_eq!(
             report.verbs_checked,
             vec![
+                "asset.gc",
                 "asset.import",
                 "asset.list",
                 "asset.probe",
