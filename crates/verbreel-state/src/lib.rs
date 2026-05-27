@@ -381,6 +381,9 @@ pub use verbs::render_status::{
 pub use verbs::schema::{
     SchemaArgs, SchemaData, SchemaError as SchemaVerbError, SchemaTarget, SchemaVerb,
 };
+pub use verbs::stock_describe::{
+    StockDescribeArgs, StockDescribeData, StockDescribeError, StockDescribeVerb,
+};
 pub use verbs::stock_import::{
     StockImportArgs, StockImportData, StockImportError, StockImportLicenseRecorded,
     StockImportMode, StockImportVerb,
