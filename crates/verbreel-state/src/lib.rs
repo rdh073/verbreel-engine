@@ -272,6 +272,9 @@ pub use verbs::preview_session_close::{
     PreviewSessionCloseArgs, PreviewSessionCloseData, PreviewSessionCloseError,
     PreviewSessionCloseVerb,
 };
+pub use verbs::preview_thumbnail::{
+    PreviewThumbnailArgs, PreviewThumbnailData, PreviewThumbnailError, PreviewThumbnailVerb,
+};
 pub use verbs::preview_waveform::{
     PreviewWaveformArgs, PreviewWaveformData, PreviewWaveformError, PreviewWaveformVerb,
 };
