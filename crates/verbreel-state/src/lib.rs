@@ -272,6 +272,9 @@ pub use verbs::preview_session_close::{
     PreviewSessionCloseArgs, PreviewSessionCloseData, PreviewSessionCloseError,
     PreviewSessionCloseVerb,
 };
+pub use verbs::preview_waveform::{
+    PreviewWaveformArgs, PreviewWaveformData, PreviewWaveformError, PreviewWaveformVerb,
+};
 pub use verbs::project_forget::{
     ProjectForgetArgs, ProjectForgetData, ProjectForgetError, forget as project_forget,
 };
