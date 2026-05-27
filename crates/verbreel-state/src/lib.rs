@@ -156,6 +156,10 @@ pub use verbs::audio_detect_beats::{
     AudioAnalysisTargetKind, AudioDetectBeatsAlgorithm, AudioDetectBeatsArgs, AudioDetectBeatsData,
     AudioDetectBeatsError, AudioDetectBeatsStage, AudioDetectBeatsVerb,
 };
+pub use verbs::audio_detect_silence::{
+    AudioDetectSilenceArgs, AudioDetectSilenceData, AudioDetectSilenceError,
+    AudioDetectSilenceStage, AudioDetectSilenceVerb, AudioSilenceInterval,
+};
 pub use verbs::audio_extract::{
     AudioExtractArgs, AudioExtractCodec, AudioExtractData, AudioExtractError, AudioExtractVerb,
 };
