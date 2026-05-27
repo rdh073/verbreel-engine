@@ -115,6 +115,7 @@ pub mod marker_list;
 pub mod marker_remove;
 pub mod marker_set;
 pub mod preview_session_close;
+pub mod project_forget;
 pub mod project_info;
 pub mod project_list;
 pub mod project_rename;
