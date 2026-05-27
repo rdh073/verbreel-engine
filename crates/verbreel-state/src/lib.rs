@@ -276,6 +276,9 @@ pub use verbs::preview_session_create::{
     PreviewSessionChannelKind, PreviewSessionCreateArgs, PreviewSessionCreateData,
     PreviewSessionCreateError, PreviewSessionCreateVerb,
 };
+pub use verbs::preview_session_seek::{
+    PreviewSessionSeekArgs, PreviewSessionSeekData, PreviewSessionSeekError, PreviewSessionSeekVerb,
+};
 pub use verbs::preview_thumbnail::{
     PreviewThumbnailArgs, PreviewThumbnailData, PreviewThumbnailError, PreviewThumbnailVerb,
 };
