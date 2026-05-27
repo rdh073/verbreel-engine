@@ -152,6 +152,7 @@ pub mod render_start;
 pub mod render_status;
 pub mod schema;
 pub mod stock_list_providers;
+pub mod template_describe;
 pub mod template_list;
 pub mod text_add;
 pub mod text_animate;
@@ -836,6 +837,12 @@ pub fn default_registry() -> VerbRegistry {
             "TemplateListVerb registration in default_registry() cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(template_describe::TemplateDescribeVerb))
+        .expect(
+            "TemplateDescribeVerb registration in default_registry() cannot collide with prior \
+             verbs",
+        );
+    registry
         .register(Arc::new(project_list::ProjectListVerb))
         .expect(
             "ProjectListVerb is the eighty-third registration in \
@@ -960,6 +967,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         render_status_fixture(),
         preview_session_close_fixture(),
         template_list_fixture(),
+        template_describe_fixture(),
         project_list_fixture(),
     ]
 }
@@ -5912,6 +5920,39 @@ fn template_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `template.describe` fixture used by
+/// [`default_fixtures`].
+///
+/// `template.describe` validates local args shape in the v1 floor and
+/// then always errors with `E_TEMPLATE_NOT_FOUND` because runtime
+/// template-catalog lookup is deferred. No successful event can ever
+/// be recorded, so the reconstructor's input tuple carries no
+/// semantically-meaningful payload — the verb's `reconstruct()`
+/// exercises args-deserialization and returns `Value::Null` to satisfy
+/// the §0.8 gate. The fixture records `expected_data: null` so the
+/// gate's canonical-SHA equality holds.
+fn template_describe_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = template_describe::TemplateDescribeArgs {
+        project_id,
+        template_id: "0190b8d3-15e3-7000-bd00-0000feedbeef".to_string(),
+    };
+
+    RecordedEvent {
+        verb: "template.describe".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `asset.verify` fixture used by
 /// [`default_fixtures`].
 ///
@@ -6999,6 +7040,7 @@ mod tests {
                 "render.status",
                 "schema",
                 "stock.list_providers",
+                "template.describe",
                 "template.list",
                 "text.add",
                 "text.animate",
