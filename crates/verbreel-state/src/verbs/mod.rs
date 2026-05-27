@@ -142,6 +142,8 @@ pub mod project_duplicate;
 pub mod project_forget;
 pub mod project_info;
 pub mod project_list;
+#[cfg(feature = "native")]
+pub mod project_open;
 pub mod project_rename;
 #[cfg(feature = "native")]
 pub mod project_save;

@@ -321,6 +321,10 @@ pub use verbs::project_list::{
     ProjectEntry, ProjectListArgs, ProjectListData, ProjectListError, ProjectListState,
     ProjectListVerb,
 };
+#[cfg(feature = "native")]
+pub use verbs::project_open::{
+    ProjectOpenArgs, ProjectOpenData, ProjectOpenError, open as project_open,
+};
 pub use verbs::project_rename::{
     PROJECT_NAME_MAX, PROJECT_NAME_MIN, ProjectRenameArgs, ProjectRenameData, ProjectRenameError,
     ProjectRenameVerb,
