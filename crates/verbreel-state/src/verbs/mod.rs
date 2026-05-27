@@ -84,6 +84,7 @@ pub mod caption_auto_generate;
 pub mod caption_burn_in;
 pub mod caption_burn_off;
 pub mod caption_edit;
+pub mod caption_export;
 pub mod caption_translate;
 pub use caption_burn_off::*;
 pub mod clip_add;
@@ -198,6 +199,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `text.style` (§7.3)
 /// - `caption.auto_generate` (§10.1)
 /// - `caption.edit` (§10.2, §7.2 alias)
+/// - `caption.export` (§10.6)
 /// - `caption.translate` (§10.3)
 /// - `keyframe.add` (§8.1)
 /// - `keyframe.list` (§8.4)
@@ -584,6 +586,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(caption_export::CaptionExportVerb))
+        .expect(
+            "CaptionExportVerb is the ninety-third registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(caption_burn_in::CaptionBurnInVerb))
         .expect(
             "CaptionBurnInVerb is the fifty-fifth registration in \
@@ -765,6 +773,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         caption_edit_fixture(),
         caption_auto_generate_fixture(),
         caption_translate_fixture(),
+        caption_export_fixture(),
         caption_burn_in_fixture(),
         caption_burn_off_fixture(),
         text_style_fixture(),
@@ -1029,6 +1038,38 @@ fn caption_translate_fixture() -> RecordedEvent {
     RecordedEvent {
         verb: "caption.translate".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
+/// Build the canonical `caption.export` fixture used by
+/// [`default_fixtures`].
+///
+/// `caption.export` always errors with `E_IO` in the v1 floor because
+/// sidecar subtitle writing is intentionally deferred. No successful
+/// event can be recorded, so the reconstructor only checks args
+/// deserialization and returns `Value::Null`. The fixture records
+/// `expected_data: null` so the startup gate's canonical equality
+/// holds.
+fn caption_export_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = json!({
+        "project_id": project_id.to_string(),
+        "text_track": "track:text[0]",
+        "out_path": "captions.srt",
+    });
+
+    RecordedEvent {
+        verb: "caption.export".to_string(),
+        args,
         patch: json!([]),
         warnings: vec![],
         post_state: prior,
@@ -6299,6 +6340,7 @@ mod tests {
                 "caption.burn_in",
                 "caption.burn_off",
                 "caption.edit",
+                "caption.export",
                 "caption.translate",
                 "clip.add",
                 "clip.delete",

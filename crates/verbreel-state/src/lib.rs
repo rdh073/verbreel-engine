@@ -176,6 +176,10 @@ pub use verbs::caption_burn_in::{
 pub use verbs::caption_burn_off::{
     CaptionBurnOffArgs, CaptionBurnOffData, CaptionBurnOffError, CaptionBurnOffVerb,
 };
+pub use verbs::caption_export::{
+    CaptionExportArgs, CaptionExportData, CaptionExportError, CaptionExportFormat,
+    CaptionExportVerb,
+};
 pub use verbs::caption_translate::{
     CaptionTranslateArgs, CaptionTranslateData, CaptionTranslateError, CaptionTranslateVerb,
 };
