@@ -245,6 +245,10 @@ pub use verbs::project_rename::{
     PROJECT_NAME_MAX, PROJECT_NAME_MIN, ProjectRenameArgs, ProjectRenameData, ProjectRenameError,
     ProjectRenameVerb,
 };
+#[cfg(feature = "native")]
+pub use verbs::project_save::{
+    ProjectSaveArgs, ProjectSaveData, ProjectSaveError, save as project_save,
+};
 pub use verbs::project_set_canvas::{
     CANVAS_MAX_DIM, CANVAS_MIN_DIM, PIXEL_ASPECT_MIN, ProjectSetCanvasArgs, ProjectSetCanvasData,
     ProjectSetCanvasError, ProjectSetCanvasVerb,
