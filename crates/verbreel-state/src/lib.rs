@@ -344,6 +344,9 @@ pub use verbs::text_add::{
     StyleArg, TextAddArgs, TextAddData, TextAddError, TextAddVerb, W_TEXT_ADD_ENVELOPE_CODE,
 };
 pub use verbs::text_edit::{TextEditArgs, TextEditData, TextEditError, TextEditVerb};
+pub use verbs::timeline_diff::{
+    TimelineDiffArgs, TimelineDiffData, TimelineDiffError, TimelineDiffEvent, TimelineDiffVerb,
+};
 pub use verbs::timeline_snapshot::{
     TimelineSnapshotArgs, TimelineSnapshotData, TimelineSnapshotError, TimelineSnapshotVerb,
 };
