@@ -114,6 +114,7 @@ pub mod marker_add;
 pub mod marker_list;
 pub mod marker_remove;
 pub mod marker_set;
+pub mod preview_session_close;
 pub mod project_info;
 pub mod project_rename;
 pub mod project_set_canvas;
@@ -658,6 +659,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(preview_session_close::PreviewSessionCloseVerb))
+        .expect(
+            "PreviewSessionCloseVerb is the seventy-ninth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -750,6 +757,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         render_list_presets_fixture(),
         render_cancel_fixture(),
         render_status_fixture(),
+        preview_session_close_fixture(),
     ]
 }
 
@@ -5705,6 +5713,41 @@ fn render_status_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `preview.session.close` fixture used by
+/// [`default_fixtures`].
+///
+/// `preview.session.close` always errors with
+/// `E_PREVIEW_SESSION_NOT_FOUND` in the v1 floor (no
+/// `preview.session.create` verb exists yet, so no preview session is
+/// ever in flight; see the module-level doc on
+/// `verbs::preview_session_close`). No successful event can ever be
+/// recorded, so the reconstructor's input tuple carries no
+/// semantically-meaningful payload — the verb's `reconstruct()`
+/// exercises args-deserialization and returns `Value::Null` to satisfy
+/// the §0.8 gate. The fixture records `expected_data: null` so the
+/// gate's canonical-SHA equality holds.
+fn preview_session_close_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = preview_session_close::PreviewSessionCloseArgs {
+        project_id,
+        session_id: "0190b8d3-15e3-7000-bd00-0000feedbeef".to_string(),
+    };
+
+    RecordedEvent {
+        verb: "preview.session.close".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5800,6 +5843,7 @@ mod tests {
                 "marker.list",
                 "marker.remove",
                 "marker.set",
+                "preview.session.close",
                 "project.info",
                 "project.rename",
                 "project.set_canvas",
