@@ -123,6 +123,10 @@ pub use reconstructor::{
     ReconstructError, RecordedEvent, RegistryError, ValidationError, ValidationReport, Verb,
     VerbError, VerbRegistry, validate_reconstructors,
 };
+pub use verbs::asset_import::{
+    AssetImportArgs, AssetImportData, AssetImportError, AssetImportVerb, ImportMode,
+    PATHS_MAX_BATCH, SCHEMA_VIOLATION_HINT as ASSET_IMPORT_SCHEMA_VIOLATION_HINT,
+};
 pub use verbs::asset_list::{
     AssetKindFilter, AssetListArgs, AssetListData, AssetListError, AssetListVerb,
 };
