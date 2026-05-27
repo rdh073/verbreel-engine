@@ -76,6 +76,7 @@ pub mod asset_probe;
 pub mod asset_relink;
 pub mod asset_remove;
 pub mod asset_verify;
+pub mod audio_denoise;
 pub mod audio_extract;
 pub mod audio_fade;
 pub mod audio_volume;
@@ -523,6 +524,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(audio_denoise::AudioDenoiseVerb))
+        .expect(
+            "AudioDenoiseVerb is the ninetieth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(audio_fade::AudioFadeVerb))
         .expect(
             "AudioFadeVerb is the fifty-ninth registration in \
@@ -790,6 +797,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         asset_remove_fixture(),
         asset_verify_fixture(),
         audio_extract_fixture(),
+        audio_denoise_fixture(),
         audio_fade_fixture(),
         audio_volume_fixture(),
         keyframe_add_fixture(),
@@ -3616,6 +3624,102 @@ fn audio_extract_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `audio.denoise` fixture used by [`default_fixtures`].
+///
+/// Starts from a synthetic project with a single audio clip that already
+/// carries the managed denoise effect, then updates its strength in place.
+fn audio_denoise_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let asset_id = "01900000-0000-7000-8000-0000000cc904";
+    let clip_id = "01900000-0000-7000-8000-0000000bb904";
+    let effect_id = "01900000-0000-7000-8000-0000000dd904";
+
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": asset_id,
+            "kind": "audio",
+            "hash": "53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658",
+            "path": "assets/53/53ed88c925907984e34d2afc4a4fcfcda94fde0ad32c7999ec46a77cee817658.m4a",
+            "original_filename": "audio-denoise.m4a",
+            "imported_at": "2026-05-24T00:00:00Z",
+            "metadata": {
+                "duration_tk": 480_000,
+                "audio_codec": "aac",
+                "audio_channels": 2,
+                "audio_sample_rate_hz": 48_000,
+                "container": "m4a",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 1024,
+                }
+            }
+        }))
+        .expect("audio.denoise fixture asset parses"),
+    );
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa904",
+        "kind": "audio",
+        "name": "Audio 12",
+        "locked": false,
+        "clips": [{
+            "id": clip_id,
+            "name": "Denoise Clip",
+            "asset_id": asset_id,
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+            "effects": [{
+                "id": effect_id,
+                "kind": "denoise",
+                "enabled": true,
+                "params": {
+                    "strength": 0.5,
+                }
+            }],
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+
+    let args = audio_denoise::AudioDenoiseArgs {
+        project_id,
+        target: format!("clip:{clip_id}"),
+        strength: Some(0.25),
+    };
+
+    let (patch_value, warnings, _data) = audio_denoise::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid audio.denoise patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("audio.denoise fixture patch must be valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("audio.denoise fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        audio_denoise::data_envelope_from_args_warnings_post_state(&args, &warnings, &post_state)
+            .expect("audio.denoise fixture expected_data"),
+    )
+    .expect("audio.denoise fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "audio.denoise".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
 /// Build the canonical `audio.fade` fixture used by [`default_fixtures`].
 ///
 /// Starts from a synthetic project with a single audio track holding a
@@ -6099,6 +6203,7 @@ mod tests {
                 "asset.relink",
                 "asset.remove",
                 "asset.verify",
+                "audio.denoise",
                 "audio.extract",
                 "audio.fade",
                 "audio.volume",
