@@ -367,6 +367,10 @@ pub use verbs::stock_list_providers::{
     Provider, ProviderKind, StockListProvidersArgs, StockListProvidersData,
     StockListProvidersError, StockListProvidersVerb, StockMediaKind,
 };
+pub use verbs::template_list::{
+    TemplateCanvasHint, TemplateFpsHint, TemplateListArgs, TemplateListData, TemplateListEntry,
+    TemplateListError, TemplateListVerb, TemplateSlotKind, TemplateSlotSummary, TemplateSource,
+};
 pub use verbs::text_add::{
     StyleArg, TextAddArgs, TextAddData, TextAddError, TextAddVerb, W_TEXT_ADD_ENVELOPE_CODE,
 };

@@ -152,6 +152,7 @@ pub mod render_start;
 pub mod render_status;
 pub mod schema;
 pub mod stock_list_providers;
+pub mod template_list;
 pub mod text_add;
 pub mod text_animate;
 pub mod text_edit;
@@ -830,6 +831,11 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(template_list::TemplateListVerb))
+        .expect(
+            "TemplateListVerb registration in default_registry() cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(project_list::ProjectListVerb))
         .expect(
             "ProjectListVerb is the eighty-third registration in \
@@ -953,6 +959,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         render_cancel_fixture(),
         render_status_fixture(),
         preview_session_close_fixture(),
+        template_list_fixture(),
         project_list_fixture(),
     ]
 }
@@ -5870,6 +5877,41 @@ fn font_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `template.list` fixture used by
+/// [`default_fixtures`].
+///
+/// `template.list` ignores project state in the v1 floor, so the prior
+/// is just the empty synthetic project and the patch is empty.
+/// Expected data comes from a forward `compute_patch` against that
+/// same prior — currently an empty `templates` list.
+fn template_list_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = template_list::TemplateListArgs {
+        project_id,
+        source: None,
+        kind: None,
+    };
+
+    let (patch_value, _warnings, data) = template_list::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid template.list data");
+    let expected_data =
+        serde_json::to_value(&data).expect("template.list fixture expected_data serializes");
+
+    RecordedEvent {
+        verb: "template.list".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Build the canonical `asset.verify` fixture used by
 /// [`default_fixtures`].
 ///
@@ -6957,6 +6999,7 @@ mod tests {
                 "render.status",
                 "schema",
                 "stock.list_providers",
+                "template.list",
                 "text.add",
                 "text.animate",
                 "text.edit",
