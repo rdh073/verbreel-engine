@@ -126,6 +126,7 @@ pub mod marker_remove;
 pub mod marker_set;
 pub mod preview_frame;
 pub mod preview_session_close;
+pub mod preview_session_create;
 pub mod preview_thumbnail;
 pub mod preview_waveform;
 pub mod project_forget;
@@ -787,6 +788,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(preview_session_create::PreviewSessionCreateVerb))
+        .expect(
+            "PreviewSessionCreateVerb registration in default_registry() cannot collide with \
+             prior verbs",
+        );
+    registry
         .register(Arc::new(preview_session_close::PreviewSessionCloseVerb))
         .expect(
             "PreviewSessionCloseVerb is the eightieth registration in \
@@ -892,6 +899,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         preview_frame_fixture(),
         preview_waveform_fixture(),
         preview_thumbnail_fixture(),
+        preview_session_create_fixture(),
         list_capabilities_fixture(),
         help_fixture(),
         validate_command_fixture(),
@@ -6508,6 +6516,43 @@ fn preview_thumbnail_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `preview.session.create` fixture used by
+/// [`default_fixtures`].
+///
+/// `preview.session.create` validates only local args/ranges in the v1
+/// floor and then always errors with `E_PREVIEW_SESSION_LIMIT` because
+/// runtime session-manager allocation is deferred. No successful event
+/// can ever be recorded, so the reconstructor's input tuple carries no
+/// semantically-meaningful payload — the verb's `reconstruct()`
+/// exercises args-deserialization and returns `Value::Null` to satisfy
+/// the §0.8 gate. The fixture records `expected_data: null` so the
+/// gate's canonical-SHA equality holds.
+fn preview_session_create_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = preview_session_create::PreviewSessionCreateArgs {
+        project_id,
+        playback_rate: None,
+        width_px: None,
+        audio_enabled: true,
+        format: preview_session_create::PreviewSessionChannelKind::Ndjson,
+        start_at_tk: None,
+    };
+
+    RecordedEvent {
+        verb: "preview.session.create".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `preview.session.close` fixture used by
 /// [`default_fixtures`].
 ///
@@ -6717,6 +6762,7 @@ mod tests {
                 "marker.set",
                 "preview.frame",
                 "preview.session.close",
+                "preview.session.create",
                 "preview.thumbnail",
                 "preview.waveform",
                 "project.info",

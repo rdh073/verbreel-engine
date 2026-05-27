@@ -272,6 +272,10 @@ pub use verbs::preview_session_close::{
     PreviewSessionCloseArgs, PreviewSessionCloseData, PreviewSessionCloseError,
     PreviewSessionCloseVerb,
 };
+pub use verbs::preview_session_create::{
+    PreviewSessionChannelKind, PreviewSessionCreateArgs, PreviewSessionCreateData,
+    PreviewSessionCreateError, PreviewSessionCreateVerb,
+};
 pub use verbs::preview_thumbnail::{
     PreviewThumbnailArgs, PreviewThumbnailData, PreviewThumbnailError, PreviewThumbnailVerb,
 };
