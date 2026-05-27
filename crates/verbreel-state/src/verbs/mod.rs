@@ -75,6 +75,7 @@ pub mod asset_list;
 pub mod asset_probe;
 pub mod asset_relink;
 pub mod asset_remove;
+pub mod asset_verify;
 pub mod audio_fade;
 pub mod audio_volume;
 pub mod caption_burn_in;
@@ -509,6 +510,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
     );
     registry
+        .register(Arc::new(asset_verify::AssetVerifyVerb))
+        .expect(
+            "AssetVerifyVerb is the eighty-eighth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(audio_fade::AudioFadeVerb))
         .expect(
             "AudioFadeVerb is the fifty-ninth registration in \
@@ -774,6 +781,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         asset_probe_fixture(),
         asset_relink_fixture(),
         asset_remove_fixture(),
+        asset_verify_fixture(),
         audio_fade_fixture(),
         audio_volume_fixture(),
         keyframe_add_fixture(),
@@ -5363,6 +5371,39 @@ fn font_list_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `asset.verify` fixture used by
+/// [`default_fixtures`].
+///
+/// Synthetic empty project carries zero assets, so the v1 floor's
+/// `checked_count` is `0` and `unverified_asset_ids` is `[]`. Mode
+/// defaults to `Fast` because `strict` is omitted.
+fn asset_verify_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = asset_verify::AssetVerifyArgs {
+        project_id,
+        strict: None,
+    };
+
+    let (patch_value, _warnings, data) = asset_verify::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid asset.verify data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("asset.verify fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "asset.verify".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Build the canonical `tracker.create` fixture used by
 /// [`default_fixtures`].
 ///
@@ -6017,6 +6058,7 @@ mod tests {
                 "asset.probe",
                 "asset.relink",
                 "asset.remove",
+                "asset.verify",
                 "audio.fade",
                 "audio.volume",
                 "caption.burn_in",
