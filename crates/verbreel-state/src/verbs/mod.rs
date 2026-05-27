@@ -76,6 +76,7 @@ pub mod asset_probe;
 pub mod asset_relink;
 pub mod asset_remove;
 pub mod asset_verify;
+pub mod audio_extract;
 pub mod audio_fade;
 pub mod audio_volume;
 pub mod caption_burn_in;
@@ -516,6 +517,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(audio_extract::AudioExtractVerb))
+        .expect(
+            "AudioExtractVerb is the eighty-ninth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(audio_fade::AudioFadeVerb))
         .expect(
             "AudioFadeVerb is the fifty-ninth registration in \
@@ -782,6 +789,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         asset_relink_fixture(),
         asset_remove_fixture(),
         asset_verify_fixture(),
+        audio_extract_fixture(),
         audio_fade_fixture(),
         audio_volume_fixture(),
         keyframe_add_fixture(),
@@ -3576,6 +3584,38 @@ fn asset_remove_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `audio.extract` fixture used by
+/// [`default_fixtures`].
+///
+/// `audio.extract` always errors with `E_IO` in the v1 floor because
+/// extraction needs storage/codec context outside pure verb execution.
+/// No successful event can be recorded, so the reconstructor only checks
+/// args deserialization and returns `Value::Null`. The fixture records
+/// `expected_data: null` so the startup gate's canonical equality holds.
+fn audio_extract_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = audio_extract::AudioExtractArgs {
+        project_id,
+        clip: "01900000-0000-7000-8000-0000000bb900".to_string(),
+        to_track: Some("track:01900000-0000-7000-8000-0000000aa900".to_string()),
+        codec: Some(audio_extract::AudioExtractCodec::Aac),
+    };
+
+    RecordedEvent {
+        verb: "audio.extract".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `audio.fade` fixture used by [`default_fixtures`].
 ///
 /// Starts from a synthetic project with a single audio track holding a
@@ -6059,6 +6099,7 @@ mod tests {
                 "asset.relink",
                 "asset.remove",
                 "asset.verify",
+                "audio.extract",
                 "audio.fade",
                 "audio.volume",
                 "caption.burn_in",
