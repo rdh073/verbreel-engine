@@ -154,6 +154,7 @@ pub mod render_start;
 pub mod render_status;
 pub mod schema;
 pub mod stock_list_providers;
+pub mod template_apply;
 pub mod template_describe;
 pub mod template_list;
 pub mod text_add;
@@ -845,6 +846,11 @@ pub fn default_registry() -> VerbRegistry {
              verbs",
         );
     registry
+        .register(Arc::new(template_apply::TemplateApplyVerb))
+        .expect(
+            "TemplateApplyVerb registration in default_registry() cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(project_list::ProjectListVerb))
         .expect(
             "ProjectListVerb is the eighty-third registration in \
@@ -970,6 +976,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         preview_session_close_fixture(),
         template_list_fixture(),
         template_describe_fixture(),
+        template_apply_fixture(),
         project_list_fixture(),
     ]
 }
@@ -5955,6 +5962,40 @@ fn template_describe_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `template.apply` fixture used by
+/// [`default_fixtures`].
+///
+/// `template.apply` validates local args shape in the v1 floor, checks
+/// only local `at_tk >= 0`, then always errors with
+/// `E_TEMPLATE_NOT_FOUND` because template-resource lookup is deferred.
+/// No successful event can be recorded at this slice, so this fixture
+/// carries a well-formed args payload with `patch: []`, `warnings: []`,
+/// and `expected_data: null` to satisfy the §0.8 reconstructor gate.
+fn template_apply_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = template_apply::TemplateApplyArgs {
+        project_id,
+        template_id: "0190b8d3-15e3-7000-bd00-0000feedbabe".to_string(),
+        slots: std::collections::BTreeMap::new(),
+        at_tk: None,
+        track_strategy: template_apply::TemplateTrackStrategy::CreateNew,
+    };
+
+    RecordedEvent {
+        verb: "template.apply".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `asset.verify` fixture used by
 /// [`default_fixtures`].
 ///
@@ -7042,6 +7083,7 @@ mod tests {
                 "render.status",
                 "schema",
                 "stock.list_providers",
+                "template.apply",
                 "template.describe",
                 "template.list",
                 "text.add",

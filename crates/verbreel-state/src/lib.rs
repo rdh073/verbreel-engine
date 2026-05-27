@@ -372,6 +372,10 @@ pub use verbs::stock_list_providers::{
     Provider, ProviderKind, StockListProvidersArgs, StockListProvidersData,
     StockListProvidersError, StockListProvidersVerb, StockMediaKind,
 };
+pub use verbs::template_apply::{
+    TemplateApplyArgs, TemplateApplyData, TemplateApplyError, TemplateApplyVerb,
+    TemplateTrackStrategy,
+};
 pub use verbs::template_describe::{
     TemplateDescribeArgs, TemplateDescribeData, TemplateDescribeError, TemplateDescribeVerb,
     TemplateSlotConstraints, TemplateSlotDescriptor,
