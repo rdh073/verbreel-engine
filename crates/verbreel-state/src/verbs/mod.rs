@@ -158,6 +158,7 @@ pub mod schema;
 pub mod stock_list_providers;
 pub mod template_apply;
 pub mod template_describe;
+pub mod template_from_project;
 pub mod template_list;
 pub mod text_add;
 pub mod text_animate;
@@ -853,9 +854,15 @@ pub fn default_registry() -> VerbRegistry {
             "TemplateApplyVerb registration in default_registry() cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(template_from_project::TemplateFromProjectVerb))
+        .expect(
+            "TemplateFromProjectVerb registration in default_registry() cannot collide with \
+             prior verbs",
+        );
+    registry
         .register(Arc::new(project_list::ProjectListVerb))
         .expect(
-            "ProjectListVerb is the eighty-third registration in \
+            "ProjectListVerb is the eighty-fourth registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
@@ -979,6 +986,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         template_list_fixture(),
         template_describe_fixture(),
         template_apply_fixture(),
+        template_from_project_fixture(),
         project_list_fixture(),
     ]
 }
@@ -5998,6 +6006,46 @@ fn template_apply_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `template.from_project` fixture used by
+/// [`default_fixtures`].
+///
+/// `template.from_project` validates local args shape in the v1 floor
+/// and then always errors with `E_IO` because runtime file-writing is
+/// deferred. No successful event can be recorded at this slice, so
+/// this fixture carries a well-formed args payload with `patch: []`,
+/// `warnings: []`, and `expected_data: null` for the §0.8 gate.
+fn template_from_project_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = template_from_project::TemplateFromProjectArgs {
+        project_id,
+        out_path: "/tmp/template-from-project.verbreel-template".to_string(),
+        name: "Exported Template".to_string(),
+        description: String::new(),
+        author: String::new(),
+        slot_clips: Vec::new(),
+        slot_texts: Vec::new(),
+        include_slot_defaults: false,
+        from_tk: None,
+        to_tk: None,
+        preview_png: None,
+        tags: Vec::new(),
+    };
+
+    RecordedEvent {
+        verb: "template.from_project".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `asset.verify` fixture used by
 /// [`default_fixtures`].
 ///
@@ -7087,6 +7135,7 @@ mod tests {
                 "stock.list_providers",
                 "template.apply",
                 "template.describe",
+                "template.from_project",
                 "template.list",
                 "text.add",
                 "text.animate",

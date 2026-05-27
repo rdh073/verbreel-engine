@@ -384,6 +384,10 @@ pub use verbs::template_describe::{
     TemplateDescribeArgs, TemplateDescribeData, TemplateDescribeError, TemplateDescribeVerb,
     TemplateSlotConstraints, TemplateSlotDescriptor,
 };
+pub use verbs::template_from_project::{
+    TemplateFromProjectArgs, TemplateFromProjectData, TemplateFromProjectError,
+    TemplateFromProjectVerb, TemplateSlotClipArg, TemplateSlotTextArg,
+};
 pub use verbs::template_list::{
     TemplateCanvasHint, TemplateFpsHint, TemplateListArgs, TemplateListData, TemplateListEntry,
     TemplateListError, TemplateListVerb, TemplateSlotKind, TemplateSlotSummary, TemplateSource,
