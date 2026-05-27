@@ -84,6 +84,7 @@ pub mod caption_auto_generate;
 pub mod caption_burn_in;
 pub mod caption_burn_off;
 pub mod caption_edit;
+pub mod caption_translate;
 pub use caption_burn_off::*;
 pub mod clip_add;
 pub mod clip_delete;
@@ -197,6 +198,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `text.style` (§7.3)
 /// - `caption.auto_generate` (§10.1)
 /// - `caption.edit` (§10.2, §7.2 alias)
+/// - `caption.translate` (§10.3)
 /// - `keyframe.add` (§8.1)
 /// - `keyframe.list` (§8.4)
 /// - `keyframe.remove` (§8.2)
@@ -576,6 +578,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(caption_translate::CaptionTranslateVerb))
+        .expect(
+            "CaptionTranslateVerb is the ninety-second registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(caption_burn_in::CaptionBurnInVerb))
         .expect(
             "CaptionBurnInVerb is the fifty-fifth registration in \
@@ -756,6 +764,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         text_edit_fixture(),
         caption_edit_fixture(),
         caption_auto_generate_fixture(),
+        caption_translate_fixture(),
         caption_burn_in_fixture(),
         caption_burn_off_fixture(),
         text_style_fixture(),
@@ -986,6 +995,39 @@ fn caption_auto_generate_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "caption.auto_generate".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
+/// Build the canonical `caption.translate` fixture used by
+/// [`default_fixtures`].
+///
+/// `caption.translate` always errors with `E_BUSY` in the v1 floor
+/// (writer-class streaming runtime is intentionally deferred). No
+/// successful event can ever be recorded, so the reconstructor's input
+/// tuple carries no semantically-meaningful payload — the verb's
+/// `reconstruct()` exercises args-deserialization and returns
+/// `Value::Null` to satisfy the §0.8 gate. The fixture records
+/// `expected_data: null` so the gate's canonical-SHA equality holds.
+fn caption_translate_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = caption_translate::CaptionTranslateArgs {
+        project_id,
+        from_selector: "track:audio[0]".to_string(),
+        style: None,
+    };
+
+    RecordedEvent {
+        verb: "caption.translate".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: json!([]),
         warnings: vec![],
@@ -6257,6 +6299,7 @@ mod tests {
                 "caption.burn_in",
                 "caption.burn_off",
                 "caption.edit",
+                "caption.translate",
                 "clip.add",
                 "clip.delete",
                 "clip.duplicate",
