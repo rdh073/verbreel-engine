@@ -393,6 +393,9 @@ pub use verbs::template_from_project::{
     TemplateFromProjectArgs, TemplateFromProjectData, TemplateFromProjectError,
     TemplateFromProjectVerb, TemplateSlotClipArg, TemplateSlotTextArg,
 };
+pub use verbs::template_install::{
+    TemplateInstallArgs, TemplateInstallData, TemplateInstallError, TemplateInstallVerb,
+};
 pub use verbs::template_list::{
     TemplateCanvasHint, TemplateFpsHint, TemplateListArgs, TemplateListData, TemplateListEntry,
     TemplateListError, TemplateListVerb, TemplateSlotKind, TemplateSlotSummary, TemplateSource,
