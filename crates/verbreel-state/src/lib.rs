@@ -404,6 +404,9 @@ pub use verbs::template_list::{
     TemplateCanvasHint, TemplateFpsHint, TemplateListArgs, TemplateListData, TemplateListEntry,
     TemplateListError, TemplateListVerb, TemplateSlotKind, TemplateSlotSummary, TemplateSource,
 };
+pub use verbs::template_uninstall::{
+    TemplateUninstallArgs, TemplateUninstallData, TemplateUninstallError, TemplateUninstallVerb,
+};
 pub use verbs::text_add::{
     StyleArg, TextAddArgs, TextAddData, TextAddError, TextAddVerb, W_TEXT_ADD_ENVELOPE_CODE,
 };
