@@ -145,6 +145,10 @@ pub use verbs::asset_remove::{
 pub use verbs::asset_verify::{
     AssetVerifyArgs, AssetVerifyData, AssetVerifyError, AssetVerifyMode, AssetVerifyVerb,
 };
+pub use verbs::audio_analyze::{
+    AudioAnalyzeArgs, AudioAnalyzeData, AudioAnalyzeError, AudioAnalyzeFeature,
+    AudioAnalyzeSection, AudioAnalyzeStage, AudioAnalyzeVerb,
+};
 pub use verbs::audio_denoise::{
     AudioDenoiseArgs, AudioDenoiseData, AudioDenoiseError, AudioDenoiseVerb,
 };
