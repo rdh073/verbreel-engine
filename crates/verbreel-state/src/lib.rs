@@ -301,6 +301,11 @@ pub use verbs::project_close::{
     ProjectCloseArgs, ProjectCloseData, ProjectCloseError, close as project_close,
 };
 #[cfg(feature = "native")]
+pub use verbs::project_create::{
+    ProjectCreateArgs, ProjectCreateData, ProjectCreateError, SeededTrackIds,
+    create as project_create,
+};
+#[cfg(feature = "native")]
 pub use verbs::project_duplicate::{
     ProjectDuplicateArgs, ProjectDuplicateData, ProjectDuplicateError,
     duplicate as project_duplicate,
