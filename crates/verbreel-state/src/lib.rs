@@ -465,6 +465,10 @@ pub use verbs::track_set_volume::{
 pub use verbs::track_solo::{
     DEFAULT_SOLO, TrackSoloArgs, TrackSoloData, TrackSoloError, TrackSoloVerb,
 };
+pub use verbs::tracker_apply::{
+    DEFAULT_TRACKER_APPLY_PROPERTIES, TrackerApplyArgs, TrackerApplyData, TrackerApplyError,
+    TrackerApplyOffset, TrackerApplyVerb,
+};
 pub use verbs::tracker_create::{
     FACE_DEFAULT_CONFIDENCE_THRESHOLD, FACE_DEFAULT_MIN_FACE_SIZE_PX, TrackerAlgorithm,
     TrackerCreateArgs, TrackerCreateData, TrackerCreateError, TrackerCreateVerb,

@@ -188,6 +188,7 @@ pub mod track_reorder;
 pub mod track_set_pan;
 pub mod track_set_volume;
 pub mod track_solo;
+pub mod tracker_apply;
 pub mod tracker_create;
 pub mod tracker_list;
 pub mod tracker_remove;
@@ -761,6 +762,11 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
     );
     registry
+        .register(Arc::new(tracker_apply::TrackerApplyVerb))
+        .expect(
+            "TrackerApplyVerb registration in default_registry() cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(tracker_list::TrackerListVerb))
         .expect(
             "TrackerListVerb is the seventieth registration in \
@@ -1018,6 +1024,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         stock_import_fixture(),
         stock_describe_fixture(),
         font_list_fixture(),
+        tracker_apply_fixture(),
         tracker_create_fixture(),
         tracker_list_fixture(),
         tracker_remove_fixture(),
@@ -6397,6 +6404,54 @@ fn tracker_create_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `tracker.apply` fixture used by
+/// [`default_fixtures`].
+///
+/// `tracker.apply` always errors in the v1 floor. The fixture still
+/// uses well-formed args and an existing unrun tracker id to pin the
+/// reconstructor tuple shape: `patch: []`, `warnings: []`,
+/// `expected_data: null`.
+fn tracker_apply_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let tracker_id = "01900000-0000-7000-8000-0000000ee111";
+    let to_clip_id = "01900000-0000-7000-8000-0000000bb111";
+
+    prior.trackers.push(
+        serde_json::from_value(json!({
+            "tracker_id": tracker_id,
+            "source_clip_id": "",
+            "algorithm": "object",
+            "applied_to_clip_ids": [],
+            "sample_count": -1,
+            "cache_hash": "",
+            "cache_path": "",
+        }))
+        .expect("tracker.apply fixture tracker parses"),
+    );
+
+    let args = tracker_apply::TrackerApplyArgs {
+        project_id,
+        tracker_id: tracker_id.to_string(),
+        to_clip: to_clip_id.to_string(),
+        properties: None,
+        offset: None,
+        decimate_to_every: None,
+    };
+
+    RecordedEvent {
+        verb: "tracker.apply".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `tracker.list` fixture used by
 /// [`default_fixtures`].
 ///
@@ -7418,6 +7473,7 @@ mod tests {
                 "track.set_pan",
                 "track.set_volume",
                 "track.solo",
+                "tracker.apply",
                 "tracker.create",
                 "tracker.list",
                 "tracker.remove",
