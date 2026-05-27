@@ -243,6 +243,9 @@ pub use verbs::compound_create::{
     COMPOUND_CREATE_CLIPS_MAX, CompoundCreateArgs, CompoundCreateData, CompoundCreateError,
     CompoundCreateVerb,
 };
+pub use verbs::compound_expand::{
+    CompoundExpandArgs, CompoundExpandData, CompoundExpandError, CompoundExpandVerb,
+};
 pub use verbs::describe::{DescribeArgs, DescribeData, DescribeError, DescribeKind, DescribeVerb};
 pub use verbs::effect_add::{EffectAddArgs, EffectAddData, EffectAddError, EffectAddVerb};
 pub use verbs::effect_list_available::{

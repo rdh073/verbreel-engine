@@ -110,6 +110,7 @@ pub mod clip_split;
 pub mod clip_trim;
 pub mod clip_unlink;
 pub mod compound_create;
+pub mod compound_expand;
 pub mod describe;
 pub mod effect_add;
 pub mod effect_list_available;
@@ -483,6 +484,12 @@ pub fn default_registry() -> VerbRegistry {
         .register(Arc::new(compound_create::CompoundCreateVerb))
         .expect(
             "CompoundCreateVerb registration in default_registry() cannot collide with prior \
+             verbs",
+        );
+    registry
+        .register(Arc::new(compound_expand::CompoundExpandVerb))
+        .expect(
+            "CompoundExpandVerb registration in default_registry() cannot collide with prior \
              verbs",
         );
     registry.register(Arc::new(describe::DescribeVerb)).expect(
@@ -1006,6 +1013,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_list_fixture(),
         clip_unlink_fixture(),
         compound_create_fixture(),
+        compound_expand_fixture(),
         describe_fixture(),
         effect_add_fixture(),
         effect_list_available_fixture(),
@@ -3384,6 +3392,38 @@ fn compound_create_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "compound.create".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
+/// Build the canonical `compound.expand` fixture used by
+/// [`default_fixtures`].
+///
+/// `compound.expand` always errors with `E_COMPOUND_NOT_A_COMPOUND`
+/// for accepted selectors in the v1 floor because compound
+/// schema/runtime context is intentionally deferred. No successful
+/// event can be recorded, so the reconstructor only checks args
+/// deserialization and returns `Value::Null`. The fixture records
+/// `expected_data: null` so the startup gate's canonical equality
+/// holds.
+fn compound_expand_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = compound_expand::CompoundExpandArgs {
+        project_id,
+        clip: "clip:01900000-0000-7000-8000-0000000bb910".to_string(),
+    };
+
+    RecordedEvent {
+        verb: "compound.expand".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: json!([]),
         warnings: vec![],
@@ -7584,6 +7624,7 @@ mod tests {
                 "clip.trim",
                 "clip.unlink",
                 "compound.create",
+                "compound.expand",
                 "describe",
                 "effect.add",
                 "effect.list_available",
