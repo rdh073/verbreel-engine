@@ -161,6 +161,7 @@ pub mod stock_list_providers;
 pub mod template_apply;
 pub mod template_describe;
 pub mod template_from_project;
+pub mod template_install;
 pub mod template_list;
 pub mod text_add;
 pub mod text_animate;
@@ -862,6 +863,12 @@ pub fn default_registry() -> VerbRegistry {
              prior verbs",
         );
     registry
+        .register(Arc::new(template_install::TemplateInstallVerb))
+        .expect(
+            "TemplateInstallVerb registration in default_registry() cannot collide with prior \
+             verbs",
+        );
+    registry
         .register(Arc::new(project_list::ProjectListVerb))
         .expect(
             "ProjectListVerb is the eighty-fourth registration in \
@@ -989,6 +996,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         template_describe_fixture(),
         template_apply_fixture(),
         template_from_project_fixture(),
+        template_install_fixture(),
         project_list_fixture(),
     ]
 }
@@ -6048,6 +6056,37 @@ fn template_from_project_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `template.install` fixture used by
+/// [`default_fixtures`].
+///
+/// `template.install` validates local args shape in the v1 floor and
+/// then always errors with `E_IO` because runtime file-install support
+/// is deferred. No successful event can be recorded at this slice, so
+/// this fixture carries a well-formed args payload with `patch: []`,
+/// `warnings: []`, and `expected_data: null` for the §0.8 gate.
+fn template_install_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = template_install::TemplateInstallArgs {
+        project_id,
+        path: "/tmp/template-install.verbreel-template".to_string(),
+        overwrite: false,
+    };
+
+    RecordedEvent {
+        verb: "template.install".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `asset.verify` fixture used by
 /// [`default_fixtures`].
 ///
@@ -7138,6 +7177,7 @@ mod tests {
                 "template.apply",
                 "template.describe",
                 "template.from_project",
+                "template.install",
                 "template.list",
                 "text.add",
                 "text.animate",
