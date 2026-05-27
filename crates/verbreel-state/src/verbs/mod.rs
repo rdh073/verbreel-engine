@@ -127,6 +127,7 @@ pub mod marker_set;
 pub mod preview_frame;
 pub mod preview_session_close;
 pub mod preview_session_create;
+pub mod preview_session_seek;
 pub mod preview_thumbnail;
 pub mod preview_waveform;
 pub mod project_forget;
@@ -794,6 +795,12 @@ pub fn default_registry() -> VerbRegistry {
              prior verbs",
         );
     registry
+        .register(Arc::new(preview_session_seek::PreviewSessionSeekVerb))
+        .expect(
+            "PreviewSessionSeekVerb registration in default_registry() cannot collide with \
+             prior verbs",
+        );
+    registry
         .register(Arc::new(preview_session_close::PreviewSessionCloseVerb))
         .expect(
             "PreviewSessionCloseVerb is the eightieth registration in \
@@ -819,6 +826,7 @@ pub fn default_registry() -> VerbRegistry {
 /// the §0.8 startup gate by construction. Callers building custom
 /// registries must build their own fixtures.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn default_fixtures() -> Vec<RecordedEvent> {
     vec![
         project_set_metadata_fixture(),
@@ -900,6 +908,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         preview_waveform_fixture(),
         preview_thumbnail_fixture(),
         preview_session_create_fixture(),
+        preview_session_seek_fixture(),
         list_capabilities_fixture(),
         help_fixture(),
         validate_command_fixture(),
@@ -6553,6 +6562,40 @@ fn preview_session_create_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `preview.session.seek` fixture used by
+/// [`default_fixtures`].
+///
+/// `preview.session.seek` validates only local `at_tk >= 0` in the v1
+/// floor and then always errors with `E_PREVIEW_SESSION_NOT_FOUND`
+/// because runtime session lookup is deferred. No successful event can
+/// ever be recorded, so the reconstructor's input tuple carries no
+/// semantically-meaningful payload — the verb's `reconstruct()`
+/// exercises args-deserialization and returns `Value::Null` to satisfy
+/// the §0.8 gate. The fixture records `expected_data: null` so the
+/// gate's canonical-SHA equality holds.
+fn preview_session_seek_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = preview_session_seek::PreviewSessionSeekArgs {
+        project_id,
+        session_id: "0190b8d3-15e3-7000-bd00-0000feedbeef".to_string(),
+        at_tk: 0,
+    };
+
+    RecordedEvent {
+        verb: "preview.session.seek".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `preview.session.close` fixture used by
 /// [`default_fixtures`].
 ///
@@ -6763,6 +6806,7 @@ mod tests {
                 "preview.frame",
                 "preview.session.close",
                 "preview.session.create",
+                "preview.session.seek",
                 "preview.thumbnail",
                 "preview.waveform",
                 "project.info",
