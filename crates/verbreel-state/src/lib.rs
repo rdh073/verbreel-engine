@@ -347,6 +347,9 @@ pub use verbs::text_edit::{TextEditArgs, TextEditData, TextEditError, TextEditVe
 pub use verbs::timeline_diff::{
     TimelineDiffArgs, TimelineDiffData, TimelineDiffError, TimelineDiffEvent, TimelineDiffVerb,
 };
+pub use verbs::timeline_redo::{
+    TimelineRedoArgs, TimelineRedoData, TimelineRedoError, TimelineRedoVerb,
+};
 pub use verbs::timeline_snapshot::{
     TimelineSnapshotArgs, TimelineSnapshotData, TimelineSnapshotError, TimelineSnapshotVerb,
 };
