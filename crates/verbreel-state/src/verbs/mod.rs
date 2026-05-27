@@ -148,6 +148,7 @@ pub mod text_add;
 pub mod text_animate;
 pub mod text_edit;
 pub mod text_style;
+pub mod timeline_diff;
 pub mod timeline_snapshot;
 pub mod track_add;
 pub mod track_hide;
@@ -647,6 +648,11 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(timeline_diff::TimelineDiffVerb))
+        .expect(
+            "TimelineDiffVerb registration in default_registry() cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(list_capabilities::ListCapabilitiesVerb))
         .expect(
             "ListCapabilitiesVerb is the sixty-third registration in \
@@ -840,6 +846,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         track_remove_fixture(),
         project_info_fixture(),
         timeline_snapshot_fixture(),
+        timeline_diff_fixture(),
         list_capabilities_fixture(),
         help_fixture(),
         validate_command_fixture(),
@@ -4189,6 +4196,38 @@ fn timeline_snapshot_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `timeline.diff` fixture used by
+/// [`default_fixtures`].
+///
+/// `timeline.diff` always errors with `E_EVENT_NOT_FOUND` in this v1
+/// floor (event-log range traversal is deferred until read-surface
+/// context is threaded beyond `&Project`). No successful event is
+/// recorded, so `reconstruct()` deserializes args and returns
+/// `Value::Null`; the fixture records `expected_data: null` to satisfy
+/// the §0.8 gate.
+fn timeline_diff_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = timeline_diff::TimelineDiffArgs {
+        project_id,
+        since: "empty".to_string(),
+        until: None,
+    };
+
+    RecordedEvent {
+        verb: "timeline.diff".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `keyframe.add` fixture used by [`default_fixtures`].
 ///
 /// Starts from a synthetic project with one video clip, then appends one
@@ -6364,6 +6403,7 @@ mod tests {
     use crate::reconstructor::validate_reconstructors;
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn default_registry_and_fixtures_pass_the_gate() {
         let registry = default_registry();
         let fixtures = default_fixtures();
@@ -6450,6 +6490,7 @@ mod tests {
                 "text.animate",
                 "text.edit",
                 "text.style",
+                "timeline.diff",
                 "timeline.snapshot",
                 "track.add",
                 "track.hide",
