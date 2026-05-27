@@ -276,6 +276,10 @@ pub use verbs::preview_session_create::{
     PreviewSessionChannelKind, PreviewSessionCreateArgs, PreviewSessionCreateData,
     PreviewSessionCreateError, PreviewSessionCreateVerb,
 };
+pub use verbs::preview_session_frame_at::{
+    PreviewSessionFrameAtArgs, PreviewSessionFrameAtData, PreviewSessionFrameAtError,
+    PreviewSessionFrameAtVerb,
+};
 pub use verbs::preview_session_pause::{
     PreviewSessionPauseArgs, PreviewSessionPauseData, PreviewSessionPauseError,
     PreviewSessionPauseVerb,

@@ -127,6 +127,7 @@ pub mod marker_set;
 pub mod preview_frame;
 pub mod preview_session_close;
 pub mod preview_session_create;
+pub mod preview_session_frame_at;
 pub mod preview_session_pause;
 pub mod preview_session_play;
 pub mod preview_session_seek;
@@ -821,9 +822,17 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(
+            preview_session_frame_at::PreviewSessionFrameAtVerb,
+        ))
+        .expect(
+            "PreviewSessionFrameAtVerb is the eighty-second registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(project_list::ProjectListVerb))
         .expect(
-            "ProjectListVerb is the eighty-second registration in \
+            "ProjectListVerb is the eighty-third registration in \
              default_registry(); cannot collide with prior verbs",
         );
     registry
@@ -925,6 +934,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         preview_session_seek_fixture(),
         preview_session_play_fixture(),
         preview_session_pause_fixture(),
+        preview_session_frame_at_fixture(),
         list_capabilities_fixture(),
         help_fixture(),
         validate_command_fixture(),
@@ -6713,6 +6723,43 @@ fn preview_session_close_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `preview.session.frame_at` fixture used by
+/// [`default_fixtures`].
+///
+/// `preview.session.frame_at` validates only local `at_tk` / `width_px`
+/// bounds in the v1 floor and then always errors with
+/// `E_PREVIEW_SESSION_NOT_FOUND` because runtime session lookup and
+/// frame-at execution are deferred. No successful event can ever be
+/// recorded, so the reconstructor's input tuple carries no
+/// semantically-meaningful payload — the verb's `reconstruct()`
+/// exercises args-deserialization and returns `Value::Null` to satisfy
+/// the §0.8 gate. The fixture records `expected_data: null` so the
+/// gate's canonical-SHA equality holds.
+fn preview_session_frame_at_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = preview_session_frame_at::PreviewSessionFrameAtArgs {
+        project_id,
+        session_id: "0190b8d3-15e3-7000-bd00-0000feedbeef".to_string(),
+        at_tk: 0,
+        out_path: None,
+        width_px: None,
+    };
+
+    RecordedEvent {
+        verb: "preview.session.frame_at".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `project.list` fixture used by
 /// [`default_fixtures`].
 ///
@@ -6888,6 +6935,7 @@ mod tests {
                 "preview.frame",
                 "preview.session.close",
                 "preview.session.create",
+                "preview.session.frame_at",
                 "preview.session.pause",
                 "preview.session.play",
                 "preview.session.seek",
