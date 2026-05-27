@@ -325,6 +325,10 @@ pub use verbs::render_queue_list::{
 pub use verbs::render_queue_status::{
     RenderQueueStatusArgs, RenderQueueStatusError, RenderQueueStatusVerb,
 };
+pub use verbs::render_start::{
+    RenderAudioCodec, RenderStartArgs, RenderStartData, RenderStartError, RenderStartVerb,
+    RenderVideoCodec,
+};
 pub use verbs::render_status::{
     RenderJobError, RenderJobState, RenderStatusArgs, RenderStatusData, RenderStatusError,
     RenderStatusVerb,

@@ -140,6 +140,7 @@ pub mod render_queue_cancel;
 pub mod render_queue_clear;
 pub mod render_queue_list;
 pub mod render_queue_status;
+pub mod render_start;
 pub mod render_status;
 pub mod schema;
 pub mod stock_list_providers;
@@ -724,6 +725,11 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(render_start::RenderStartVerb))
+        .expect(
+            "RenderStartVerb registration in default_registry() cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(render_cancel::RenderCancelVerb))
         .expect(
             "RenderCancelVerb is the seventy-seventh registration in \
@@ -848,6 +854,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         render_queue_status_fixture(),
         render_queue_cancel_fixture(),
         render_list_presets_fixture(),
+        render_start_fixture(),
         render_cancel_fixture(),
         render_status_fixture(),
         preview_session_close_fixture(),
@@ -6039,6 +6046,49 @@ fn render_list_presets_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `render.start` fixture used by
+/// [`default_fixtures`].
+///
+/// `render.start` always errors with `E_RENDER_FAIL` in the v1 floor
+/// because runtime worker/renderer orchestration is intentionally
+/// deferred (see the module-level doc on `verbs::render_start`). No
+/// successful event can ever be recorded, so the reconstructor's input
+/// tuple carries no semantically-meaningful payload — the verb's
+/// `reconstruct()` exercises args-deserialization and returns
+/// `Value::Null` to satisfy the §0.8 gate. The fixture records
+/// `expected_data: null` so the gate's canonical-SHA equality holds.
+fn render_start_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = render_start::RenderStartArgs {
+        project_id,
+        preset: "youtube-1080p".to_string(),
+        out_path: "exports/out.mp4".to_string(),
+        from_tk: None,
+        to_tk: None,
+        video_codec: None,
+        audio_codec: None,
+        bitrate_bps: None,
+        crf: None,
+        deterministic: false,
+        keep_temp: false,
+        overwrite: false,
+    };
+
+    RecordedEvent {
+        verb: "render.start".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `asset.probe` fixture used by
 /// [`default_fixtures`].
 ///
@@ -6111,8 +6161,8 @@ fn asset_relink_fixture() -> RecordedEvent {
 /// [`default_fixtures`].
 ///
 /// `render.cancel` always errors with `E_JOB_NOT_FOUND` in the v1 floor
-/// (no `render.start` verb exists yet, so no render job is ever in
-/// flight; see the module-level doc on `verbs::render_cancel`). No
+/// (`render.start` is a v1 always-error floor, so no render job is ever
+/// in flight; see the module-level doc on `verbs::render_cancel`). No
 /// successful event can ever be recorded, so the reconstructor's input
 /// tuple carries no semantically-meaningful payload — the verb's
 /// `reconstruct()` exercises args-deserialization and returns
@@ -6144,8 +6194,8 @@ fn render_cancel_fixture() -> RecordedEvent {
 /// [`default_fixtures`].
 ///
 /// `render.status` always errors with `E_JOB_NOT_FOUND` in the v1 floor
-/// (no `render.start` verb exists yet, so no render job is ever in
-/// flight; see the module-level doc on `verbs::render_status`). No
+/// (`render.start` is a v1 always-error floor, so no render job is ever
+/// in flight; see the module-level doc on `verbs::render_status`). No
 /// successful event can ever be recorded, so the reconstructor's input
 /// tuple carries no semantically-meaningful payload — the verb's
 /// `reconstruct()` exercises args-deserialization and returns
@@ -6392,6 +6442,7 @@ mod tests {
                 "render.queue.clear",
                 "render.queue.list",
                 "render.queue.status",
+                "render.start",
                 "render.status",
                 "schema",
                 "stock.list_providers",
