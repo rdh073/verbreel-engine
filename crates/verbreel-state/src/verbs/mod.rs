@@ -80,6 +80,7 @@ pub mod audio_denoise;
 pub mod audio_extract;
 pub mod audio_fade;
 pub mod audio_volume;
+pub mod caption_auto_generate;
 pub mod caption_burn_in;
 pub mod caption_burn_off;
 pub mod caption_edit;
@@ -194,6 +195,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 /// - `text.animate` (§7.4)
 /// - `text.edit` (§7.2)
 /// - `text.style` (§7.3)
+/// - `caption.auto_generate` (§10.1)
 /// - `caption.edit` (§10.2, §7.2 alias)
 /// - `keyframe.add` (§8.1)
 /// - `keyframe.list` (§8.4)
@@ -562,6 +564,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
     );
     registry
+        .register(Arc::new(caption_auto_generate::CaptionAutoGenerateVerb))
+        .expect(
+            "CaptionAutoGenerateVerb is the ninety-first registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(caption_edit::CaptionEditVerb))
         .expect(
             "CaptionEditVerb is the thirty-first registration in \
@@ -747,6 +755,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         text_animate_fixture(),
         text_edit_fixture(),
         caption_edit_fixture(),
+        caption_auto_generate_fixture(),
         caption_burn_in_fixture(),
         caption_burn_off_fixture(),
         text_style_fixture(),
@@ -946,6 +955,43 @@ fn caption_edit_fixture() -> RecordedEvent {
     let mut fixture = text_edit_fixture();
     fixture.verb = "caption.edit".to_string();
     fixture
+}
+
+/// Build the canonical `caption.auto_generate` fixture used by
+/// [`default_fixtures`].
+///
+/// `caption.auto_generate` always errors with `E_BUSY` in the v1 floor
+/// (writer-class streaming runtime is intentionally deferred). No
+/// successful event can ever be recorded, so the reconstructor's input
+/// tuple carries no semantically-meaningful payload — the verb's
+/// `reconstruct()` exercises args-deserialization and returns
+/// `Value::Null` to satisfy the §0.8 gate. The fixture records
+/// `expected_data: null` so the gate's canonical-SHA equality holds.
+fn caption_auto_generate_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = caption_auto_generate::CaptionAutoGenerateArgs {
+        project_id,
+        from_selector: "track:audio[0]".to_string(),
+        language: None,
+        style: None,
+        max_line_chars: None,
+        to_track: None,
+        model: None,
+    };
+
+    RecordedEvent {
+        verb: "caption.auto_generate".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
 }
 
 /// Build the canonical `caption.burn_in` fixture used by
@@ -6207,6 +6253,7 @@ mod tests {
                 "audio.extract",
                 "audio.fade",
                 "audio.volume",
+                "caption.auto_generate",
                 "caption.burn_in",
                 "caption.burn_off",
                 "caption.edit",
