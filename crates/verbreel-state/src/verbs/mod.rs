@@ -117,6 +117,8 @@ pub mod marker_set;
 pub mod preview_session_close;
 pub mod project_info;
 pub mod project_rename;
+#[cfg(feature = "native")]
+pub mod project_save;
 pub mod project_set_canvas;
 pub mod project_set_fps;
 pub mod project_set_metadata;
