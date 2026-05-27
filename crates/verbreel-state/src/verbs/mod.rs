@@ -76,6 +76,7 @@ pub mod asset_probe;
 pub mod asset_relink;
 pub mod asset_remove;
 pub mod asset_verify;
+pub mod audio_analyze;
 pub mod audio_denoise;
 pub mod audio_detect_beats;
 pub mod audio_extract;
@@ -557,6 +558,11 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(audio_analyze::AudioAnalyzeVerb))
+        .expect(
+            "AudioAnalyzeVerb registration in default_registry() cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(audio_detect_beats::AudioDetectBeatsVerb))
         .expect(
             "AudioDetectBeatsVerb is the ninety-fifth registration in \
@@ -999,6 +1005,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         asset_relink_fixture(),
         asset_remove_fixture(),
         asset_verify_fixture(),
+        audio_analyze_fixture(),
         audio_detect_beats_fixture(),
         audio_extract_fixture(),
         audio_denoise_fixture(),
@@ -3946,6 +3953,44 @@ fn audio_extract_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "audio.extract".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
+/// Build the canonical `audio.detect_beats` fixture used by
+/// [`default_fixtures`].
+///
+/// `audio.analyze` always errors with `E_ANALYSIS_FAILED` for accepted
+/// targets in the v1 floor because analysis runtime/cache context is
+/// intentionally deferred. No successful event can be recorded, so the
+/// reconstructor only checks args deserialization and returns
+/// `Value::Null`. The fixture records `expected_data: null` so the
+/// startup gate's canonical equality holds.
+fn audio_analyze_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = audio_analyze::AudioAnalyzeArgs {
+        project_id,
+        target: "clip:01900000-0000-7000-8000-0000000bb910".to_string(),
+        features: Some(vec![
+            "tempo".to_string(),
+            "sections".to_string(),
+            "tempo".to_string(),
+        ]),
+        from_tk: None,
+        to_tk: None,
+    };
+
+    RecordedEvent {
+        verb: "audio.analyze".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: json!([]),
         warnings: vec![],
@@ -7417,6 +7462,7 @@ mod tests {
                 "asset.relink",
                 "asset.remove",
                 "asset.verify",
+                "audio.analyze",
                 "audio.denoise",
                 "audio.detect_beats",
                 "audio.extract",
