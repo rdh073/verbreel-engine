@@ -69,6 +69,7 @@ use crate::project::Project;
 use crate::reconstructor::{RecordedEvent, VerbRegistry};
 use verbreel_types::Tick;
 
+pub mod asset_import;
 pub mod asset_list;
 pub mod asset_remove;
 pub mod audio_fade;
@@ -469,6 +470,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(asset_import::AssetImportVerb))
+        .expect(
+            "AssetImportVerb is the eighty-fourth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(asset_list::AssetListVerb))
         .expect(
             "AssetListVerb is the twenty-eighth registration in \
@@ -740,6 +747,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         effect_reorder_fixture(),
         effect_set_param_fixture(),
         effect_toggle_fixture(),
+        asset_import_fixture(),
         asset_list_fixture(),
         asset_remove_fixture(),
         audio_fade_fixture(),
@@ -3362,6 +3370,41 @@ fn effect_set_param_fixture() -> RecordedEvent {
 ///
 /// Starts from an empty synthetic project and injects two assets (audio
 /// and video), then computes the deterministic read-only envelope.
+/// Build the canonical `asset.import` fixture used by
+/// [`default_fixtures`].
+///
+/// The only success path at v1 is the empty-batch no-op; the fixture
+/// records that case so the §0.8 reconstructor gate has a meaningful
+/// `(args, post_state) → expected_data` pair to verify.
+fn asset_import_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = asset_import::AssetImportArgs {
+        project_id,
+        paths: Vec::new(),
+        mode: None,
+        soft: None,
+    };
+
+    let (patch_value, _warnings, data) = asset_import::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid asset.import data (empty-paths no-op)");
+    let expected_data = serde_json::to_value(&data)
+        .expect("asset.import fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "asset.import".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 fn asset_list_fixture() -> RecordedEvent {
     let project_id = DEFAULT_FIXTURE_PROJECT_ID
         .parse()
@@ -5840,6 +5883,7 @@ mod tests {
         assert_eq!(
             report.verbs_checked,
             vec![
+                "asset.import",
                 "asset.list",
                 "asset.remove",
                 "audio.fade",
