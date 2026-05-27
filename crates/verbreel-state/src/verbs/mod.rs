@@ -71,6 +71,7 @@ use verbreel_types::Tick;
 
 pub mod asset_import;
 pub mod asset_list;
+pub mod asset_probe;
 pub mod asset_remove;
 pub mod audio_fade;
 pub mod audio_volume;
@@ -166,6 +167,7 @@ const DEFAULT_FIXTURE_PROJECT_ID: &str = "0190b8d3-15e3-7000-bd00-0000deadbeef";
 ///
 /// Canonical kernel verbs currently shipped:
 /// - `asset.list` (§3.2)
+/// - `asset.probe` (§3.3)
 /// - `asset.remove` (§3.4)
 /// - `clip.delete` (§5.5)
 /// - `clip.list` (§5.14)
@@ -482,6 +484,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(asset_probe::AssetProbeVerb))
+        .expect(
+            "AssetProbeVerb is the eighty-fifth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(asset_remove::AssetRemoveVerb))
         .expect(
             "AssetRemoveVerb is the fifty-eighth registration in \
@@ -749,6 +757,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         effect_toggle_fixture(),
         asset_import_fixture(),
         asset_list_fixture(),
+        asset_probe_fixture(),
         asset_remove_fixture(),
         audio_fade_fixture(),
         audio_volume_fixture(),
@@ -5701,6 +5710,39 @@ fn render_list_presets_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `asset.probe` fixture used by
+/// [`default_fixtures`].
+///
+/// `asset.probe` always errors with `E_ASSET_PATH_NOT_FOUND` in the v1
+/// floor (file I/O is forbidden in the pure `Verb::compute_patch`; see
+/// the module-level doc on `verbs::asset_probe`). No successful event
+/// can ever be recorded, so the reconstructor's input tuple carries no
+/// semantically-meaningful payload — the verb's `reconstruct()`
+/// exercises args-deserialization and returns `Value::Null` to satisfy
+/// the §0.8 gate. The fixture records `expected_data: null` so the
+/// gate's canonical-SHA equality holds.
+fn asset_probe_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = asset_probe::AssetProbeArgs {
+        project_id,
+        path: "/does/not/exist.mp4".to_string(),
+    };
+
+    RecordedEvent {
+        verb: "asset.probe".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `render.cancel` fixture used by
 /// [`default_fixtures`].
 ///
@@ -5885,6 +5927,7 @@ mod tests {
             vec![
                 "asset.import",
                 "asset.list",
+                "asset.probe",
                 "asset.remove",
                 "audio.fade",
                 "audio.volume",
