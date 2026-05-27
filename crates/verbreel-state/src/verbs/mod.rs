@@ -149,6 +149,7 @@ pub mod text_animate;
 pub mod text_edit;
 pub mod text_style;
 pub mod timeline_diff;
+pub mod timeline_history;
 pub mod timeline_redo;
 pub mod timeline_snapshot;
 pub mod timeline_undo;
@@ -665,6 +666,11 @@ pub fn default_registry() -> VerbRegistry {
             "TimelineRedoVerb registration in default_registry() cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(timeline_history::TimelineHistoryVerb))
+        .expect(
+            "TimelineHistoryVerb registration in default_registry() cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(list_capabilities::ListCapabilitiesVerb))
         .expect(
             "ListCapabilitiesVerb is the sixty-third registration in \
@@ -861,6 +867,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         timeline_diff_fixture(),
         timeline_undo_fixture(),
         timeline_redo_fixture(),
+        timeline_history_fixture(),
         list_capabilities_fixture(),
         help_fixture(),
         validate_command_fixture(),
@@ -4300,6 +4307,40 @@ fn timeline_redo_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `timeline.history` fixture used by
+/// [`default_fixtures`].
+///
+/// `timeline.history` is a read-only v1 floor and always succeeds for
+/// well-formed args with `patch: []`, no warnings, and
+/// `data: { events: [] }`.
+fn timeline_history_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = timeline_history::TimelineHistoryArgs {
+        project_id,
+        limit: None,
+        since: None,
+        include_undone: None,
+    };
+
+    let expected_data =
+        serde_json::to_value(timeline_history::TimelineHistoryData { events: Vec::new() })
+            .expect("timeline.history fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "timeline.history".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Build the canonical `keyframe.add` fixture used by [`default_fixtures`].
 ///
 /// Starts from a synthetic project with one video clip, then appends one
@@ -6563,6 +6604,7 @@ mod tests {
                 "text.edit",
                 "text.style",
                 "timeline.diff",
+                "timeline.history",
                 "timeline.redo",
                 "timeline.snapshot",
                 "timeline.undo",
