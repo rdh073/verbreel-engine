@@ -127,6 +127,7 @@ pub mod marker_set;
 pub mod preview_frame;
 pub mod preview_session_close;
 pub mod preview_session_create;
+pub mod preview_session_play;
 pub mod preview_session_seek;
 pub mod preview_thumbnail;
 pub mod preview_waveform;
@@ -801,6 +802,12 @@ pub fn default_registry() -> VerbRegistry {
              prior verbs",
         );
     registry
+        .register(Arc::new(preview_session_play::PreviewSessionPlayVerb))
+        .expect(
+            "PreviewSessionPlayVerb registration in default_registry() cannot collide with prior \
+             verbs",
+        );
+    registry
         .register(Arc::new(preview_session_close::PreviewSessionCloseVerb))
         .expect(
             "PreviewSessionCloseVerb is the eightieth registration in \
@@ -909,6 +916,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         preview_thumbnail_fixture(),
         preview_session_create_fixture(),
         preview_session_seek_fixture(),
+        preview_session_play_fixture(),
         list_capabilities_fixture(),
         help_fixture(),
         validate_command_fixture(),
@@ -6596,6 +6604,39 @@ fn preview_session_seek_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `preview.session.play` fixture used by
+/// [`default_fixtures`].
+///
+/// `preview.session.play` validates local args shape in the v1 floor and
+/// then always errors with `E_PREVIEW_SESSION_NOT_FOUND` because runtime
+/// session lookup and channel wiring are deferred. No successful event can
+/// ever be recorded, so the reconstructor's input tuple carries no
+/// semantically-meaningful payload — the verb's `reconstruct()`
+/// exercises args-deserialization and returns `Value::Null` to satisfy
+/// the §0.8 gate. The fixture records `expected_data: null` so the
+/// gate's canonical-SHA equality holds.
+fn preview_session_play_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = preview_session_play::PreviewSessionPlayArgs {
+        project_id,
+        session_id: "0190b8d3-15e3-7000-bd00-0000feedbeef".to_string(),
+    };
+
+    RecordedEvent {
+        verb: "preview.session.play".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `preview.session.close` fixture used by
 /// [`default_fixtures`].
 ///
@@ -6806,6 +6847,7 @@ mod tests {
                 "preview.frame",
                 "preview.session.close",
                 "preview.session.create",
+                "preview.session.play",
                 "preview.session.seek",
                 "preview.thumbnail",
                 "preview.waveform",
