@@ -116,6 +116,7 @@ pub mod marker_remove;
 pub mod marker_set;
 pub mod preview_session_close;
 pub mod project_info;
+pub mod project_list;
 pub mod project_rename;
 #[cfg(feature = "native")]
 pub mod project_save;
@@ -667,6 +668,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(project_list::ProjectListVerb))
+        .expect(
+            "ProjectListVerb is the eightieth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
 }
 
 /// One canonical fixture per verb registered in [`default_registry`].
@@ -760,6 +767,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         render_cancel_fixture(),
         render_status_fixture(),
         preview_session_close_fixture(),
+        project_list_fixture(),
     ]
 }
 
@@ -5750,6 +5758,36 @@ fn preview_session_close_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `project.list` fixture used by
+/// [`default_fixtures`].
+///
+/// v1 floor always returns `{ projects: [] }` regardless of prior
+/// state, so the fixture pairs the synthetic empty project with an
+/// empty patch and a hard-coded empty `projects` array.
+fn project_list_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = project_list::ProjectListArgs { project_id };
+
+    let (patch_value, _warnings, data) = project_list::compute_patch(&prior, &args)
+        .expect("default fixture must produce valid project.list data");
+    let expected_data = serde_json::to_value(&data)
+        .expect("project.list fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "project.list".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings: vec![],
+        post_state: prior,
+        expected_data,
+    }
+}
+
 /// Construct a minimum-shape [`Project`] suitable as a fixture's prior
 /// state. Built via `serde_json::from_value` from a literal so we
 /// don't depend on `tests/fixtures/*` (which `src/` cannot
@@ -5847,6 +5885,7 @@ mod tests {
                 "marker.set",
                 "preview.session.close",
                 "project.info",
+                "project.list",
                 "project.rename",
                 "project.set_canvas",
                 "project.set_fps",
