@@ -478,6 +478,10 @@ pub use verbs::tracker_remove::{
     TrackerRemoveArgs, TrackerRemoveData, TrackerRemoveError, TrackerRemoveVerb,
     W_TRACKER_REMOVE_ENVELOPE_CODE,
 };
+pub use verbs::tracker_run::{
+    TrackerBBoxTraceSummary, TrackerRunArgs, TrackerRunData, TrackerRunError, TrackerRunStage,
+    TrackerRunVerb,
+};
 pub use verbs::validate_command::{
     SchemaError, ValidateCommandArgs, ValidateCommandData, ValidateCommandError,
     ValidateCommandVerb,

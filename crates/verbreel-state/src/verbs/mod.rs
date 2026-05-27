@@ -191,6 +191,7 @@ pub mod track_solo;
 pub mod tracker_create;
 pub mod tracker_list;
 pub mod tracker_remove;
+pub mod tracker_run;
 pub mod validate_command;
 
 /// Synthetic `UUIDv7` used as the `project_id` in [`default_fixtures`].
@@ -778,6 +779,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(tracker_run::TrackerRunVerb))
+        .expect(
+            "TrackerRunVerb is the ninety-fourth registration in \
+             default_registry(); cannot collide with prior verbs",
+        );
+    registry
         .register(Arc::new(render_queue_list::RenderQueueListVerb))
         .expect(
             "RenderQueueListVerb is the seventy-third registration in \
@@ -1014,6 +1021,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         tracker_create_fixture(),
         tracker_list_fixture(),
         tracker_remove_fixture(),
+        tracker_run_fixture(),
         render_queue_list_fixture(),
         render_queue_clear_fixture(),
         render_queue_status_fixture(),
@@ -6478,6 +6486,51 @@ fn tracker_remove_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `tracker.run` fixture used by
+/// [`default_fixtures`].
+///
+/// `tracker.run` always errors in the v1 floor. The fixture still uses
+/// well-formed args and an existing tracker id to pin the reconstructor
+/// tuple shape: `patch: []`, `warnings: []`, `expected_data: null`.
+fn tracker_run_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+    let tracker_id = "01900000-0000-7000-8000-0000000ee101";
+
+    prior.trackers.push(
+        serde_json::from_value(json!({
+            "tracker_id": tracker_id,
+            "source_clip_id": "",
+            "algorithm": "object",
+            "applied_to_clip_ids": [],
+            "sample_count": -1,
+            "cache_hash": "",
+            "cache_path": "",
+        }))
+        .expect("tracker.run fixture tracker parses"),
+    );
+
+    let args = tracker_run::TrackerRunArgs {
+        project_id,
+        tracker_id: tracker_id.to_string(),
+        from_tk: None,
+        to_tk: None,
+        sample_every_ticks: None,
+    };
+
+    RecordedEvent {
+        verb: "tracker.run".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `render.queue.list` fixture used by
 /// [`default_fixtures`].
 ///
@@ -7368,6 +7421,7 @@ mod tests {
                 "tracker.create",
                 "tracker.list",
                 "tracker.remove",
+                "tracker.run",
                 "validate_command",
             ]
         );
