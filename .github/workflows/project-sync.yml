@@ -1,0 +1,114 @@
+name: Project Board Sync
+
+# Mechanism: every issue and PR auto-syncs to the "Verbreel Implementation"
+# project board. Status field follows lifecycle events. Sub-agents do not
+# need to call `gh project item-add` or `~/bin/proj-status` manually —
+# this workflow handles both.
+#
+# Uses default GITHUB_TOKEN (project access already enabled at org/repo
+# settings level). No additional PAT secret required.
+
+on:
+  issues:
+    types: [opened, reopened, closed, reopened]
+  pull_request:
+    types: [opened, reopened, ready_for_review, closed, converted_to_draft]
+
+permissions:
+  issues: read
+  pull-requests: read
+  repository-projects: write
+
+jobs:
+  add-to-project:
+    name: Add to project board
+    runs-on: ubuntu-latest
+    if: github.event.action == 'opened' || github.event.action == 'reopened'
+    steps:
+      - uses: actions/add-to-project@5b1a254a3546aef88e0a7724a77a623fa2e47c36 # v1.0.2
+        with:
+          project-url: https://github.com/users/rdh073/projects/3
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  set-status:
+    name: Transition status
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PROJECT_ID: PVT_kwHOD1U4Ys4BYk3J
+      STATUS_FIELD_ID: PVTSSF_lAHOD1U4Ys4BYk3JzhTpvjA
+      STATUS_BACKLOG: f75ad846
+      STATUS_INPROG: 47fc9ee4
+      STATUS_REVIEW: df73e18b
+      STATUS_DONE: 98236657
+    steps:
+      - name: Resolve target status from event
+        id: target
+        run: |
+          set -euo pipefail
+          event="${{ github.event_name }}"
+          action="${{ github.event.action }}"
+          merged="${{ github.event.pull_request.merged }}"
+          draft="${{ github.event.pull_request.draft }}"
+
+          case "$event:$action" in
+            issues:opened|issues:reopened)        echo "status=$STATUS_BACKLOG" >> "$GITHUB_OUTPUT" ;;
+            issues:closed)                        echo "status=$STATUS_DONE" >> "$GITHUB_OUTPUT" ;;
+            pull_request:opened|pull_request:reopened|pull_request:converted_to_draft)
+              # Draft PR → In progress
+              if [ "$draft" = "true" ]; then
+                echo "status=$STATUS_INPROG" >> "$GITHUB_OUTPUT"
+              else
+                echo "status=$STATUS_REVIEW" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            pull_request:ready_for_review)        echo "status=$STATUS_REVIEW" >> "$GITHUB_OUTPUT" ;;
+            pull_request:closed)
+              if [ "$merged" = "true" ]; then
+                echo "status=$STATUS_DONE" >> "$GITHUB_OUTPUT"
+              else
+                # PR closed without merge → no transition (stays where it was)
+                echo "status=" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            *) echo "status=" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Find project item ID for this content
+        id: item
+        if: steps.target.outputs.status != ''
+        run: |
+          set -euo pipefail
+          node_id="${{ github.event.issue.node_id || github.event.pull_request.node_id }}"
+          if [ -z "$node_id" ]; then
+            echo "no node_id available — skipping"
+            exit 0
+          fi
+          # Find the project item that wraps this issue/PR
+          item_id=$(gh api graphql -f query='
+            query($id: ID!) {
+              node(id: $id) {
+                ... on Issue { projectItems(first: 20) { nodes { id project { id } } } }
+                ... on PullRequest { projectItems(first: 20) { nodes { id project { id } } } }
+              }
+            }' -f id="$node_id" \
+            --jq ".data.node.projectItems.nodes[] | select(.project.id == \"$PROJECT_ID\") | .id" | head -1)
+          echo "item_id=$item_id" >> "$GITHUB_OUTPUT"
+
+      - name: Set status field
+        if: steps.target.outputs.status != '' && steps.item.outputs.item_id != ''
+        run: |
+          set -euo pipefail
+          gh api graphql -f query='
+            mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {
+              updateProjectV2ItemFieldValue(input: {
+                projectId: $project,
+                itemId: $item,
+                fieldId: $field,
+                value: { singleSelectOptionId: $option }
+              }) { projectV2Item { id } }
+            }' \
+            -f project="$PROJECT_ID" \
+            -f item="${{ steps.item.outputs.item_id }}" \
+            -f field="$STATUS_FIELD_ID" \
+            -f option="${{ steps.target.outputs.status }}"
