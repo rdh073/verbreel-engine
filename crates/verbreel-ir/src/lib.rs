@@ -25,3 +25,9 @@ pub mod node_id;
 
 pub use cache_key::CacheKey;
 pub use node_id::IrNodeId;
+
+// Re-export the workspace `Tick` newtype so downstream crates whose
+// dep graph allows `verbreel-ir` but not direct `verbreel-types`
+// (`verbreel-render`, future composition consumers) can spell typed
+// tick parameters without widening their crate edge.
+pub use verbreel_types::Tick;
