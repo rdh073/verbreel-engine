@@ -51,7 +51,7 @@ use crate::apply::ApplyError;
 use crate::idempotency::{IdempotencyIndex, LookupOutcome};
 use crate::project::Project;
 use crate::reconstructor::{
-    ReconstructError, RecordedEvent, ValidationError, VerbError, VerbRegistry,
+    ReconstructError, RecordedEvent, ValidationError, Verb, VerbError, VerbRegistry,
     validate_reconstructors,
 };
 #[cfg(feature = "native")]
@@ -385,6 +385,73 @@ impl std::fmt::Debug for ProjectStore {
 }
 
 impl ProjectStore {
+    fn compute_default_verb_patch(
+        &self,
+        verb_id: &str,
+        args: &Value,
+        verb: &dyn Verb,
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), LifecycleError> {
+        verb.compute_patch(&self.project, args).map_err(|source| {
+            LifecycleError::VerbExecutionFailed {
+                verb_id: verb_id.to_string(),
+                source,
+            }
+        })
+    }
+
+    #[cfg(feature = "native")]
+    fn compute_asset_import_patch(
+        &self,
+        verb_id: &str,
+        args: &Value,
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), LifecycleError> {
+        let typed: asset_import::AssetImportArgs =
+            serde_json::from_value(args.clone()).map_err(|err| {
+                LifecycleError::VerbExecutionFailed {
+                    verb_id: verb_id.to_string(),
+                    source: VerbError::BadArgs {
+                        detail: format!("asset.import: args deserialize failed: {err}"),
+                    },
+                }
+            })?;
+        let (patch_value, warnings, data) =
+            asset_import::compute_patch_with_root(&self.project, &typed, &self.root).map_err(
+                |source| LifecycleError::VerbExecutionFailed {
+                    verb_id: verb_id.to_string(),
+                    source: source.into(),
+                },
+            )?;
+        let patch: json_patch::Patch = serde_json::from_value(patch_value).map_err(|err| {
+            LifecycleError::VerbExecutionFailed {
+                verb_id: verb_id.to_string(),
+                source: VerbError::Custom(format!(
+                    "asset.import: patch construction failed: {err}"
+                )),
+            }
+        })?;
+        let data =
+            serde_json::to_value(&data).map_err(|err| LifecycleError::VerbExecutionFailed {
+                verb_id: verb_id.to_string(),
+                source: VerbError::Custom(format!("asset.import: data envelope failed: {err}")),
+            })?;
+        Ok((patch, data, warnings))
+    }
+
+    fn compute_verb_patch(
+        &self,
+        verb_id: &str,
+        args: &Value,
+        verb: &dyn Verb,
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), LifecycleError> {
+        #[cfg(feature = "native")]
+        {
+            if verb_id == "asset.import" {
+                return self.compute_asset_import_patch(verb_id, args);
+            }
+        }
+        self.compute_default_verb_patch(verb_id, args, verb)
+    }
+
     /// Create a fresh project on disk per §2.1.
     ///
     /// Refuses to overwrite an existing `project.json` (returns
@@ -842,63 +909,8 @@ impl ProjectStore {
                 verb_id: verb_id.to_string(),
             })?;
 
-        // Step B: compute patch + data. With native storage enabled,
-        // `asset.import` needs project-root filesystem context for CAS.
-        let (patch, data, warnings) = {
-            #[cfg(feature = "native")]
-            {
-                if verb_id == "asset.import" {
-                    let typed: asset_import::AssetImportArgs = serde_json::from_value(args.clone())
-                        .map_err(|err| LifecycleError::VerbExecutionFailed {
-                            verb_id: verb_id.to_string(),
-                            source: VerbError::BadArgs {
-                                detail: format!("asset.import: args deserialize failed: {err}"),
-                            },
-                        })?;
-                    let (patch_value, warnings, data) =
-                        asset_import::compute_patch_with_root(&self.project, &typed, &self.root)
-                            .map_err(|source| LifecycleError::VerbExecutionFailed {
-                                verb_id: verb_id.to_string(),
-                                source: source.into(),
-                            })?;
-                    let patch: json_patch::Patch =
-                        serde_json::from_value(patch_value).map_err(|err| {
-                            LifecycleError::VerbExecutionFailed {
-                                verb_id: verb_id.to_string(),
-                                source: VerbError::Custom(format!(
-                                    "asset.import: patch construction failed: {err}"
-                                )),
-                            }
-                        })?;
-                    let data = serde_json::to_value(&data).map_err(|err| {
-                        LifecycleError::VerbExecutionFailed {
-                            verb_id: verb_id.to_string(),
-                            source: VerbError::Custom(format!(
-                                "asset.import: data envelope failed: {err}"
-                            )),
-                        }
-                    })?;
-                    (patch, data, warnings)
-                } else {
-                    verb.compute_patch(&self.project, &args).map_err(|source| {
-                        LifecycleError::VerbExecutionFailed {
-                            verb_id: verb_id.to_string(),
-                            source,
-                        }
-                    })?
-                }
-            }
-
-            #[cfg(not(feature = "native"))]
-            {
-                verb.compute_patch(&self.project, &args).map_err(|source| {
-                    LifecycleError::VerbExecutionFailed {
-                        verb_id: verb_id.to_string(),
-                        source,
-                    }
-                })?
-            }
-        };
+        // Step B: compute patch + data.
+        let (patch, data, warnings) = self.compute_verb_patch(verb_id, &args, verb.as_ref())?;
 
         // Step C: delegate to the existing raw mutate() for §0.8
         // write-ordering + idempotency. Then thread the typed `data`
