@@ -41,7 +41,9 @@ jobs:
           # ── Model: flagship + fallback chain ──
           config.model:            "openai/gpt-5.5"
           config.fallback_models:  '["openai/gpt-5", "openai/gpt-5-mini"]'
-          config.reasoning_effort: "medium"
+          config.reasoning_effort:      "medium"
+          config.custom_model_max_tokens: "128000"  # PR-Agent MAX_TOKENS table miss workaround for gpt-5 family
+          config.temperature:             "1"       # gpt-5 family only supports temperature=1 (litellm UnsupportedParamsError otherwise)
 
           # ── Auto-run on PR open/sync ──
           github_action_config.auto_review:   "true"
