@@ -16,7 +16,8 @@ jobs:
       - name: Verify linked issue board status
         env:
           GH_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
-          OWNER: rdh073
+          REPO_OWNER: rdh073
+          PROJECT_OWNER: "@me"
           REPO: verbreel-engine
           PROJECT_NUMBER: "3"
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -31,7 +32,7 @@ jobs:
           after=""
           while :; do
             args=(
-              -f owner="$OWNER"
+              -f owner="$REPO_OWNER"
               -f repo="$REPO"
               -F number="$PR_NUMBER"
             )
@@ -62,7 +63,7 @@ jobs:
 
           test -s /tmp/closing-issues.txt
 
-          gh project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --limit 1000 > /tmp/project.json
+          gh project item-list "$PROJECT_NUMBER" --owner "$PROJECT_OWNER" --format json --limit 1000 > /tmp/project.json
 
           while IFS= read -r issue_url; do
             status=$(jq -r --arg url "$issue_url" \
