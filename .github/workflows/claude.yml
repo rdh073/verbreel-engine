@@ -48,9 +48,9 @@ jobs:
     runs-on: ubuntu-latest
     name: Claude auto-review
     permissions:
-      contents: read # read-only: the review must not be able to push to the PR
-      pull-requests: write # post the review comment
-      issues: write # update the sticky comment
+      contents: read # no repo write; comment scopes below only publish the review artifact
+      pull-requests: write # create/update PR review artifact
+      issues: write # PR timeline comments use the Issues API
       actions: read # read CI run results/logs on the PR
       id-token: write
     steps:
@@ -60,6 +60,7 @@ jobs:
           fetch-depth: 1
 
       - name: Claude auto-review
+        id: claude_auto_review
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -97,6 +98,25 @@ jobs:
             --effort high
             --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,Bash"
             --system-prompt "You are reviewing the verbreel-engine Rust workspace. Be direct: say 'this is good' when it is; name the problem and file:line when it isn't. Attack the code and the reasoning, not the author. Prefer root-cause over crash-site fixes. Reject exception-swallowing, null-guards-without-reason, and premature abstraction."
+
+      - name: Post Claude auto-review result
+        if: always() && steps.claude_auto_review.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude_auto_review.outputs.execution_file }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          body="$(jq -r 'map(select(.type == "result") | .result // empty) | last // empty' "$EXECUTION_FILE")"
+          if [ -z "$body" ]; then
+            body="Claude auto-review completed successfully, but no textual review result was exposed. See ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
+          fi
+          printf -v body '<!-- verbreel-claude-auto-review -->\n%s' "$body"
+          comment_id="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- verbreel-claude-auto-review -->"))) | .id' | tail -n 1)"
+          if [ -n "$comment_id" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" -X PATCH -f body="$body" >/dev/null
+          else
+            gh pr comment "$PR_NUMBER" --body "$body" >/dev/null
+          fi
 
     # This is a PUBLIC repo, so anyone can write `@claude`. claude-code-action
     # itself refuses actors without repo write access, but we also gate here so
