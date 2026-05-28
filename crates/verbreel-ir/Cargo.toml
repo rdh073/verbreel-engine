@@ -13,4 +13,8 @@ name = "verbreel_ir"
 [dependencies]
 verbreel-types = { path = "../verbreel-types" }
 serde.workspace = true
+sha2.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
