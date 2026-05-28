@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 use tempfile::TempDir;
+use verbreel_events::Timestamp;
 use verbreel_state::{
     Canvas, ProjectDuplicateArgs, ProjectDuplicateError, ProjectStore, TICK_RATE_HZ, Track,
     TrackKind, default_fixtures, default_registry, project_duplicate,
@@ -33,8 +34,8 @@ fn minimal_project() -> verbreel_state::Project {
         name: "source".to_string(),
         // Distinct historical timestamp so the refresh check has a
         // pre-call value to compare against.
-        created_at: "2020-01-01T00:00:00Z".to_string(),
-        updated_at: "2020-01-01T00:00:00Z".to_string(),
+        created_at: Timestamp::parse("2020-01-01T00:00:00Z").unwrap(),
+        updated_at: Timestamp::parse("2020-01-01T00:00:00Z").unwrap(),
         canvas: Canvas {
             width: 1080,
             height: 1920,

@@ -407,7 +407,7 @@ fn path_is_empty_string_deferred() {
 fn updated_at_echoes_project_value() {
     let prior = empty_project();
     let (_, _, data) = compute_patch(&prior, &make_args()).expect("compute");
-    assert_eq!(data.updated_at, "2026-05-24T00:00:00Z");
+    assert_eq!(data.updated_at.as_str(), "2026-05-24T00:00:00Z");
 }
 
 #[test]

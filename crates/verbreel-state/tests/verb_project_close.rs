@@ -15,6 +15,7 @@ use std::fs;
 
 use serde_json::json;
 use tempfile::TempDir;
+use verbreel_events::Timestamp;
 use verbreel_state::{
     Canvas, ProjectCloseArgs, ProjectCloseError, ProjectStore, TICK_RATE_HZ, Track, TrackKind,
     default_fixtures, default_registry, project_close,
@@ -33,8 +34,8 @@ fn minimal_project() -> verbreel_state::Project {
         schema_version: SCHEMA_VERSION.to_string(),
         tick_rate_hz: TICK_RATE_HZ,
         name: "test".to_string(),
-        created_at: "2026-05-27T00:00:00Z".to_string(),
-        updated_at: "2026-05-27T00:00:00Z".to_string(),
+        created_at: Timestamp::parse("2026-05-27T00:00:00Z").unwrap(),
+        updated_at: Timestamp::parse("2026-05-27T00:00:00Z").unwrap(),
         canvas: Canvas {
             width: 1080,
             height: 1920,

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use serde_json::{Value, json};
+use verbreel_events::Timestamp;
 use verbreel_state::verbs::timeline_snapshot::{compute_patch, data_envelope_from_post_state};
 use verbreel_state::{
     MutateOutcome, Project, TimelineSnapshotArgs, TimelineSnapshotData, TimelineSnapshotVerb, Verb,
@@ -121,7 +122,7 @@ fn project_hash_unchanged_by_updated_at_mutation() {
     let mut prior = empty_project();
     let (_, _, before) = compute_patch(&prior, &make_args()).expect("compute");
 
-    prior.updated_at = "2099-12-31T23:59:59Z".to_string();
+    prior.updated_at = Timestamp::parse("2099-12-31T23:59:59Z").unwrap();
     let (_, _, after) = compute_patch(&prior, &make_args()).expect("compute");
 
     assert_eq!(

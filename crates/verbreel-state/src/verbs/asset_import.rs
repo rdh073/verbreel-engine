@@ -10,6 +10,7 @@ use crate::reconstructor::{ReconstructError, Verb, VerbError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
+use verbreel_events::Timestamp;
 use verbreel_types::ProjectId;
 
 #[cfg(feature = "native")]
@@ -229,7 +230,11 @@ fn build_subtitle_asset(
             || source_path.display().to_string(),
             |n| n.to_string_lossy().to_string(),
         ),
-        imported_at: "1970-01-01T00:00:00Z".to_string(),
+        // Placeholder epoch — real import time is wired in a follow-up.
+        // Constructed through the typed boundary so even the placeholder
+        // is validated RFC 3339, not a raw string literal.
+        imported_at: Timestamp::parse("1970-01-01T00:00:00Z")
+            .expect("epoch literal is valid RFC 3339"),
         metadata: SubtitleAssetMetadata {
             container: ext.to_string(),
             language: None,

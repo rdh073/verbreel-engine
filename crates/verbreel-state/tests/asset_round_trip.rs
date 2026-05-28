@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use verbreel_events::Timestamp;
 use verbreel_state::asset_meta::{
     AudioAssetMetadata, FileFingerprint, ImageAssetMetadata, SubtitleAssetMetadata,
     VideoAssetMetadata,
@@ -124,7 +125,7 @@ fn make_video_asset() -> Asset {
         )
         .unwrap(),
         original_filename: "v.mp4".to_string(),
-        imported_at: "2026-05-24T00:00:00Z".to_string(),
+        imported_at: Timestamp::parse("2026-05-24T00:00:00Z").unwrap(),
         metadata: VideoAssetMetadata {
             duration_tk: Tick::new(240000),
             width: 1920,
@@ -167,7 +168,7 @@ fn make_audio_asset() -> Asset {
         )
         .unwrap(),
         original_filename: "a.m4a".to_string(),
-        imported_at: "2026-05-24T00:00:00Z".to_string(),
+        imported_at: Timestamp::parse("2026-05-24T00:00:00Z").unwrap(),
         metadata: AudioAssetMetadata {
             duration_tk: Tick::new(120000),
             audio_codec: "aac".to_string(),
@@ -201,7 +202,7 @@ fn make_image_asset() -> Asset {
         )
         .unwrap(),
         original_filename: "i.png".to_string(),
-        imported_at: "2026-05-24T00:00:00Z".to_string(),
+        imported_at: Timestamp::parse("2026-05-24T00:00:00Z").unwrap(),
         metadata: ImageAssetMetadata {
             width: 1920,
             height: 1080,
@@ -235,7 +236,7 @@ fn make_subtitle_asset() -> Asset {
         )
         .unwrap(),
         original_filename: "s.srt".to_string(),
-        imported_at: "2026-05-24T00:00:00Z".to_string(),
+        imported_at: Timestamp::parse("2026-05-24T00:00:00Z").unwrap(),
         metadata: SubtitleAssetMetadata {
             container: "srt".to_string(),
             language: Some("en".to_string()),
