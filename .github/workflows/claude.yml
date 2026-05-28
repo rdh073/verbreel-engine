@@ -1,0 +1,132 @@
+# Claude Code Action — interactive assistant + automated PR review.
+#
+# Replaces PR-Agent (OpenAI gpt-5.5). Auth via CLAUDE_CODE_OAUTH_TOKEN
+# (Pro/Max subscription token from `claude setup-token`), so both review
+# and interactive turns draw on the Claude subscription, not API billing.
+#
+# Two jobs share one trigger set (mode is decided by presence of `prompt`,
+# per claude-code-action v1 — agent mode when set, tag mode when absent):
+#   auto_review  — agent mode (has `prompt`), runs on PR open/sync. Skips
+#                  bot-authored PRs and `skip-ai-review`-labelled PRs.
+#   interactive  — tag mode (no `prompt`), runs when a human writes @claude
+#                  in an issue, a PR comment, or a PR review.
+#
+# Behaviour delta vs PR-Agent: Claude Code Action posts a single
+# consolidated comment; it cannot submit a formal GitHub review or inline
+# code suggestions.
+#
+# Least privilege is per-job, not workflow-wide. auto_review runs on
+# untrusted PR diffs, so it gets `contents: read` (token cannot push) and
+# disallows the file-mutation tools — it can only read and comment. Only
+# the human-invoked interactive job gets `contents: write` + cargo Bash,
+# so `@claude fix the clippy error` can run the gate and push a fix.
+
+name: Claude Code
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  group: claude-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  auto_review:
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.sender.type != 'Bot' &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-ai-review')
+    runs-on: ubuntu-latest
+    name: Claude auto-review
+    permissions:
+      contents: read # read-only: the review must not be able to push to the PR
+      pull-requests: write # post the review comment
+      issues: write # update the sticky comment
+      actions: read # read CI run results/logs on the PR
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Claude auto-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          use_sticky_comment: true # re-reviews on sync update one comment, not a stack
+          additional_permissions: |
+            actions: read
+          prompt: |
+            Review the changes in PR #${{ github.event.pull_request.number }} of ${{ github.repository }}.
+            Post ONE consolidated review comment. Every finding title starts with [P0]-[P3] per AGENTS.md:
+            P0 blocking (universal break, data corruption, security hole, lost events);
+            P1 urgent (forbidden pattern, missing regression test on a fix, crash-site vs root-cause);
+            P2 normal (logic error that is not data-corrupting, missing test on a new path, obscuring naming);
+            P3 nice-to-have. Cite the exact file:line. Do not open with P2-or-worse if none exist —
+            if the diff is clean, say "this is good" plainly and do not invent findings.
+
+            verbreel verb-slice review checklist:
+            - Destructive verbs MUST emit a W_<VERB>_ENVELOPE warning carrying pre-state-only data (canonical: keyframe.remove). Flag if missing.
+            - State invariants: time monotonic, no overlap unless ripple-shifted, asset ref counts balanced.
+            - JCS canon: use verbreel_canon::jcs::canonicalize / to_canon_bytes_from_slice(&[u8]); never serde_json::to_string for project_hash (P0).
+            - §0.8 write ordering: apply() writes the event to events.jsonl BEFORE patching in-memory state (P0).
+            - Every E_* error code must have >=1 unit test exercising the error path.
+            - Reconstructor MUST round-trip pre-state -> verb -> post-state -> reconstructed pre-state.
+            - Tick math: TICK_RATE_HZ=240000; all time conversions go through the Tick newtype.
+            - Verb args: TrackId has no try_from(String) — use args.track.parse::<TrackId>(). Flag the non-existent constructor.
+            - Public fns returning Result need a /// # Errors doc-comment (clippy::missing_errors_doc).
+            - Crate dep rule (CLAUDE.md) is literal — a wrongly-scoped item needs re-placement, not a forbidden import (P1).
+            - Don't suggest renaming verb fns/args — names mirror spec §X.Y exactly. Don't suggest serde-derive swaps.
+          # No Bash allow-list here: auto_review runs on untrusted PR diffs while
+          # holding the OAuth secret + write scope. It only reads the diff and
+          # posts a comment — running cargo would execute PR-controlled build.rs
+          # / test code under that secret (prompt-injection -> code-exec path).
+          claude_args: |
+            --model sonnet
+            --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,Bash"
+            --system-prompt "You are reviewing the verbreel-engine Rust workspace. Be direct: say 'this is good' when it is; name the problem and file:line when it isn't. Attack the code and the reasoning, not the author. Prefer root-cause over crash-site fixes. Reject exception-swallowing, null-guards-without-reason, and premature abstraction."
+
+    # This is a PUBLIC repo, so anyone can write `@claude`. claude-code-action
+    # itself refuses actors without repo write access, but we also gate here so
+    # a write-scoped job never even starts for an untrusted commenter. Trusted
+    # author_association values: OWNER / MEMBER / COLLABORATOR.
+  interactive:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review' && github.event.review.body && contains(github.event.review.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+    runs-on: ubuntu-latest
+    name: Claude interactive
+    permissions:
+      contents: write # invoker has repo write access; @claude may push a fix branch
+      pull-requests: write
+      issues: write
+      actions: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Claude interactive
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          use_sticky_comment: true # PR timeline comments arrive as issue_comment; keep replies in one PR comment
+          additional_permissions: |
+            actions: read
+          claude_args: |
+            --allowedTools "Bash(cargo check:*),Bash(cargo test:*),Bash(cargo clippy:*),Bash(cargo fmt:*)"
+            --system-prompt "verbreel-engine Rust workspace. Follow CLAUDE.md: every mutation goes through verbreel_state::engine::apply(); the event is written to events.jsonl before the in-memory patch (§0.8); JCS canon for hashing; the crate dependency rule is literal; commit format '<crate>: <imperative>'. One logical change per PR."
