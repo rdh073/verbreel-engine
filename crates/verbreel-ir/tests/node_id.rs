@@ -88,3 +88,88 @@ fn serde_rejects_v4_string_payload() {
     let res: Result<IrNodeId, _> = serde_json::from_str(&payload);
     assert!(res.is_err(), "v4 payload must fail deserialization");
 }
+
+// --- from_uuid: validating raw-Uuid constructor ---------------------------
+
+#[test]
+fn from_uuid_accepts_a_real_v7() {
+    let raw = uuid::Uuid::now_v7();
+    let id = IrNodeId::from_uuid(raw).expect("now_v7 must validate as v7");
+    assert_eq!(id.as_uuid(), raw);
+}
+
+#[test]
+fn from_uuid_rejects_nil_uuid() {
+    let nil = uuid::Uuid::nil();
+    let err = IrNodeId::from_uuid(nil).unwrap_err();
+    // Don't pin exact variant — verbreel_types::id::IdError is the
+    // source of truth; this test asserts only that nil is refused.
+    assert!(
+        !format!("{err:?}").is_empty(),
+        "rejection must surface a non-empty error"
+    );
+}
+
+#[test]
+fn from_uuid_rejects_non_v7_versions() {
+    // A v4 (random) UUID is the most common non-v7 input agents would
+    // accidentally pass.
+    let v4: uuid::Uuid = "550e8400-e29b-41d4-a716-446655440000"
+        .parse()
+        .expect("literal v4 must parse");
+    let err = IrNodeId::from_uuid(v4).unwrap_err();
+    assert!(
+        !format!("{err:?}").is_empty(),
+        "rejection must surface a non-empty error"
+    );
+}
+
+// --- Ord: lexicographic-by-uuid-bytes ordering ---------------------------
+
+#[test]
+fn ord_equal_ids_compare_equal() {
+    let id = IrNodeId::now();
+    assert_eq!(id.cmp(&id), std::cmp::Ordering::Equal);
+}
+
+#[test]
+fn ord_distinguishes_distinct_ids() {
+    let a = IrNodeId::now();
+    let b = IrNodeId::now();
+    assert_ne!(a, b, "two now()-minted ids must differ");
+    assert_ne!(a.cmp(&b), std::cmp::Ordering::Equal);
+}
+
+#[test]
+fn ord_is_lexicographic_on_uuid_bytes() {
+    // Construct two IrNodeIds from raw v7 UUIDs whose byte order is
+    // known by construction — manually parse known v7 strings so the
+    // test doesn't depend on the system clock.
+    let lo_uuid: uuid::Uuid = "01900000-0000-7000-8000-000000000001"
+        .parse()
+        .expect("hardcoded UUID must parse");
+    let hi_uuid: uuid::Uuid = "01900000-0000-7000-8000-000000000002"
+        .parse()
+        .expect("hardcoded UUID must parse");
+    let lo = IrNodeId::from_uuid(lo_uuid).unwrap();
+    let hi = IrNodeId::from_uuid(hi_uuid).unwrap();
+    assert!(lo < hi, "lexicographic-byte order must place lo < hi");
+    assert!(hi > lo);
+    assert_eq!(lo.cmp(&hi), std::cmp::Ordering::Less);
+    assert_eq!(hi.cmp(&lo), std::cmp::Ordering::Greater);
+}
+
+#[test]
+fn ord_v7_timestamp_prefix_yields_monotonic_creation_order() {
+    // UUIDv7 leads with a 48-bit Unix-ms timestamp. Two ids minted
+    // sequentially must sort in creation order — Ord is monotonic
+    // with respect to the wall clock at the millisecond grain.
+    // Insert a tiny sleep to force the millisecond tick.
+    let first = IrNodeId::now();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let second = IrNodeId::now();
+    assert!(
+        first < second,
+        "later-minted id must sort after earlier-minted: first={first} second={second}"
+    );
+}
