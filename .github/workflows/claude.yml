@@ -59,6 +59,12 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Capture PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --patch --color never > .claude-pr-diff.patch
+
       - name: Claude auto-review
         id: claude_auto_review
         uses: anthropics/claude-code-action@v1
@@ -72,6 +78,7 @@ jobs:
             actions: read
           prompt: |
             Review the changes in PR #${{ github.event.pull_request.number }} of ${{ github.repository }}.
+            The exact PR diff is available in `.claude-pr-diff.patch`; read it first and review only those added/removed lines.
             Write ONE consolidated review as your final message (a workflow step posts it). Every finding title starts with [P0]-[P3] per AGENTS.md:
             P0 blocking (universal break, data corruption, security hole, lost events);
             P1 urgent (forbidden pattern, missing regression test on a fix, crash-site vs root-cause);
