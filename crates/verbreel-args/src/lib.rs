@@ -32,6 +32,11 @@
 //!   construction failures) and
 //!   [`ValidationError`](error::ValidationError) (runtime args
 //!   validation failures).
+//! - [`well_known`] — hand-curated JSON Schemas for the simplest
+//!   `*Args` shapes the engine already ships, plus a
+//!   [`default_registry`](well_known::default_registry) factory.
+//!   First proof of the framework end-to-end; subsequent slices add
+//!   more verbs to the registry one batch at a time.
 //!
 //! ## Why pre-compile?
 //!
@@ -48,8 +53,10 @@ pub mod error;
 pub mod registry;
 pub mod schema;
 pub mod validator;
+pub mod well_known;
 
 pub use error::{SchemaError, ValidationError};
 pub use registry::ArgsRegistry;
 pub use schema::Schema;
 pub use validator::validate;
+pub use well_known::default_registry;
