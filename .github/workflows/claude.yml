@@ -65,12 +65,14 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
-          use_sticky_comment: true # re-reviews on sync update one comment, not a stack
+          # No use_sticky_comment here: the agent does not post in this job — the
+          # "Post Claude auto-review result" step owns the single sticky comment
+          # (matched by the <!-- verbreel-claude-auto-review --> marker).
           additional_permissions: |
             actions: read
           prompt: |
             Review the changes in PR #${{ github.event.pull_request.number }} of ${{ github.repository }}.
-            Post ONE consolidated review comment. Every finding title starts with [P0]-[P3] per AGENTS.md:
+            Write ONE consolidated review as your final message (a workflow step posts it). Every finding title starts with [P0]-[P3] per AGENTS.md:
             P0 blocking (universal break, data corruption, security hole, lost events);
             P1 urgent (forbidden pattern, missing regression test on a fix, crash-site vs root-cause);
             P2 normal (logic error that is not data-corrupting, missing test on a new path, obscuring naming);
@@ -89,15 +91,22 @@ jobs:
             - Public fns returning Result need a /// # Errors doc-comment (clippy::missing_errors_doc).
             - Crate dep rule (CLAUDE.md) is literal — a wrongly-scoped item needs re-placement, not a forbidden import (P1).
             - Don't suggest renaming verb fns/args — names mirror spec §X.Y exactly. Don't suggest serde-derive swaps.
-          # No Bash allow-list here: auto_review runs on untrusted PR diffs while
-          # holding the OAuth secret + write scope. It only reads the diff and
-          # posts a comment — running cargo would execute PR-controlled build.rs
-          # / test code under that secret (prompt-injection -> code-exec path).
+          # Locked read-only: auto_review runs on untrusted PR diffs while a
+          # reachable secret exists. The agent only reads (diff is in context,
+          # source via the Read tool) and emits the review as its final message;
+          # the "Post Claude auto-review result" step below harvests that message
+          # from execution_file and posts it via the workflow GITHUB_TOKEN. The
+          # agent never posts and never runs cargo/build.rs/edit — disabling those
+          # tools both closes the prompt-injection -> code-exec path AND stops the
+          # agent from burning turns retrying blocked tools. --max-turns is a hard
+          # ceiling so a single review can't run away (a prior unbounded run took
+          # 29 turns / ~$1).
           claude_args: |
             --model claude-opus-4-8
             --effort high
+            --max-turns 15
             --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,Bash"
-            --system-prompt "You are reviewing the verbreel-engine Rust workspace. Be direct: say 'this is good' when it is; name the problem and file:line when it isn't. Attack the code and the reasoning, not the author. Prefer root-cause over crash-site fixes. Reject exception-swallowing, null-guards-without-reason, and premature abstraction."
+            --system-prompt "You are reviewing the verbreel-engine Rust workspace, READ-ONLY. The diff is in your context; read source files with the Read tool if needed. Do NOT attempt to build, run, edit, or execute shell commands — those tools are disabled, so do not waste turns trying. Produce your COMPLETE review as your final assistant message (a workflow step posts it for you); do not try to comment yourself. Be direct: say 'this is good' when it is; name the problem and file:line when it isn't. Attack the code and the reasoning, not the author. Prefer root-cause over crash-site fixes. Reject exception-swallowing, null-guards-without-reason, and premature abstraction."
 
       - name: Post Claude auto-review result
         if: always() && steps.claude_auto_review.outputs.execution_file != ''
