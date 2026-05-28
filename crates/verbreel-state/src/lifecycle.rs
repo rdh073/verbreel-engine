@@ -54,6 +54,7 @@ use crate::reconstructor::{
     ReconstructError, RecordedEvent, ValidationError, VerbError, VerbRegistry,
     validate_reconstructors,
 };
+use crate::verbs::asset_import;
 
 // ---------------------------------------------------------------------
 // Errors
@@ -840,14 +841,45 @@ impl ProjectStore {
                 verb_id: verb_id.to_string(),
             })?;
 
-        // Step B: compute the patch + data envelope from the verb.
-        let (patch, data, warnings) =
+        // Step B: compute patch + data. `asset.import` has native CAS
+        // wiring that needs project-root filesystem context.
+        let (patch, data, warnings) = if verb_id == "asset.import" {
+            let typed: asset_import::AssetImportArgs = serde_json::from_value(args.clone())
+                .map_err(|err| LifecycleError::VerbExecutionFailed {
+                    verb_id: verb_id.to_string(),
+                    source: VerbError::BadArgs {
+                        detail: format!("asset.import: args deserialize failed: {err}"),
+                    },
+                })?;
+            let (patch_value, warnings, data) =
+                asset_import::compute_patch_with_root(&self.project, &typed, &self.root).map_err(
+                    |source| LifecycleError::VerbExecutionFailed {
+                        verb_id: verb_id.to_string(),
+                        source: source.into(),
+                    },
+                )?;
+            let patch: json_patch::Patch = serde_json::from_value(patch_value).map_err(|err| {
+                LifecycleError::VerbExecutionFailed {
+                    verb_id: verb_id.to_string(),
+                    source: VerbError::Custom(format!(
+                        "asset.import: patch construction failed: {err}"
+                    )),
+                }
+            })?;
+            let data =
+                serde_json::to_value(&data).map_err(|err| LifecycleError::VerbExecutionFailed {
+                    verb_id: verb_id.to_string(),
+                    source: VerbError::Custom(format!("asset.import: data envelope failed: {err}")),
+                })?;
+            (patch, data, warnings)
+        } else {
             verb.compute_patch(&self.project, &args).map_err(|source| {
                 LifecycleError::VerbExecutionFailed {
                     verb_id: verb_id.to_string(),
                     source,
                 }
-            })?;
+            })?
+        };
 
         // Step C: delegate to the existing raw mutate() for §0.8
         // write-ordering + idempotency. Then thread the typed `data`

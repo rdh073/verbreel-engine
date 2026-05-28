@@ -3940,9 +3940,9 @@ fn effect_set_param_fixture() -> RecordedEvent {
 /// Build the canonical `asset.import` fixture used by
 /// [`default_fixtures`].
 ///
-/// The only success path at v1 is the empty-batch no-op; the fixture
-/// records that case so the §0.8 reconstructor gate has a meaningful
-/// `(args, post_state) → expected_data` pair to verify.
+/// Fixture captures a non-empty import patch with canonical CAS
+/// hash/path fields so the reconstructor gate exercises the replay
+/// path shape beyond the empty-batch no-op.
 fn asset_import_fixture() -> RecordedEvent {
     let project_id = DEFAULT_FIXTURE_PROJECT_ID
         .parse()
@@ -3952,22 +3952,53 @@ fn asset_import_fixture() -> RecordedEvent {
 
     let args = asset_import::AssetImportArgs {
         project_id,
-        paths: Vec::new(),
+        paths: vec!["/tmp/fixture-subtitle.srt".to_string()],
         mode: None,
         soft: None,
     };
 
-    let (patch_value, _warnings, data) = asset_import::compute_patch(&prior, &args)
-        .expect("default fixture must produce valid asset.import data (empty-paths no-op)");
-    let expected_data = serde_json::to_value(&data)
-        .expect("asset.import fixture expected_data serializes to Value");
+    let asset_value = json!({
+        "id": "01900000-0000-7000-8000-00000000c381",
+        "kind": "subtitle",
+        "hash": "a1fce4363854ff888cff4b8e7875d600c2682390418f76057e4fc4125cc0f622",
+        "path": "assets/a1/a1fce4363854ff888cff4b8e7875d600c2682390418f76057e4fc4125cc0f622.srt",
+        "original_filename": "fixture-subtitle.srt",
+        "imported_at": "1970-01-01T00:00:00Z",
+        "metadata": {
+            "container": "srt",
+            "fingerprint": {
+                "mtime_ms": 0,
+                "size_bytes": 14
+            }
+        }
+    });
+    let patch_value = json!([{
+        "op": "add",
+        "path": "/assets/-",
+        "value": asset_value.clone()
+    }]);
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("asset.import fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("asset.import fixture patch applies cleanly");
+    let expected_data = json!({
+        "assets": [asset_value],
+        "modes_used": [{
+            "asset_id": "01900000-0000-7000-8000-00000000c381",
+            "mode_used": "copy",
+            "input_path": "/tmp/fixture-subtitle.srt"
+        }],
+        "missing_paths": [],
+        "skipped_input_indices": []
+    });
 
     RecordedEvent {
         verb: "asset.import".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings: vec![],
-        post_state: prior,
+        post_state,
         expected_data,
     }
 }

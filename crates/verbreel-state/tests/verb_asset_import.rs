@@ -1,11 +1,9 @@
 //! Tests for `asset.import` (§3.1) — eighty-fourth production verb.
 //!
-//! v1 floor: real file I/O is deferred. The verb implements the
-//! `maxItems: 1000` schema check, the spec's documented empty-batch
-//! no-op, and the always-rejecting `E_ASSET_PATH_NOT_FOUND` path for
-//! every non-empty call. These tests lock the three behaviors plus
-//! the verb-trait surface, the kernel dispatch route, and the
-//! reconstructor gate.
+//! The pure verb surface remains a v1 floor (no root filesystem
+//! context), while the native kernel route wires non-empty imports
+//! through CAS. These tests lock both surfaces, plus reconstructor
+//! behavior through default fixtures.
 
 use std::sync::Arc;
 
@@ -356,6 +354,65 @@ fn verb_routes_through_mutate_via_verb_for_empty_paths() {
     assert!(data.modes_used.is_empty());
     assert!(data.missing_paths.is_empty());
     assert!(data.skipped_input_indices.is_empty());
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_non_empty_import_writes_cas_and_records_canonical_hash_path() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    let source = dir.path().join("sample.SRT");
+    std::fs::write(&source, b"1\n00:00:00,000 --> 00:00:00,500\nhi\n").expect("write source file");
+
+    let mut store = ProjectStore::create_with_registry(
+        dir.path(),
+        empty_project(),
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .expect("create_with_registry succeeds");
+
+    let outcome = store
+        .mutate_via_verb(
+            "asset.import",
+            json!({"project_id": FIXTURE_PROJECT_ID, "paths": [source.to_string_lossy()]}),
+            None,
+        )
+        .expect("asset.import non-empty should succeed on native route");
+
+    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
+        panic!("expected Applied outcome for non-empty asset.import");
+    };
+    assert!(warnings.is_empty());
+
+    let data: AssetImportData =
+        serde_json::from_value(data).expect("asset.import data deserializes");
+    assert_eq!(data.assets.len(), 1);
+    assert_eq!(data.modes_used.len(), 1);
+    assert!(data.missing_paths.is_empty());
+    assert!(data.skipped_input_indices.is_empty());
+
+    let imported = data.assets[0]
+        .as_object()
+        .expect("data.assets[0] is an object");
+    let hash = imported
+        .get("hash")
+        .and_then(Value::as_str)
+        .expect("imported asset has hash");
+    let path = imported
+        .get("path")
+        .and_then(Value::as_str)
+        .expect("imported asset has path");
+    assert_eq!(hash.len(), 64);
+    assert_eq!(path, format!("assets/{}/{}.srt", &hash[..2], hash));
+
+    let cas_target = dir.path().join(path);
+    assert!(
+        cas_target.exists(),
+        "CAS target must exist: {}",
+        cas_target.display()
+    );
 }
 
 // --- data shape lock --------------------------------------------------------
