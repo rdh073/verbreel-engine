@@ -24,8 +24,12 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // Default bind is `127.0.0.1:0` — the OS picks an ephemeral port,
+    // so the binary never fails when port 8080 is occupied and never
+    // collides with another instance on the same host. Operators set
+    // `VERBREEL_HTTP_ADDR` to pin a stable port when they need one.
     let addr: SocketAddr = std::env::var("VERBREEL_HTTP_ADDR")
-        .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
+        .unwrap_or_else(|_| "127.0.0.1:0".to_string())
         .parse()?;
 
     verbreel_http::serve(addr).await

@@ -133,14 +133,30 @@ pub async fn call_tool(
     };
 
     // project.list is project-agnostic at v1 floor, but the Verb trait
-    // still demands a `project_id` to clear its argument shape.
-    // Synthesise a fresh id and inject it on both sides only if the
-    // caller didn't supply one — same shape the CLI and MCP wrappers
-    // use to keep dispatch invariants identical across transports.
-    let project_id = ProjectId::now();
-    args_obj
-        .entry("project_id".to_string())
-        .or_insert_with(|| json!(project_id));
+    // still demands a `project_id` to clear its argument shape. When the
+    // caller supplies one, the same id MUST flow into both `args` and
+    // the synthetic `prior` — mismatched identities would let dispatch
+    // see one project in its args and a different one in its prior
+    // state, an invariant violation no current verb checks for but the
+    // surrounding contract requires.
+    let project_id: ProjectId = if let Some(existing) = args_obj.get("project_id") {
+        match serde_json::from_value::<ProjectId>(existing.clone()) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "bad args",
+                        "detail": format!("invalid project_id: {e}"),
+                    })),
+                );
+            }
+        }
+    } else {
+        let synthesized = ProjectId::now();
+        args_obj.insert("project_id".to_string(), json!(synthesized));
+        synthesized
+    };
     let args = Value::Object(args_obj);
     let prior = synthetic_empty_project(project_id);
 

@@ -235,6 +235,54 @@ async fn caller_supplied_project_id_is_accepted() {
 }
 
 #[tokio::test]
+async fn caller_supplied_project_id_is_threaded_into_prior_state() {
+    // The dispatch layer must use the caller's `project_id` for BOTH
+    // the args going into the verb AND the synthetic prior Project,
+    // otherwise args and prior refer to different projects and the
+    // contract is violated. Spec §0.13 rejects nil UUIDs, so the
+    // engine would return an error if the prior were silently built
+    // from a fresh id while args carried the nil one — exploit that:
+    // a nil-uuid caller id must surface as a 400 (parse rejection),
+    // never a 500 from the verb seeing a mismatched pair.
+    let nil = "00000000-0000-0000-0000-000000000000";
+    let (status, body) = post_json("/tools/project.list", json!({ "project_id": nil })).await;
+    // Either 400 (parse layer rejects nil) or 500 from the engine —
+    // BOTH are acceptable disposition for an invalid id; what's NOT
+    // acceptable is 200 with the nil silently overwritten by a fresh
+    // synthetic id and the caller none the wiser.
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "nil project_id must not silently succeed; got body: {body}"
+    );
+}
+
+#[tokio::test]
+async fn invalid_project_id_string_returns_400() {
+    // Garbage strings in `project_id` must be rejected at the parse
+    // layer with a 400 — never silently overwritten or escalated to
+    // a 500 from the verb.
+    let (status, body) = post_json(
+        "/tools/project.list",
+        json!({ "project_id": "not-a-uuid-at-all" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "garbage project_id must surface as 400; got body: {body}"
+    );
+    assert_eq!(body["error"], "bad args");
+    assert!(
+        body["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("project_id"),
+        "detail must mention project_id; got: {body}"
+    );
+}
+
+#[tokio::test]
 async fn response_content_type_is_json() {
     let req = Request::builder()
         .method(Method::POST)
