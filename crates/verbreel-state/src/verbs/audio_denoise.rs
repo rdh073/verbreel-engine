@@ -1,9 +1,10 @@
 //! `audio.denoise` (§9.4) - managed denoise effect marker.
 //!
 //! This verb records denoise intent as an immediate state mutation. It
-//! does not run DSP, spawn render jobs, or touch storage. Clip targets
-//! mutate typed [`crate::clip::Clip::effects`]; track targets mutate the
-//! current untyped [`crate::track::Track::effects`] JSON values.
+//! does not run DSP, spawn render jobs, or touch storage. Both clip and
+//! track targets mutate typed effect vectors
+//! ([`crate::clip::Clip::effects`] / [`crate::track::Track::effects`],
+//! each `Vec<Effect>`).
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -314,7 +315,7 @@ fn compute_track_patch(
         });
     }
 
-    let existing = find_track_denoise(located.track)?;
+    let existing = find_track_denoise(located.track);
 
     match (existing, strength) {
         (None, None) => Ok(create_track_denoise(located, DEFAULT_STRENGTH, true)),
@@ -369,7 +370,7 @@ fn create_track_denoise(
 ) -> (Value, Vec<Value>, AudioDenoiseData) {
     let effect_id = EffectId::now();
     let mut effects = located.track.effects.clone();
-    effects.push(track_denoise_effect(effect_id, strength));
+    effects.push(denoise_effect(effect_id, strength));
 
     let data = AudioDenoiseData {
         target_id: located.track.id.to_string(),
@@ -578,28 +579,10 @@ fn denoise_effect(effect_id: EffectId, strength: f64) -> Effect {
     }
 }
 
-fn track_denoise_effect(effect_id: EffectId, strength: f64) -> Value {
-    json!({
-        "id": effect_id,
-        "kind": DENOISE_KIND,
-        "enabled": true,
-        "params": {
-            "strength": strength,
-        },
-    })
-}
-
-fn set_track_strength(effect: &mut Value, strength: f64) {
-    let Some(object) = effect.as_object_mut() else {
-        return;
-    };
-    let params = object.entry("params").or_insert_with(|| json!({}));
-    if !params.is_object() {
-        *params = json!({});
-    }
-    if let Some(params) = params.as_object_mut() {
-        params.insert("strength".to_string(), json!(strength));
-    }
+fn set_track_strength(effect: &mut Effect, strength: f64) {
+    effect
+        .params
+        .insert("strength".to_string(), json!(strength));
 }
 
 fn locate_clip(project: &Project, clip_id: ClipId) -> Option<LocatedClip<'_>> {
@@ -629,31 +612,16 @@ fn locate_track(project: &Project, track_id: TrackId) -> Option<LocatedTrack<'_>
         .map(|(track_idx, track)| LocatedTrack { track_idx, track })
 }
 
-fn find_track_denoise(track: &Track) -> Result<Option<LocatedDenoise>, AudioDenoiseError> {
-    for (effect_idx, effect) in track.effects.iter().enumerate() {
-        if effect.get("kind").and_then(Value::as_str) != Some(DENOISE_KIND) {
-            continue;
-        }
-        let raw =
-            effect
-                .get("id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| AudioDenoiseError::NoMatch {
-                    target_kind: "track effect",
-                    selector: format!("track:{}", track.id),
-                })?;
-        let effect_id = raw
-            .parse::<EffectId>()
-            .map_err(|_| AudioDenoiseError::NoMatch {
-                target_kind: "track effect",
-                selector: format!("track:{}", track.id),
-            })?;
-        return Ok(Some(LocatedDenoise {
+fn find_track_denoise(track: &Track) -> Option<LocatedDenoise> {
+    track
+        .effects
+        .iter()
+        .enumerate()
+        .find(|(_, effect)| effect.kind.as_str() == DENOISE_KIND)
+        .map(|(effect_idx, effect)| LocatedDenoise {
             effect_idx,
-            effect_id,
-        }));
-    }
-    Ok(None)
+            effect_id: effect.id,
+        })
 }
 
 fn keyframes_without_effect_refs(
@@ -822,9 +790,7 @@ fn data_from_post_track(
         .ok_or_else(|| ReconstructError::PostStateMissing {
             detail: format!("audio.denoise: track id {track_id} not found in post_state"),
         })?;
-    let effect_id = find_track_denoise(track)
-        .map_err(|err| ReconstructError::Custom(err.to_string()))?
-        .map(|located| located.effect_id);
+    let effect_id = find_track_denoise(track).map(|located| located.effect_id);
     Ok(AudioDenoiseData {
         target_id: track_id.to_string(),
         effect_id,

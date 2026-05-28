@@ -272,8 +272,8 @@ fn track_denoise_strength(project: &Project) -> f64 {
     project.tracks[0]
         .effects
         .iter()
-        .find(|effect| effect["kind"] == "denoise")
-        .and_then(|effect| effect["params"]["strength"].as_f64())
+        .find(|effect| effect.kind.as_str() == "denoise")
+        .and_then(|effect| effect.params["strength"].as_f64())
         .expect("track denoise strength present")
 }
 
@@ -1166,7 +1166,7 @@ fn track_target_preserves_other_track_effect_values() {
     let post = apply_patch(&prior, patch);
 
     assert_eq!(post.tracks[0].effects.len(), 2);
-    assert_eq!(post.tracks[0].effects[0]["id"], EFFECT_OTHER);
+    assert_eq!(post.tracks[0].effects[0].id.to_string(), EFFECT_OTHER);
     assert!((track_denoise_strength(&post) - 0.45).abs() < 1e-12);
 }
 

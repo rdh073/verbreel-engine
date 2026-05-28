@@ -58,8 +58,8 @@ pub enum DescribeKind {
     Track,
     /// A `Clip` on `Track.clips[]`.
     Clip,
-    /// An `Effect` — either clip-attached (`Clip.effects[]`, typed) or
-    /// track-level (`Track.effects[]`, untyped `Value` in v1).
+    /// An `Effect` — either clip-attached (`Clip.effects[]`) or
+    /// track-level (`Track.effects[]`); both typed.
     Effect,
     /// A `Keyframe` on `Clip.keyframes[]`.
     Keyframe,
@@ -150,7 +150,7 @@ enum ParsedTarget {
     Project(ProjectId),
     Track(TrackId),
     Clip(ClipId),
-    Effect(EffectId, String),
+    Effect(EffectId),
     Keyframe(KeyframeId),
     Asset(AssetId),
     Marker(MarkerId),
@@ -204,7 +204,7 @@ fn parse_target(raw: &str) -> Result<ParsedTarget, DescribeError> {
             }),
         "effect" => body
             .parse::<EffectId>()
-            .map(|id| ParsedTarget::Effect(id, body.to_string()))
+            .map(ParsedTarget::Effect)
             .map_err(|err| DescribeError::BadSelector {
                 detail: format!("effect body parse failed: {err}"),
             }),
@@ -292,11 +292,10 @@ fn lookup(
                 entity,
             })
         }
-        ParsedTarget::Effect(effect_id, raw_body) => {
-            // Asymmetry: clip-attached effects live in `Vec<Effect>` (typed,
-            // matched on `Effect.id`), while track-level effects live in
-            // `Vec<Value>` (v1 placeholder per `track.rs:90`, matched on
-            // `value["id"].as_str()`). First match wins; clip scan first.
+        ParsedTarget::Effect(effect_id) => {
+            // Clip-attached and track-attached effects both live in
+            // `Vec<Effect>` (typed, matched on `Effect.id`). First match
+            // wins; clip scan first.
             for track in &prior.tracks {
                 for clip in &track.clips {
                     for effect in &clip.effects {
@@ -316,10 +315,15 @@ fn lookup(
             }
             for track in &prior.tracks {
                 for effect in &track.effects {
-                    if effect.get("id").and_then(Value::as_str) == Some(raw_body.as_str()) {
+                    if effect.id == *effect_id {
+                        let entity = serde_json::to_value(effect).map_err(|err| {
+                            DescribeError::BadSelector {
+                                detail: format!("effect serialize failed: {err}"),
+                            }
+                        })?;
                         return Ok(DescribeData {
                             kind: DescribeKind::Effect,
-                            entity: effect.clone(),
+                            entity,
                         });
                     }
                 }
