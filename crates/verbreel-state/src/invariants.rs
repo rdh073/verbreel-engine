@@ -137,7 +137,7 @@ use thiserror::Error;
 use verbreel_types::{AssetId, ClipId, EffectId, KeyframeId, Tick};
 
 use crate::asset::Asset;
-use crate::clip::{ClipMask, MaskKind};
+use crate::clip::{Clip, ClipMask, MaskKind, SpeedCurvePoint};
 use crate::newtypes::AssetRef;
 use crate::project::Project;
 use crate::track::TrackKind;
@@ -911,6 +911,169 @@ pub fn timeline_duration_tk(source_in_tk: Tick, source_out_tk: Tick, speed: f64)
 }
 
 // ---------------------------------------------------------------------
+// integrate_speed_curve + clip_timeline_duration_tk (§5.20)
+// ---------------------------------------------------------------------
+
+/// `Number.MAX_SAFE_INTEGER` per §0.13 — JS-host integer ceiling.
+pub const MAX_SAFE_INTEGER_I64: i64 = 9_007_199_254_740_991;
+
+/// Floating-point form of [`MAX_SAFE_INTEGER_I64`].
+pub const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
+
+/// Closed-form integration of the §5.20 piecewise-linear speed curve
+/// overflowed the host integer ceiling.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IntegrationOverflow {
+    /// The pre-`ceil` summed duration (in ticks) that exceeded
+    /// [`MAX_SAFE_INTEGER_F64`] or otherwise produced a non-finite
+    /// result.
+    pub computed: f64,
+}
+
+/// Closed-form integral of `1 / (S * C(t))` over `[0, source_out_tk -
+/// source_in_tk]` per §5.20.
+///
+/// Partitions the source range by `{0, t_0, …, t_n, L}` where
+/// `L = source_out_tk - source_in_tk` and integrates each segment in
+/// source-tick ascending order. For a single linear segment between
+/// `(t_a, f_a)` and `(t_b, f_b)`:
+///
+/// ```text
+/// f_a == f_b → (t_b - t_a) / (S * f_a)
+/// f_a != f_b → (t_b - t_a) / (S * (f_b - f_a)) * ln(f_b / f_a)
+/// ```
+///
+/// Boundary rule: `C` is held at `f_0` on `[0, t_0)` and at `f_n` on
+/// `(t_n, L]`. The stable summation order is mandated by §5.20 so two
+/// implementations produce byte-identical `project_hash` values.
+///
+/// # Errors
+///
+/// Returns [`IntegrationOverflow`] when the summed value is non-finite
+/// or its `ceil` exceeds [`MAX_SAFE_INTEGER_F64`]. The caller maps the
+/// error to `E_BAD_TIME` (`details.field: "speed_curve"`,
+/// `details.computed_duration_tk`).
+#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_sign_loss)]
+// Spec §5.20 mandates strict `f_a == f_b` equality for the
+// constant-segment branch so two implementations produce byte-identical
+// `project_hash` values. Epsilon comparison would split the branch
+// non-deterministically across runtimes.
+#[allow(clippy::float_cmp)]
+pub fn integrate_speed_curve(
+    source_in_tk: Tick,
+    source_out_tk: Tick,
+    speed: f64,
+    points: &[SpeedCurvePoint],
+) -> Result<i64, IntegrationOverflow> {
+    let length = source_out_tk.get().saturating_sub(source_in_tk.get());
+    if length <= 0 {
+        return Ok(0);
+    }
+    if !speed.is_finite() || speed <= 0.0 {
+        return Err(IntegrationOverflow {
+            computed: f64::INFINITY,
+        });
+    }
+    let Some((first, rest_after_first)) = points.split_first() else {
+        return Ok(timeline_duration_tk(source_in_tk, source_out_tk, speed).get());
+    };
+    let _ = rest_after_first; // walk via windows(2) below, not this slice
+    let Some(last) = points.last() else {
+        // Unreachable: `split_first` Some implies non-empty.
+        return Ok(timeline_duration_tk(source_in_tk, source_out_tk, speed).get());
+    };
+
+    let len_f = length as f64;
+    let mut sum = 0.0_f64;
+
+    // Left-held segment: C(t) == f_0 on [0, t_0).
+    let first_t = first.time_tk.get() as f64;
+    let f_0 = first.factor;
+    if !f_0.is_finite() || f_0 <= 0.0 {
+        return Err(IntegrationOverflow {
+            computed: f64::INFINITY,
+        });
+    }
+    if first_t > 0.0 {
+        sum += first_t / (speed * f_0);
+    }
+
+    // Internal segments: walk in source-tick ascending order so the
+    // summation order is stable.
+    for window in points.windows(2) {
+        let a = &window[0];
+        let b = &window[1];
+        let t_a = a.time_tk.get() as f64;
+        let t_b = b.time_tk.get() as f64;
+        let f_a = a.factor;
+        let f_b = b.factor;
+        if !f_a.is_finite() || f_a <= 0.0 || !f_b.is_finite() || f_b <= 0.0 {
+            return Err(IntegrationOverflow {
+                computed: f64::INFINITY,
+            });
+        }
+        let delta_t = t_b - t_a;
+        if delta_t <= 0.0 {
+            continue;
+        }
+        let contribution = if f_a == f_b {
+            // Constant segment — formula degenerates to (t_b - t_a) /
+            // (S * f_a). Spec §5.20 explicit branch.
+            delta_t / (speed * f_a)
+        } else {
+            (delta_t / (speed * (f_b - f_a))) * (f_b / f_a).ln()
+        };
+        sum += contribution;
+    }
+
+    // Right-held segment: C(t) == f_n on (t_n, L].
+    let last_t = last.time_tk.get() as f64;
+    let f_n = last.factor;
+    if !f_n.is_finite() || f_n <= 0.0 {
+        return Err(IntegrationOverflow {
+            computed: f64::INFINITY,
+        });
+    }
+    if last_t < len_f {
+        sum += (len_f - last_t) / (speed * f_n);
+    }
+
+    if !sum.is_finite() || sum < 0.0 {
+        return Err(IntegrationOverflow { computed: sum });
+    }
+
+    let ceiled = sum.ceil();
+    if ceiled > MAX_SAFE_INTEGER_F64 {
+        return Err(IntegrationOverflow { computed: sum });
+    }
+
+    Ok(ceiled as i64)
+}
+
+/// Compute a clip's timeline duration accounting for `Clip.speed_curve`
+/// per §5.20.
+///
+/// When `Clip.speed_curve` is `None` (or unexpectedly empty), falls
+/// back to the scalar v1.0 formula via [`timeline_duration_tk`]. When
+/// the curve integration overflows, returns [`Tick::MAX`] so the
+/// `ProjectDurationStale` invariant still produces a meaningful
+/// rejection (matching the scalar overflow convention).
+#[must_use]
+pub fn clip_timeline_duration_tk(clip: &Clip) -> Tick {
+    match clip.speed_curve.as_deref() {
+        Some(points) if !points.is_empty() => {
+            match integrate_speed_curve(clip.source_in_tk, clip.source_out_tk, clip.speed, points) {
+                Ok(value) => Tick::new(value),
+                Err(_) => Tick::new(i64::MAX),
+            }
+        }
+        _ => timeline_duration_tk(clip.source_in_tk, clip.source_out_tk, clip.speed),
+    }
+}
+
+// ---------------------------------------------------------------------
 // check_fade_clamp
 // ---------------------------------------------------------------------
 
@@ -1082,7 +1245,7 @@ pub fn check_duration_tk(project: &Project) -> Result<(), InvariantViolation> {
     let mut computed: i64 = 0;
     for track in &project.tracks {
         for clip in &track.clips {
-            let dur = timeline_duration_tk(clip.source_in_tk, clip.source_out_tk, clip.speed);
+            let dur = clip_timeline_duration_tk(clip);
             let end = clip.track_position_tk.get().saturating_add(dur.get());
             if end > computed {
                 computed = end;

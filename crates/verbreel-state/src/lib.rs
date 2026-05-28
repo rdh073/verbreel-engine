@@ -104,14 +104,16 @@ pub use idempotency::{
     IdempotencyIndex, LookupOutcome, MockClock, SystemClock,
 };
 pub use invariants::{
-    AssetIdState, EFFECT_PARAMS_MAX_BYTES, EFFECT_PARAMS_MAX_KEYS, InvariantViolation,
-    METADATA_MAX_BYTES, METADATA_MAX_KEYS, MaskParamsError, SourceInTkKind, check_asset_existence,
+    AssetIdState, EFFECT_PARAMS_MAX_BYTES, EFFECT_PARAMS_MAX_KEYS, IntegrationOverflow,
+    InvariantViolation, MAX_SAFE_INTEGER_F64, MAX_SAFE_INTEGER_I64, METADATA_MAX_BYTES,
+    METADATA_MAX_KEYS, MaskParamsError, SourceInTkKind, check_asset_existence,
     check_asset_id_biconditional, check_asset_id_uniqueness, check_dangling_keyframes,
     check_duration_tk, check_effect_params_caps, check_effect_track_empty,
     check_effect_window_within_parent, check_fade_clamp, check_mask_params, check_metadata_caps,
     check_no_overlap, check_source_in_tk, check_speed_curve_on_image_text,
     check_speed_on_image_text, check_text_clip_text_field, check_track_contiguity,
-    extract_effect_id_from_property, timeline_duration_tk,
+    clip_timeline_duration_tk, extract_effect_id_from_property, integrate_speed_curve,
+    timeline_duration_tk,
 };
 pub use keyframe::{Easing, Keyframe, KeyframeNewtypeError, KeyframeProperty};
 #[cfg(feature = "native")]
