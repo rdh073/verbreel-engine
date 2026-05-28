@@ -246,6 +246,9 @@ pub use verbs::compound_create::{
 pub use verbs::compound_expand::{
     CompoundExpandArgs, CompoundExpandData, CompoundExpandError, CompoundExpandVerb,
 };
+pub use verbs::compound_flatten::{
+    CompoundFlattenArgs, CompoundFlattenData, CompoundFlattenError, CompoundFlattenVerb,
+};
 pub use verbs::describe::{DescribeArgs, DescribeData, DescribeError, DescribeKind, DescribeVerb};
 pub use verbs::effect_add::{EffectAddArgs, EffectAddData, EffectAddError, EffectAddVerb};
 pub use verbs::effect_list_available::{
