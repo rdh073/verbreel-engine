@@ -3,6 +3,8 @@
 //! v0 commits the public surface; real wgpu `RenderPipeline`,
 //! `BindGroup`s, and WGSL shader sources land with Spike S1.
 
+use verbreel_ir::Tick;
+
 use crate::error::RenderError;
 use crate::preset::RenderPreset;
 
@@ -49,14 +51,16 @@ impl Pipeline {
 /// [`SPIKE_S1_DEFERRAL_DETAIL`] as the body. S1 replaces the body
 /// with real wgpu submission.
 ///
-/// `at_tk` is the engine-tick timestamp (240,000 Hz base per §0.2).
+/// `at_tk` is the engine-tick timestamp ([`verbreel_types::Tick`],
+/// 240,000 Hz base per §0.2). The typed newtype prevents callers
+/// from accidentally passing a frame count or millisecond timestamp.
 ///
 /// # Errors
 ///
 /// Returns [`RenderError::NotYetImplemented`] unconditionally at v0.
 /// Future variants ([`RenderError::SurfaceLost`],
 /// [`RenderError::ShaderCompile`]) arrive with Spike S1.
-pub fn run(_pipeline: &mut Pipeline, _at_tk: i64) -> Result<(), RenderError> {
+pub fn run(_pipeline: &mut Pipeline, _at_tk: Tick) -> Result<(), RenderError> {
     Err(RenderError::NotYetImplemented {
         detail: SPIKE_S1_DEFERRAL_DETAIL.to_string(),
     })
