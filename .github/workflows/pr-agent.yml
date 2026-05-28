@@ -4,7 +4,7 @@
 # slash-commands: /review, /improve, /describe, /ask <q>, /help.
 #
 # Requires repository secret: OPENAI_KEY (sk-proj-... or sk-...).
-# Model: openai/gpt-5.5 with reasoning=medium; falls back to gpt-5 → gpt-5-mini.
+# Model: openai/gpt-5.5 with reasoning=xhigh; falls back to gpt-5 → gpt-5-mini.
 #
 # Bot-PR handling:
 #   - github.event.sender.type != 'Bot'  → skip auto-review on bot PRs.
@@ -41,7 +41,7 @@ jobs:
           # ── Model: flagship + fallback chain ──
           config.model:            "openai/gpt-5.5"
           config.fallback_models:  '["openai/gpt-5", "openai/gpt-5-mini"]'
-          config.reasoning_effort:      "medium"
+          config.reasoning_effort:      "xhigh"
           config.custom_model_max_tokens: "128000"  # PR-Agent MAX_TOKENS table miss workaround for gpt-5 family
           config.temperature:             "1"       # gpt-5 family only supports temperature=1 (litellm UnsupportedParamsError otherwise)
 
@@ -50,9 +50,9 @@ jobs:
           github_action_config.auto_describe: "true"
           github_action_config.auto_improve:  "true"
 
-          # ── Trim noise (drop score/effort blocks; keep tests+security) ──
+          # ── Trim noise (drop score; keep effort+tests+security) ──
           pr_reviewer.require_score_review:              "false"
-          pr_reviewer.require_estimate_effort_to_review: "false"
+          pr_reviewer.require_estimate_effort_to_review: "true"
           pr_reviewer.require_tests_review:              "true"
           pr_reviewer.require_security_review:           "true"
 
