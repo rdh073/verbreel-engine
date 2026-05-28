@@ -862,3 +862,99 @@ fn simple_overlap_project() -> Project {
         240_000,
     )
 }
+
+/// Resolve the `style` map embedded in the single burned-caption effect
+/// after applying the patch — i.e. the color values as they enter
+/// canonical event data.
+fn burned_style(prior: &Project, style: Map<String, Value>) -> Map<String, Value> {
+    let (patch, _warnings, _data) =
+        compute_patch(prior, &args(TEXT_TRACK_A, Some(StyleArg::Object(style))))
+            .expect("happy path");
+    let post = apply_patch(prior, patch);
+    post.tracks[1].clips[0].effects[0]
+        .params
+        .get("style")
+        .expect("style key present")
+        .as_object()
+        .expect("style object")
+        .clone()
+}
+
+// All remaining color inputs must normalize before entering canonical
+// event data. `caption.burn_in` previously embedded the raw caller-
+// supplied `style` map into the burned-caption effect params, so an
+// uppercase color was written verbatim into canonical event data —
+// bypassing the typed `Color` newtype that every sibling color-bearing
+// verb routes through.
+
+#[test]
+fn caption_burn_in_normalizes_uppercase_color_into_event_data() {
+    let prior = simple_overlap_project();
+    let mut style = Map::new();
+    style.insert("color".to_string(), json!("#FF0000FF"));
+
+    let embedded = burned_style(&prior, style);
+    assert_eq!(
+        embedded.get("color").and_then(Value::as_str),
+        Some("#ff0000ff"),
+        "uppercase `color` must be lowercased before entering effect params"
+    );
+}
+
+#[test]
+fn caption_burn_in_normalizes_uppercase_bg_and_stroke_color_into_event_data() {
+    let prior = simple_overlap_project();
+    let mut style = Map::new();
+    style.insert("bg_color".to_string(), json!("#11AABBCC"));
+    style.insert("stroke_color".to_string(), json!("#DDeeFF00"));
+
+    let embedded = burned_style(&prior, style);
+    assert_eq!(
+        embedded.get("bg_color").and_then(Value::as_str),
+        Some("#11aabbcc")
+    );
+    assert_eq!(
+        embedded.get("stroke_color").and_then(Value::as_str),
+        Some("#ddeeff00")
+    );
+}
+
+#[test]
+fn caption_burn_in_normalizes_uppercase_shadow_color_into_event_data() {
+    let prior = simple_overlap_project();
+    let mut style = Map::new();
+    style.insert(
+        "shadow".to_string(),
+        json!({ "color": "#000000AA", "blur_px": 4.0 }),
+    );
+
+    let embedded = burned_style(&prior, style);
+    let shadow = embedded
+        .get("shadow")
+        .and_then(Value::as_object)
+        .expect("shadow object embedded");
+    assert_eq!(
+        shadow.get("color").and_then(Value::as_str),
+        Some("#000000aa"),
+        "uppercase `shadow.color` must be lowercased before entering effect params"
+    );
+    // Normalization touches only the color leaf — the partial shadow map
+    // keeps exactly the keys the caller sent, no default fields injected.
+    let mut keys = shadow.keys().map(String::as_str).collect::<Vec<_>>();
+    keys.sort_unstable();
+    assert_eq!(keys, vec!["blur_px", "color"]);
+}
+
+#[test]
+fn caption_burn_in_rejects_malformed_color_before_event_data() {
+    let prior = simple_overlap_project();
+    let mut style = Map::new();
+    style.insert("color".to_string(), json!("red"));
+
+    let err = compute_patch(&prior, &args(TEXT_TRACK_A, Some(StyleArg::Object(style))))
+        .expect_err("a malformed color must be rejected, not passed through");
+    assert!(matches!(
+        err,
+        CaptionBurnInError::StyleSchemaViolation { .. }
+    ));
+}
