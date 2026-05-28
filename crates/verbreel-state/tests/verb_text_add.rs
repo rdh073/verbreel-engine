@@ -10,8 +10,8 @@ use verbreel_state::verbs::text_add::{
     compute_patch, data_envelope_from_warnings,
 };
 use verbreel_state::{
-    MutateOutcome, Project, RecordedEvent, TextElement, Track, TrackKind, Verb, VerbRegistry,
-    default_fixtures, default_registry, validate_reconstructors,
+    MutateOutcome, Project, ReconstructError, RecordedEvent, TextElement, Track, TrackKind, Verb,
+    VerbRegistry, default_fixtures, default_registry, validate_reconstructors,
 };
 use verbreel_types::{ProjectId, Tick};
 
@@ -605,19 +605,15 @@ fn default_fixture_data_matches_warning_envelope() {
 }
 
 #[test]
-fn default_fixtures_include_unknown_font_error_case() {
-    let fixtures: Vec<RecordedEvent> = default_fixtures()
-        .into_iter()
-        .filter(|event| event.verb == "text.add")
-        .collect();
+fn reconstruct_missing_envelope_warning_errors() {
+    let err = TextAddVerb
+        .reconstruct(&json!({}), &json!([]), &[], &empty_project())
+        .expect_err("successful text.add events must carry W_TEXT_ADD_ENVELOPE");
 
-    assert!(
-        fixtures.iter().any(|event| {
-            event.expected_data == Value::Null
-                && event.patch == json!([])
-                && event.warnings.is_empty()
-                && event.args["style"]["font_family"] == "__no_such_font_family__"
-        }),
-        "default_fixtures must include text.add unknown-font error case"
-    );
+    assert!(matches!(
+        err,
+        ReconstructError::MissingField {
+            name: "warnings[].W_TEXT_ADD_ENVELOPE"
+        }
+    ));
 }

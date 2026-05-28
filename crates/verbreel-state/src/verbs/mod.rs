@@ -992,7 +992,6 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         project_set_fps_fixture(),
         project_rename_fixture(),
         text_add_fixture(),
-        text_add_unknown_font_fixture(),
         text_animate_fixture(),
         text_edit_fixture(),
         caption_edit_fixture(),
@@ -1153,42 +1152,6 @@ fn text_add_fixture() -> RecordedEvent {
         warnings,
         post_state,
         expected_data,
-    }
-}
-
-/// Build the canonical error-path `text.add` fixture used by
-/// [`default_fixtures`].
-///
-/// Unknown font families fail at verb boundary with `E_FONT_UNKNOWN`,
-/// so no event is recorded in production for this input shape.
-/// Reconstructor coverage records this as `expected_data: null`.
-fn text_add_unknown_font_fixture() -> RecordedEvent {
-    let project_id = DEFAULT_FIXTURE_PROJECT_ID
-        .parse()
-        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
-
-    let prior = synthetic_empty_project(project_id);
-
-    let args = text_add::TextAddArgs {
-        project_id,
-        content: "Hello world".to_string(),
-        track_position_tk: 0,
-        duration_tk: 240_000,
-        track: None,
-        style: Some(text_add::StyleArg::Object(Map::from_iter([(
-            "font_family".to_string(),
-            Value::String("__no_such_font_family__".to_string()),
-        )]))),
-        name: None,
-    };
-
-    RecordedEvent {
-        verb: "text.add".to_string(),
-        args: serde_json::to_value(&args).expect("args serialize"),
-        patch: json!([]),
-        warnings: vec![],
-        post_state: prior,
-        expected_data: Value::Null,
     }
 }
 

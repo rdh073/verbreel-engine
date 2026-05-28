@@ -924,13 +924,7 @@ impl Verb for TextAddVerb {
         warnings: &[Value],
         _post_state: &Project,
     ) -> Result<Value, ReconstructError> {
-        match data_envelope_from_warnings(warnings) {
-            Ok(envelope) => serde_json::to_value(&envelope)
-                .map_err(|err| ReconstructError::Custom(err.to_string())),
-            Err(ReconstructError::MissingField {
-                name: "warnings[].W_TEXT_ADD_ENVELOPE",
-            }) => Ok(Value::Null),
-            Err(err) => Err(err),
-        }
+        let envelope = data_envelope_from_warnings(warnings)?;
+        serde_json::to_value(&envelope).map_err(|err| ReconstructError::Custom(err.to_string()))
     }
 }
