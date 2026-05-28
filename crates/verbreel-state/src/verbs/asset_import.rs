@@ -5,17 +5,19 @@
 //! (`ProjectStore::mutate_via_verb`) calls
 //! [`compute_patch_with_root`] to wire real CAS writes.
 
+use crate::project::Project;
+use crate::reconstructor::{ReconstructError, Verb, VerbError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
-use verbreel_types::{AssetId, ProjectId};
+use verbreel_types::ProjectId;
 
+#[cfg(feature = "native")]
 use crate::asset::{Asset, SubtitleAsset};
+#[cfg(feature = "native")]
 use crate::asset_meta::{FileFingerprint, SubtitleAssetMetadata};
+#[cfg(feature = "native")]
 use crate::newtypes::{AssetPath, Sha256};
-use crate::project::Project;
-use crate::reconstructor::{ReconstructError, Verb, VerbError};
-
 #[cfg(feature = "native")]
 use std::collections::HashMap;
 #[cfg(feature = "native")]
@@ -28,6 +30,8 @@ use std::time::UNIX_EPOCH;
 use verbreel_storage::cas::key_for_bytes;
 #[cfg(feature = "native")]
 use verbreel_storage::fs::atomic_write_bytes;
+#[cfg(feature = "native")]
+use verbreel_types::AssetId;
 
 /// Per-verb upper bound on the `paths` array.
 pub const PATHS_MAX_BATCH: usize = 1000;
@@ -472,7 +476,8 @@ impl Verb for AssetImportVerb {
     fn reconstruct(
         &self,
         args: &Value,
-        patch: &Value,
+        #[cfg(feature = "native")] patch: &Value,
+        #[cfg(not(feature = "native"))] _patch: &Value,
         _warnings: &[Value],
         post_state: &Project,
     ) -> Result<Value, ReconstructError> {
