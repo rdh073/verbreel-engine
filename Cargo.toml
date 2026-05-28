@@ -16,6 +16,7 @@ members = [
     "crates/verbreel-mcp",
     "crates/verbreel-http",
     "crates/verbreel-wasm",
+    "crates/verbreel-conformance",
 ]
 
 [workspace.package]
