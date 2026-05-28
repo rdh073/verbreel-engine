@@ -99,8 +99,8 @@ jobs:
             - Crate dep rule (CLAUDE.md) is literal — a wrongly-scoped item needs re-placement, not a forbidden import (P1).
             - Don't suggest renaming verb fns/args — names mirror spec §X.Y exactly. Don't suggest serde-derive swaps.
           # Locked read-only: auto_review runs on untrusted PR diffs while a
-          # reachable secret exists. The agent only reads (diff is in context,
-          # source via the Read tool) and emits the review as its final message;
+          # reachable secret exists. The agent only reads (diff via the Read
+          # tool) and emits the review as its final message;
           # the "Post Claude auto-review result" step below harvests that message
           # from execution_file and posts it via the workflow GITHUB_TOKEN. The
           # agent never posts and never runs cargo/build.rs/edit — disabling those
@@ -113,7 +113,7 @@ jobs:
             --effort high
             --max-turns 15
             --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,Bash"
-            --system-prompt "You are reviewing the verbreel-engine Rust workspace, READ-ONLY. The diff is in your context; read source files with the Read tool if needed. Do NOT attempt to build, run, edit, or execute shell commands — those tools are disabled, so do not waste turns trying. Produce your COMPLETE review as your final assistant message (a workflow step posts it for you); do not try to comment yourself. Be direct: say 'this is good' when it is; name the problem and file:line when it isn't. Attack the code and the reasoning, not the author. Prefer root-cause over crash-site fixes. Reject exception-swallowing, null-guards-without-reason, and premature abstraction."
+            --system-prompt "You are reviewing the verbreel-engine Rust workspace, READ-ONLY. The exact diff is in .claude-pr-diff.patch; read source files with the Read tool if needed. Do NOT attempt to build, run, edit, or execute shell commands — those tools are disabled, so do not waste turns trying. Produce your COMPLETE review as your final assistant message (a workflow step posts it for you); do not try to comment yourself. Be direct: say 'this is good' when it is; name the problem and file:line when it isn't. Attack the code and the reasoning, not the author. Prefer root-cause over crash-site fixes. Reject exception-swallowing, null-guards-without-reason, and premature abstraction."
 
       - name: Post Claude auto-review result
         if: always() && steps.claude_auto_review.outputs.execution_file != ''
@@ -124,10 +124,12 @@ jobs:
         run: |
           body="$(jq -r 'map(select(.type == "result") | .result // empty) | last // empty' "$EXECUTION_FILE")"
           if [ -z "$body" ]; then
-            body="Claude auto-review completed successfully, but no textual review result was exposed. See ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
+            subtype="$(jq -r 'map(select(.type == "result") | .subtype // empty) | last // empty' "$EXECUTION_FILE")"
+            is_error="$(jq -r 'map(select(.type == "result") | .is_error // false) | last // false' "$EXECUTION_FILE")"
+            body="Claude auto-review did not expose a textual review result (subtype: ${subtype:-unknown}; is_error: ${is_error}). See ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}."
           fi
           printf -v body '<!-- verbreel-claude-auto-review -->\n%s' "$body"
-          comment_id="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- verbreel-claude-auto-review -->"))) | .id' | tail -n 1)"
+          comment_id="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" --jq '.[] | select((.user.login == "github-actions[bot]" or .user.login == "github-actions") and (.body | contains("<!-- verbreel-claude-auto-review -->"))) | .id' | tail -n 1)"
           if [ -n "$comment_id" ]; then
             gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" -X PATCH -f body="$body" >/dev/null
           else
