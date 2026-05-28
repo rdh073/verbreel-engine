@@ -2787,9 +2787,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "rmcp",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "verbreel-state",
  "verbreel-storage",
 ]
