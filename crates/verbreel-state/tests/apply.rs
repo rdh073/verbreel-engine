@@ -54,7 +54,7 @@ fn apply_add_op_appends_marker() {
     assert_eq!(out.markers.len(), 1, "marker list grew by one");
     assert_eq!(out.markers[0].label, "intro");
     // Default color from Marker::serde default — schema default.
-    assert_eq!(out.markers[0].color, "#ffaa00ff");
+    assert_eq!(out.markers[0].color.as_str(), "#ffaa00ff");
 }
 
 #[test]

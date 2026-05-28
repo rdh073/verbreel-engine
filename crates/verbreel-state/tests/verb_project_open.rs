@@ -40,7 +40,8 @@ fn minimal_project() -> verbreel_state::Project {
         canvas: Canvas {
             width: 1080,
             height: 1920,
-            background: "#000000ff".to_string(),
+            background: verbreel_state::Color::new("#000000ff".to_string())
+                .expect("valid color literal"),
             pixel_aspect_num: 1,
             pixel_aspect_den: 1,
         },

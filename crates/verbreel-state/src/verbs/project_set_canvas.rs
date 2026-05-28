@@ -507,12 +507,9 @@ pub fn compute_patch(
     if let Some(raw) = args.background.as_ref() {
         match Color::try_from(raw.clone()) {
             Ok(color) => {
-                // Store the lowercase canonical form per §0.5.2.
-                // Canvas.background is currently a String (the typed
-                // Color promotion is deferred — see module-level
-                // rustdoc) so we round-trip through Color for
-                // validation + normalization, then store its &str.
-                new_canvas.background = color.as_str().to_string();
+                // Canvas.background is a typed Color newtype, so the
+                // validated/normalized value can be assigned directly.
+                new_canvas.background = color;
             }
             Err(e) => {
                 return Err(ProjectSetCanvasError::BackgroundInvalid {
