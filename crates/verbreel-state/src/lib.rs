@@ -525,9 +525,15 @@ pub use verbs::validate_command::{
 // Deprecated alias kept for one slice cycle (Slice B3 rename).
 #[allow(deprecated)]
 pub use verbs::project_set_metadata::ProjectSetMetadataReconstructor;
-pub use verbs::{default_fixtures, default_registry};
+pub use verbs::{default_fixtures, default_registry, synthetic_empty_project};
 
 // Re-export the tick rate constant from verbreel-types so downstream
 // crates (verbreel-args, the verb implementations) can refer to it via
 // `verbreel_state::TICK_RATE_HZ` without needing a separate import path.
 pub use verbreel_types::TICK_RATE_HZ;
+
+// Re-export ProjectId from verbreel-types so downstream consumers
+// that already depend on verbreel-state (CLI, MCP, HTTP) can mint /
+// pass project IDs through the Verb trait without taking an extra
+// verbreel-types dependency just for one newtype.
+pub use verbreel_types::ProjectId;

@@ -7671,7 +7671,18 @@ fn asset_gc_fixture() -> RecordedEvent {
 /// `include_str!`) and don't need a `Project::default` impl. Every
 /// field matches the schema's required-with-defaults shape used in
 /// `tests/fixtures/empty_project_create.json`.
-pub(crate) fn synthetic_empty_project(project_id: verbreel_types::ProjectId) -> Project {
+///
+/// Publicly exposed so project-agnostic, read-only verbs
+/// (e.g. `project.list`) can be invoked through the `Verb` trait from
+/// outside this crate (CLI, MCP, HTTP surfaces) without each surface
+/// reinventing a literal `Project` JSON.
+///
+/// # Panics
+///
+/// Panics if the embedded literal ever drifts from the [`Project`]
+/// schema — a `cargo test`-time guarantee, not a runtime concern.
+#[must_use]
+pub fn synthetic_empty_project(project_id: verbreel_types::ProjectId) -> Project {
     let raw = json!({
         "id": project_id.to_string(),
         "schema_version": crate::project::SCHEMA_VERSION,
