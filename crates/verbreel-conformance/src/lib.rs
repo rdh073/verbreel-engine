@@ -69,7 +69,8 @@
 use std::io::Write;
 
 use verbreel_state::{
-    ValidationError, ValidationReport, default_fixtures, default_registry, validate_reconstructors,
+    RecordedEvent, ValidationError, ValidationReport, VerbRegistry, default_fixtures,
+    default_registry, validate_reconstructors,
 };
 
 /// Run the Layer 3 conformance check and emit a CI-parseable report
@@ -87,8 +88,17 @@ use verbreel_state::{
 pub fn run(out: &mut dyn Write) -> i32 {
     let registry = default_registry();
     let fixtures = default_fixtures();
+    run_with(&registry, &fixtures, out)
+}
 
-    match validate_reconstructors(&registry, &fixtures) {
+/// Parameterised variant of [`run`] — accepts a caller-supplied
+/// registry and fixture set so synthetic inputs can drive the
+/// FAIL-formatting branches without mutating workspace defaults.
+///
+/// Returns the same exit-code contract as [`run`]: `0` on full pass,
+/// `1` on any [`ValidationError`].
+pub fn run_with(registry: &VerbRegistry, fixtures: &[RecordedEvent], out: &mut dyn Write) -> i32 {
+    match validate_reconstructors(registry, fixtures) {
         Ok(report) => {
             write_pass(out, &report);
             0

@@ -160,3 +160,82 @@ fn run_writes_at_least_one_byte() {
         out.len()
     );
 }
+
+// --- Exhaustive verb-list assertion ---------------------------------------
+
+#[test]
+fn pass_output_mentions_every_verb_in_default_fixtures() {
+    // Pin the FULL verb list — every verb in default_fixtures() must
+    // appear as a bullet line. A regression where the report silently
+    // dropped or duplicated a verb would fail loudly.
+    let (_code, body) = invoke();
+    let fixtures = verbreel_state::default_fixtures();
+    let mut expected: Vec<&str> = fixtures.iter().map(|f| f.verb.as_str()).collect();
+    expected.sort_unstable();
+    expected.dedup();
+    for verb in &expected {
+        let bullet = format!("  - {verb}\n");
+        assert!(
+            body.contains(&bullet),
+            "report must include bullet line for `{verb}`; full body:\n{body}"
+        );
+    }
+}
+
+// --- Synthetic-failure injection -----------------------------------------
+
+use verbreel_conformance::run_with;
+use verbreel_state::{ProjectId, RecordedEvent, VerbRegistry, synthetic_empty_project};
+
+#[test]
+fn run_with_unknown_verb_fixture_returns_1_and_writes_fail() {
+    // Empty registry + a fixture for a verb that's not registered must
+    // trigger ValidationError::UnknownVerb, which run_with formats as a
+    // single "FAIL — UnknownVerb on <verb>" line. Exit code 1.
+    let registry = VerbRegistry::default();
+    let bogus = RecordedEvent {
+        verb: "fake.verb".to_string(),
+        args: serde_json::json!({}),
+        patch: serde_json::json!([]),
+        warnings: vec![],
+        post_state: synthetic_empty_project(ProjectId::now()),
+        expected_data: serde_json::json!(null),
+    };
+
+    let mut out: Vec<u8> = Vec::new();
+    let code = run_with(&registry, std::slice::from_ref(&bogus), &mut out);
+
+    assert_eq!(code, 1, "synthetic UnknownVerb must surface as exit 1");
+    let body = String::from_utf8(out).expect("output is utf-8");
+    assert!(
+        body.contains("conformance: FAIL"),
+        "output must start with FAIL marker, got:\n{body}"
+    );
+    assert!(
+        body.contains("UnknownVerb"),
+        "output must name the variant, got:\n{body}"
+    );
+    assert!(
+        body.contains("fake.verb"),
+        "output must echo the offending verb, got:\n{body}"
+    );
+}
+
+#[test]
+fn run_with_empty_inputs_passes_with_zero_counts() {
+    // The vacuous-pass contract from verbreel-state: empty registry +
+    // empty fixtures is a PASS with both counts at 0. run_with must
+    // emit the same "PASS — 0 verbs, 0 fixtures" line and exit 0.
+    let registry = VerbRegistry::default();
+    let fixtures: Vec<RecordedEvent> = vec![];
+
+    let mut out: Vec<u8> = Vec::new();
+    let code = run_with(&registry, &fixtures, &mut out);
+
+    assert_eq!(code, 0, "vacuous-pass must exit 0");
+    let body = String::from_utf8(out).expect("output is utf-8");
+    assert!(
+        body.contains("conformance: PASS — 0 verbs, 0 fixtures"),
+        "output must report zeros explicitly, got:\n{body}"
+    );
+}
