@@ -9,14 +9,16 @@
 
 use verbreel_state::SCHEMA_VERSION;
 
+use crate::scope::EmbeddingScope;
+
 /// Browser-side engine lifecycle handle.
 ///
 /// Constructed via [`EngineHandle::new`]. Holds the engine's schema
-/// version so JS callers can branch on compatibility before issuing
-/// project mutations. All compute-heavy methods (frame render, asset
-/// upload, project apply) live on the bound `frame::*` / `project::*`
-/// free functions and return [`crate::WasmError::NotYetImplemented`]
-/// at v0.
+/// version and browser embedding scope so JS callers can branch on
+/// compatibility before loading preview code. All compute-heavy
+/// methods (frame render, asset upload, project apply) live on the
+/// bound `frame::*` / `project::*` free functions and return
+/// [`crate::WasmError::NotYetImplemented`] at v0.
 ///
 /// **No `Clone`, no `Default`, no `Copy`** on purpose: Spike S2 grows
 /// internals that cannot satisfy those traits (wgpu `Surface` is not
@@ -27,6 +29,7 @@ use verbreel_state::SCHEMA_VERSION;
 #[derive(Debug)]
 pub struct EngineHandle {
     schema_version: &'static str,
+    embedding_scope: EmbeddingScope,
 }
 
 impl EngineHandle {
@@ -38,6 +41,7 @@ impl EngineHandle {
     pub fn new() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
+            embedding_scope: EmbeddingScope::PreviewOnly,
         }
     }
 
@@ -46,5 +50,29 @@ impl EngineHandle {
     #[must_use]
     pub fn schema_version(&self) -> &'static str {
         self.schema_version
+    }
+
+    /// Browser embedding scope exported by this wasm bundle.
+    #[must_use]
+    pub const fn embedding_scope(&self) -> EmbeddingScope {
+        self.embedding_scope
+    }
+
+    /// Stable JS-facing embedding-scope literal.
+    #[must_use]
+    pub const fn embedding_scope_wire(&self) -> &'static str {
+        self.embedding_scope.as_str()
+    }
+
+    /// Whether this wasm bundle supports browser preview embedding.
+    #[must_use]
+    pub const fn supports_preview_embedding(&self) -> bool {
+        self.embedding_scope.supports_preview()
+    }
+
+    /// Whether this wasm bundle embeds the full editor command surface.
+    #[must_use]
+    pub const fn supports_editor_embedding(&self) -> bool {
+        self.embedding_scope.supports_editor()
     }
 }

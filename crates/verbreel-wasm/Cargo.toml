@@ -20,3 +20,4 @@ verbreel-ir = { path = "../verbreel-ir" }
 wgpu.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+wasm-bindgen = "0.2"
