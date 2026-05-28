@@ -2739,6 +2739,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "verbreel-conformance"
+version = "0.1.0"
+dependencies = [
+ "verbreel-state",
+]
+
+[[package]]
 name = "verbreel-events"
 version = "0.1.0"
 dependencies = [
