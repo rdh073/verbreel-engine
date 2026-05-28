@@ -17,3 +17,6 @@ path = "src/main.rs"
 
 [dependencies]
 verbreel-state = { path = "../verbreel-state" }
+
+[dev-dependencies]
+serde_json.workspace = true
