@@ -63,6 +63,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
           use_sticky_comment: true # re-reviews on sync update one comment, not a stack
           additional_permissions: |
             actions: read
@@ -92,7 +93,8 @@ jobs:
           # posts a comment — running cargo would execute PR-controlled build.rs
           # / test code under that secret (prompt-injection -> code-exec path).
           claude_args: |
-            --model sonnet
+            --model claude-opus-4-8
+            --effort high
             --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,Bash"
             --system-prompt "You are reviewing the verbreel-engine Rust workspace. Be direct: say 'this is good' when it is; name the problem and file:line when it isn't. Attack the code and the reasoning, not the author. Prefer root-cause over crash-site fixes. Reject exception-swallowing, null-guards-without-reason, and premature abstraction."
 
@@ -124,9 +126,12 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
           use_sticky_comment: true # PR timeline comments arrive as issue_comment; keep replies in one PR comment
           additional_permissions: |
             actions: read
           claude_args: |
+            --model claude-opus-4-8
+            --effort high
             --allowedTools "Bash(cargo check:*),Bash(cargo test:*),Bash(cargo clippy:*),Bash(cargo fmt:*)"
             --system-prompt "verbreel-engine Rust workspace. Follow CLAUDE.md: every mutation goes through verbreel_state::engine::apply(); the event is written to events.jsonl before the in-memory patch (§0.8); JCS canon for hashing; the crate dependency rule is literal; commit format '<crate>: <imperative>'. One logical change per PR."
