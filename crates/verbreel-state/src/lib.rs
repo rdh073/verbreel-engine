@@ -243,6 +243,10 @@ pub use verbs::compound_create::{
     COMPOUND_CREATE_CLIPS_MAX, CompoundCreateArgs, CompoundCreateData, CompoundCreateError,
     CompoundCreateVerb,
 };
+pub use verbs::compound_edit_in_place::{
+    CompoundEditInPlaceArgs, CompoundEditInPlaceData, CompoundEditInPlaceError,
+    CompoundEditInPlaceVerb,
+};
 pub use verbs::compound_expand::{
     CompoundExpandArgs, CompoundExpandData, CompoundExpandError, CompoundExpandVerb,
 };
