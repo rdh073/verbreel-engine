@@ -18,7 +18,6 @@ use crate::asset::{Asset, SubtitleAsset};
 use crate::asset_meta::{FileFingerprint, SubtitleAssetMetadata};
 #[cfg(feature = "native")]
 use crate::newtypes::{AssetPath, Sha256};
-#[cfg(feature = "native")]
 use std::collections::HashMap;
 #[cfg(feature = "native")]
 use std::fs;
@@ -240,7 +239,6 @@ fn build_subtitle_asset(
     }))
 }
 
-#[cfg(feature = "native")]
 fn mode_used_for(_args: &AssetImportArgs) -> &'static str {
     "copy"
 }
@@ -351,7 +349,6 @@ pub fn compute_patch_with_root(
     ))
 }
 
-#[cfg(feature = "native")]
 fn asset_ids_from_patch(patch: &Value) -> Result<Vec<String>, ReconstructError> {
     let ops = patch.as_array().ok_or_else(|| {
         ReconstructError::Custom("asset.import: patch must be an array".to_string())
@@ -377,7 +374,6 @@ fn asset_ids_from_patch(patch: &Value) -> Result<Vec<String>, ReconstructError> 
     Ok(ids)
 }
 
-#[cfg(feature = "native")]
 fn replay_data_from_patch(
     args: &AssetImportArgs,
     patch: &Value,
@@ -487,8 +483,7 @@ impl Verb for AssetImportVerb {
     fn reconstruct(
         &self,
         args: &Value,
-        #[cfg(feature = "native")] patch: &Value,
-        #[cfg(not(feature = "native"))] _patch: &Value,
+        patch: &Value,
         _warnings: &[Value],
         post_state: &Project,
     ) -> Result<Value, ReconstructError> {
@@ -498,17 +493,7 @@ impl Verb for AssetImportVerb {
                 expected: "AssetImportArgs",
             })?;
 
-        #[cfg(feature = "native")]
-        {
-            let envelope = replay_data_from_patch(&typed, patch, post_state)?;
-            serde_json::to_value(&envelope).map_err(|err| ReconstructError::Custom(err.to_string()))
-        }
-
-        #[cfg(not(feature = "native"))]
-        {
-            let envelope = data_envelope_from_args(&typed, post_state)?;
-            return serde_json::to_value(&envelope)
-                .map_err(|err| ReconstructError::Custom(err.to_string()));
-        }
+        let envelope = replay_data_from_patch(&typed, patch, post_state)?;
+        serde_json::to_value(&envelope).map_err(|err| ReconstructError::Custom(err.to_string()))
     }
 }

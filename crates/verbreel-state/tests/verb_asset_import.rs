@@ -11,10 +11,12 @@ use serde_json::{Value, json};
 use verbreel_state::verbs::asset_import::{compute_patch, data_envelope_from_args, import};
 use verbreel_state::{
     ASSET_IMPORT_SCHEMA_VIOLATION_HINT, AssetImportArgs, AssetImportData, AssetImportError,
-    AssetImportVerb, ImportMode, MutateOutcome, PATHS_MAX_BATCH, Project, Verb, VerbError,
-    VerbRegistry, default_fixtures, default_registry, validate_reconstructors,
+    AssetImportVerb, ImportMode, PATHS_MAX_BATCH, Project, Verb, VerbError, VerbRegistry,
+    default_fixtures, default_registry, validate_reconstructors,
 };
 
+#[cfg(feature = "native")]
+use verbreel_state::MutateOutcome;
 #[cfg(feature = "native")]
 use verbreel_state::ProjectStore;
 
