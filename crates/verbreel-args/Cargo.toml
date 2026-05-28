@@ -14,3 +14,5 @@ name = "verbreel_args"
 verbreel-types = { path = "../verbreel-types" }
 serde.workspace = true
 serde_json.workspace = true
+jsonschema.workspace = true
+thiserror.workspace = true

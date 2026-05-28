@@ -2687,8 +2687,10 @@ dependencies = [
 name = "verbreel-args"
 version = "0.1.0"
 dependencies = [
+ "jsonschema",
  "serde",
  "serde_json",
+ "thiserror",
  "verbreel-types",
 ]
 
