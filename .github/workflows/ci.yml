@@ -68,6 +68,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  conformance:
+    name: conformance (Research 06 Layer 3)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Release-mode so behaviour matches the deployed binary. The
+      # reconstructor-identity check is fast (<1s for the current
+      # 121-verb / 121-fixture set); no caching of the report itself.
+      - run: cargo run -p verbreel-conformance --release
+
   wasm-check:
     name: cargo check wasm32
     runs-on: ubuntu-22.04
