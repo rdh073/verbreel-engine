@@ -27,9 +27,11 @@
 #![warn(clippy::pedantic)]
 
 pub mod error;
+pub mod hwaccel;
 pub mod pipeline;
 pub mod preset;
 
 pub use error::RenderError;
+pub use hwaccel::{HwAccelKind, V1_HWACCEL_PRIORITY, hwaccel_priority_for_preset};
 pub use pipeline::{Pipeline, run};
 pub use preset::RenderPreset;
