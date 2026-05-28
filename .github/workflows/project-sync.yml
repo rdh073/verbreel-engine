@@ -5,8 +5,10 @@ name: Project Board Sync
 # need to call `gh project item-add` or `~/bin/proj-status` manually —
 # this workflow handles both.
 #
-# Uses default GITHUB_TOKEN (project access already enabled at org/repo
-# settings level). No additional PAT secret required.
+# Requires repo secret PROJECT_TOKEN: a PAT with `project` scope (classic
+# token) OR a fine-grained PAT with "Projects: Read and write". The default
+# GITHUB_TOKEN cannot access Projects v2 regardless of permissions block —
+# `repository-projects: write` only grants classic-project access.
 
 on:
   issues:
@@ -17,7 +19,6 @@ on:
 permissions:
   issues: read
   pull-requests: read
-  repository-projects: write
 
 jobs:
   add-to-project:
@@ -28,13 +29,13 @@ jobs:
       - uses: actions/add-to-project@5b1a254a3546aef88e0a7724a77a623fa2e47c36 # v1.0.2
         with:
           project-url: https://github.com/users/rdh073/projects/3
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.PROJECT_TOKEN }}
 
   set-status:
     name: Transition status
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
       PROJECT_ID: PVT_kwHOD1U4Ys4BYk3J
       STATUS_FIELD_ID: PVTSSF_lAHOD1U4Ys4BYk3JzhTpvjA
       STATUS_BACKLOG: f75ad846
