@@ -5,6 +5,8 @@
 //! pins that decision in code before the eventual `wasm-bindgen`
 //! wrapper freezes the JS-visible API.
 
+use wasm_bindgen::prelude::wasm_bindgen;
+
 /// JS-visible wire literal for the v1 WASM embedding scope.
 pub const EMBEDDING_SCOPE_WIRE: &str = "preview-only";
 
@@ -14,8 +16,8 @@ pub const EMBEDDING_SCOPE_WIRE: &str = "preview-only";
 /// export remain out of the browser embedding surface because the
 /// deterministic event-log and native codec invariants live outside
 /// `wasm32-unknown-unknown`.
+#[wasm_bindgen]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum EmbeddingScope {
     /// Browser preview only; no editor command surface is embedded.
     PreviewOnly,
@@ -42,4 +44,26 @@ impl EmbeddingScope {
     pub const fn supports_editor(self) -> bool {
         false
     }
+}
+
+/// `wasm-bindgen` export: stable JS-facing embedding-scope literal.
+#[wasm_bindgen(js_name = embeddingScopeWire)]
+#[must_use]
+pub fn embedding_scope_wire_export() -> String {
+    EMBEDDING_SCOPE_WIRE.to_string()
+}
+
+/// `wasm-bindgen` export: whether browser preview embedding is available.
+#[wasm_bindgen(js_name = supportsPreviewEmbedding)]
+#[must_use]
+pub fn supports_preview_embedding_export() -> bool {
+    true
+}
+
+/// `wasm-bindgen` export: whether the full editor command surface is
+/// embedded in browser WASM.
+#[wasm_bindgen(js_name = supportsEditorEmbedding)]
+#[must_use]
+pub fn supports_editor_embedding_export() -> bool {
+    false
 }

@@ -44,4 +44,7 @@ pub mod scope;
 pub use engine::EngineHandle;
 pub use error::WasmError;
 pub use frame::run_frame;
-pub use scope::{EMBEDDING_SCOPE_WIRE, EmbeddingScope};
+pub use scope::{
+    EMBEDDING_SCOPE_WIRE, EmbeddingScope, embedding_scope_wire_export,
+    supports_editor_embedding_export, supports_preview_embedding_export,
+};

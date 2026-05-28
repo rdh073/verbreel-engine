@@ -2928,6 +2928,7 @@ dependencies = [
  "tracing",
  "verbreel-ir",
  "verbreel-state",
+ "wasm-bindgen",
  "wgpu",
 ]
 

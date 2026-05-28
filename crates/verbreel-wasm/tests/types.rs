@@ -2,7 +2,10 @@
 //! constructor + accessor contract, the `WasmError` variant set, and
 //! the `Send + Sync` bounds JS-bridge callers will rely on.
 
-use verbreel_wasm::{EMBEDDING_SCOPE_WIRE, EmbeddingScope, EngineHandle, WasmError};
+use verbreel_wasm::{
+    EMBEDDING_SCOPE_WIRE, EmbeddingScope, EngineHandle, WasmError, embedding_scope_wire_export,
+    supports_editor_embedding_export, supports_preview_embedding_export,
+};
 
 // --- EngineHandle ---------------------------------------------------------
 
@@ -89,6 +92,13 @@ fn embedding_scope_preview_only_support_matrix() {
     let scope = EmbeddingScope::PreviewOnly;
     assert!(scope.supports_preview());
     assert!(!scope.supports_editor());
+}
+
+#[test]
+fn wasm_bindgen_scope_exports_match_handle_contract() {
+    assert_eq!(embedding_scope_wire_export(), EMBEDDING_SCOPE_WIRE);
+    assert!(supports_preview_embedding_export());
+    assert!(!supports_editor_embedding_export());
 }
 
 // --- WasmError variants ---------------------------------------------------
