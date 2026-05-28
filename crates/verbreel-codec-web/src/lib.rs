@@ -19,6 +19,8 @@
 //!   `pts_micros` to match the `WebCodecs` `VideoFrame.timestamp` unit).
 //! - [`decode`](self::decode::decode) — v0 entry point returning
 //!   [`DecodeError::NotYetImplemented`].
+//! - [`preview_codec`] — `preview.session` transport decision surface
+//!   (`webcodecs` primary, fMP4/MSE fallback).
 //!
 //! Research 01 references:
 //!
@@ -37,8 +39,13 @@ pub mod decode;
 pub mod decoder;
 pub mod error;
 pub mod frame;
+pub mod preview_codec;
 
 pub use decode::decode;
 pub use decoder::WebDecoder;
 pub use error::DecodeError;
 pub use frame::DecodedFrame;
+pub use preview_codec::{
+    BrowserFamily, PREVIEW_CODEC_MSE, PREVIEW_CODEC_WEBCODECS, PreviewClientCapabilities,
+    WebPreviewCodec, codec_for_preview, safari_fallback_codec,
+};
