@@ -10,7 +10,6 @@ use crate::reconstructor::{ReconstructError, Verb, VerbError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
-use verbreel_events::Timestamp;
 use verbreel_types::ProjectId;
 
 #[cfg(feature = "native")]
@@ -26,6 +25,8 @@ use std::fs;
 use std::path::Path;
 #[cfg(feature = "native")]
 use std::time::UNIX_EPOCH;
+#[cfg(feature = "native")]
+use verbreel_events::Timestamp;
 #[cfg(feature = "native")]
 use verbreel_storage::cas::key_for_bytes;
 #[cfg(feature = "native")]
