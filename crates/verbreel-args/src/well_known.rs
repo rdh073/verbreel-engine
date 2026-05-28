@@ -53,7 +53,7 @@ pub const HELP_SCHEMA: &str = r#"{
   "required": ["project_id"],
   "properties": {
     "project_id": { "type": "string", "format": "uuid" },
-    "topic": { "type": "string" }
+    "topic": { "type": ["string", "null"] }
   }
 }"#;
 
@@ -101,8 +101,10 @@ pub const ASSET_LIST_SCHEMA: &str = r#"{
   "properties": {
     "project_id": { "type": "string", "format": "uuid" },
     "kind": {
-      "type": "string",
-      "enum": ["video", "audio", "image", "subtitle"]
+      "anyOf": [
+        { "type": "string", "enum": ["video", "audio", "image", "subtitle"] },
+        { "type": "null" }
+      ]
     }
   }
 }"#;

@@ -280,3 +280,70 @@ fn help_rejects_non_string_topic() {
     .unwrap_err();
     assert!(matches!(err, ValidationError::SchemaViolation { .. }));
 }
+
+// --- 9. Coverage parity for list_capabilities + font.list --------------
+
+#[test]
+fn list_capabilities_rejects_empty_object() {
+    let registry = default_registry();
+    let err = validate("list_capabilities", &json!({}), &registry).unwrap_err();
+    assert!(matches!(err, ValidationError::SchemaViolation { .. }));
+}
+
+#[test]
+fn font_list_rejects_empty_object() {
+    let registry = default_registry();
+    let err = validate("font.list", &json!({}), &registry).unwrap_err();
+    assert!(matches!(err, ValidationError::SchemaViolation { .. }));
+}
+
+#[test]
+fn list_capabilities_rejects_unknown_key() {
+    let registry = default_registry();
+    let err = validate(
+        "list_capabilities",
+        &json!({ "project_id": VALID_UUID, "stranger": 1 }),
+        &registry,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ValidationError::SchemaViolation { .. }));
+}
+
+#[test]
+fn font_list_rejects_unknown_key() {
+    let registry = default_registry();
+    let err = validate(
+        "font.list",
+        &json!({ "project_id": VALID_UUID, "family": "Helvetica" }),
+        &registry,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ValidationError::SchemaViolation { .. }));
+}
+
+// --- 10. Optional fields accept null --------------------------------------
+
+#[test]
+fn help_topic_accepts_null() {
+    // `HelpArgs.topic: Option<String>` deserializes both omitted AND
+    // `null` as `None`. Schema must accept both shapes to match the
+    // typed Args contract.
+    let registry = default_registry();
+    validate(
+        "help",
+        &json!({ "project_id": VALID_UUID, "topic": null }),
+        &registry,
+    )
+    .expect("help schema must accept topic: null");
+}
+
+#[test]
+fn asset_list_kind_accepts_null() {
+    let registry = default_registry();
+    validate(
+        "asset.list",
+        &json!({ "project_id": VALID_UUID, "kind": null }),
+        &registry,
+    )
+    .expect("asset.list schema must accept kind: null");
+}
