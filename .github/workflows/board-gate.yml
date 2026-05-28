@@ -1,0 +1,58 @@
+name: board-gate
+
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, ready_for_review, synchronize]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  repository-projects: read
+
+jobs:
+  linked-issue-in-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify linked issue board status
+        env:
+          GH_TOKEN: ${{ secrets.GH_PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
+          OWNER: rdh073
+          REPO: verbreel-engine
+          PROJECT_NUMBER: "3"
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          gh api graphql \
+            -f owner="$OWNER" \
+            -f repo="$REPO" \
+            -F number="$PR_NUMBER" \
+            -f query='
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    closingIssuesReferences(first: 20) {
+                      nodes { number url }
+                    }
+                  }
+                }
+              }' > /tmp/pr.json
+
+          jq -e '.data.repository.pullRequest.closingIssuesReferences.nodes | length > 0' /tmp/pr.json >/dev/null
+          jq -r '.data.repository.pullRequest.closingIssuesReferences.nodes[].url' /tmp/pr.json > /tmp/closing-issues.txt
+
+          gh project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --limit 1000 > /tmp/project.json
+
+          while IFS= read -r issue_url; do
+            status=$(jq -r --arg url "$issue_url" \
+              'first(.items[]|select(.content.url==$url).status) // ""' /tmp/project.json)
+            if [ -z "$status" ]; then
+              echo "linked issue ${issue_url} is missing from project #${PROJECT_NUMBER}" >&2
+              exit 1
+            fi
+            if [ "$status" != "In review" ] && [ "$status" != "In Review" ]; then
+              echo "linked issue ${issue_url} must be In Review in project #${PROJECT_NUMBER}; got '${status:-missing}'" >&2
+              exit 1
+            fi
+          done < /tmp/closing-issues.txt
