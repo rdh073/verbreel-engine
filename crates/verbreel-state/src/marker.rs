@@ -4,6 +4,8 @@
 use serde::{Deserialize, Serialize};
 use verbreel_types::{MarkerId, Tick};
 
+use crate::newtypes::Color;
+
 /// A point-in-time annotation on the project timeline.
 ///
 /// Schema reference: `spec/project-schema.json` `$defs/Marker`.
@@ -24,19 +26,17 @@ pub struct Marker {
     /// Display label. Spec: 1..=256 chars.
     pub label: String,
 
-    /// Marker color as lower-case `#rrggbbaa`. Default
-    /// `"#ffaa00ff"` per schema.
-    ///
-    // TODO(#19 follow-up): replace `String` with a `Color` newtype
-    // (deferred per the lib-level docstring).
+    /// Marker color as lower-case `#rrggbbaa`. Default `"#ffaa00ff"`
+    /// per schema. The [`Color`] newtype enforces the
+    /// `^#[0-9a-f]{8}$` pattern at construction.
     #[serde(default = "default_color")]
-    pub color: String,
+    pub color: Color,
 
     /// Optional freeform note (spec: ≤ 4096 chars).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
-fn default_color() -> String {
-    "#ffaa00ff".to_string()
+fn default_color() -> Color {
+    Color::new("#ffaa00ff".to_string()).expect("compile-time-valid color literal")
 }

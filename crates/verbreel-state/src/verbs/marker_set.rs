@@ -228,14 +228,14 @@ pub fn compute_patch(
     if let Some(color_state) = args.color.clone() {
         match color_state {
             Some(value) => {
-                marker.color = Color::try_from(value)
-                    .map(|color| color.as_str().to_string())
-                    .map_err(|err| MarkerSetError::ColorInvalid {
+                marker.color =
+                    Color::try_from(value).map_err(|err| MarkerSetError::ColorInvalid {
                         detail: err.to_string(),
                     })?;
             }
             None => {
-                marker.color = DEFAULT_MARKER_COLOR.to_string();
+                marker.color = Color::new(DEFAULT_MARKER_COLOR.to_string())
+                    .expect("DEFAULT_MARKER_COLOR is a compile-time-valid color literal");
             }
         }
     }

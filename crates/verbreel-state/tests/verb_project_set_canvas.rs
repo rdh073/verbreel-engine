@@ -214,7 +214,7 @@ fn compute_patch_with_all_optionals_succeeds() {
 
     assert_eq!(new_canvas.width, 1280);
     assert_eq!(new_canvas.height, 720);
-    assert_eq!(new_canvas.background, "#abcdef12");
+    assert_eq!(new_canvas.background.as_str(), "#abcdef12");
     assert_eq!(new_canvas.pixel_aspect_num, 4);
     assert_eq!(new_canvas.pixel_aspect_den, 3);
 }
@@ -226,7 +226,8 @@ fn compute_patch_partial_update_preserves_existing() {
     let prior = project_with_canvas(Canvas {
         width: 1080,
         height: 1920,
-        background: "#ff0000ff".to_string(),
+        background: verbreel_state::Color::new("#ff0000ff".to_string())
+            .expect("valid color literal"),
         pixel_aspect_num: 2,
         pixel_aspect_den: 1,
     });
@@ -237,7 +238,7 @@ fn compute_patch_partial_update_preserves_existing() {
     assert_eq!(new_canvas.width, 640);
     assert_eq!(new_canvas.height, 480);
     // Untouched fields preserved.
-    assert_eq!(new_canvas.background, "#ff0000ff");
+    assert_eq!(new_canvas.background.as_str(), "#ff0000ff");
     assert_eq!(new_canvas.pixel_aspect_num, 2);
     assert_eq!(new_canvas.pixel_aspect_den, 1);
 }
@@ -261,7 +262,7 @@ fn compute_patch_background_uppercase_normalized_to_lowercase() {
     };
     let (_, new_canvas, _warnings) =
         compute_patch(&prior, &args).expect("uppercase background normalizes, not rejects");
-    assert_eq!(new_canvas.background, "#ffffffff");
+    assert_eq!(new_canvas.background.as_str(), "#ffffffff");
 }
 
 // ---------------------------------------------------------------------
@@ -487,7 +488,8 @@ fn data_envelope_returns_post_state_canvas() {
     let post_state = project_with_canvas(Canvas {
         width: 1920,
         height: 1080,
-        background: "#deadbeef".to_string(),
+        background: verbreel_state::Color::new("#deadbeef".to_string())
+            .expect("valid color literal"),
         pixel_aspect_num: 1,
         pixel_aspect_den: 1,
     });
@@ -953,7 +955,7 @@ fn verb_routes_through_mutate_via_verb() {
     // In-memory project reflects the new canvas.
     assert_eq!(store.project().canvas.width, 1920);
     assert_eq!(store.project().canvas.height, 1080);
-    assert_eq!(store.project().canvas.background, "#abcdef12");
+    assert_eq!(store.project().canvas.background.as_str(), "#abcdef12");
     assert_eq!(store.project().canvas.pixel_aspect_num, 4);
     assert_eq!(store.project().canvas.pixel_aspect_den, 3);
 

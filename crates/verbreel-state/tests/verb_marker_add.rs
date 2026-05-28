@@ -479,7 +479,10 @@ fn verb_routes_through_mutate_via_verb() {
     assert_eq!(store.project().markers.len(), 1);
     assert_eq!(store.project().markers[0].label, "Intro");
     assert_eq!(store.project().markers[0].time_tk.get(), 1_000);
-    assert_eq!(store.project().markers[0].color, DEFAULT_MARKER_COLOR);
+    assert_eq!(
+        store.project().markers[0].color.as_str(),
+        DEFAULT_MARKER_COLOR
+    );
     assert!(store.project().markers[0].note.is_none());
     assert_eq!(data.marker, store.project().markers[0]);
     assert!(warnings.is_empty());

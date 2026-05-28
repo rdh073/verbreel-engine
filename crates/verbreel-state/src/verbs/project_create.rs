@@ -93,6 +93,7 @@ use verbreel_types::{ProjectId, TICK_RATE_HZ, Tick, TrackId};
 
 use crate::canvas::Canvas;
 use crate::lifecycle::{LifecycleError, ProjectStore};
+use crate::newtypes::Color;
 use crate::project::{Project, SCHEMA_VERSION};
 use crate::track::{Track, TrackKind};
 use crate::verbs::project_rename::{PROJECT_NAME_MAX, PROJECT_NAME_MIN};
@@ -309,6 +310,12 @@ pub enum ProjectCreateError {
 /// # Errors
 ///
 /// See variants of [`ProjectCreateError`].
+///
+/// # Panics
+///
+/// Panics only if the compile-time-constant default background color
+/// literal `"#000000ff"` fails the [`crate::Color`] regex — which is
+/// an upstream bug in [`crate::Color`], not a runtime concern.
 pub fn create(args: &ProjectCreateArgs) -> Result<ProjectCreateData, ProjectCreateError> {
     // Step 1a: name validation (mirror project_rename / project_duplicate).
     let char_count = args.name.chars().count();
@@ -382,7 +389,8 @@ pub fn create(args: &ProjectCreateArgs) -> Result<ProjectCreateData, ProjectCrea
             width,
             height,
             // §0.5 default — schema-mandated background color.
-            background: "#000000ff".to_string(),
+            background: Color::new("#000000ff".to_string())
+                .expect("compile-time-valid color literal"),
             pixel_aspect_num: 1,
             pixel_aspect_den: 1,
         },
