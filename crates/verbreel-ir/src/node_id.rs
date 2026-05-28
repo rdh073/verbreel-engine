@@ -21,6 +21,16 @@ use verbreel_types::id::{IdError, UuidV7};
 /// Transparent over [`UuidV7`] in serde, so the JSON shape is the
 /// lowercase-hyphenated UUID string. The newtype exists to prevent mixing
 /// node identifiers with project/clip/track identifiers at the type level.
+///
+/// ## Constructor naming
+///
+/// Two constructors exist by design, matching the pair in
+/// `verbreel_types::id`: [`from_uuid`](Self::from_uuid) takes a raw
+/// [`uuid::Uuid`] and runs the v7 check, returning a [`Result`];
+/// [`from_uuid_v7`](Self::from_uuid_v7) takes an already-typed
+/// [`UuidV7`] and wraps infallibly. Callers carrying raw input use
+/// `from_uuid`; callers already inside the strict-v7 type system use
+/// `from_uuid_v7` and skip the redundant check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct IrNodeId(UuidV7);
