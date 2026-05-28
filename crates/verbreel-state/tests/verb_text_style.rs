@@ -229,6 +229,39 @@ fn compute_patch_font_weight_out_of_range_is_schema_violation() {
 }
 
 #[test]
+fn compute_patch_unknown_font_family_is_font_unknown() {
+    let prior = project_with_tracks(vec![text_track(false, base_text())]);
+    let err = compute_patch(
+        &prior,
+        &text_style_args(json!({ "font_family": "__no_such_font_family__" })),
+    )
+    .expect_err("unknown family must fail");
+    let TextStyleError::FontUnknown { family, available } = err else {
+        panic!("expected TextStyleError::FontUnknown");
+    };
+    assert_eq!(family, "__no_such_font_family__");
+    assert!(
+        available.iter().any(|name| name == "Inter"),
+        "available list should include bundled Inter"
+    );
+}
+
+#[test]
+fn compute_patch_stores_font_family_as_canonical_registry_name() {
+    let prior = project_with_tracks(vec![text_track(false, base_text())]);
+    let (patch, _warnings, data) = compute_patch(
+        &prior,
+        &text_style_args(json!({ "font_family": "  inter  " })),
+    )
+    .expect("text.style");
+    let post = apply_patch(&prior, patch);
+    let text = post.tracks[0].clips[0].text.as_ref().expect("text");
+
+    assert_eq!(data.text.font_family, "Inter");
+    assert_eq!(text.font_family, "Inter");
+}
+
+#[test]
 fn compute_patch_line_height_below_half_is_schema_violation() {
     let prior = project_with_tracks(vec![text_track(false, base_text())]);
     let err = compute_patch(&prior, &text_style_args(json!({ "line_height": 0.49 })))

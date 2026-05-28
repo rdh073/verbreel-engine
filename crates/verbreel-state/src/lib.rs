@@ -71,6 +71,7 @@ pub mod asset_meta;
 pub mod canvas;
 pub mod clip;
 pub mod effect;
+pub mod font_registry;
 pub mod idempotency;
 pub mod invariants;
 pub mod keyframe;
@@ -99,6 +100,7 @@ pub use clip::{BlendMode, Clip, ClipMask, FadeCurve, MaskKind, SpeedCurvePoint};
 pub use effect::{
     Effect, EffectKind, EffectNewtypeError, EffectWindow, EffectWindowDependencyError,
 };
+pub use font_registry::{RegistryFamily, RegistrySource};
 pub use idempotency::{
     AlreadyExists, Clock, DEFAULT_STALE_IN_PROGRESS, DEFAULT_TTL, Entry, EntryState,
     IdempotencyIndex, LookupOutcome, MockClock, SystemClock,
@@ -274,7 +276,7 @@ pub use verbs::effect_toggle::{
     EffectToggleArgs, EffectToggleData, EffectToggleError, EffectToggleVerb,
 };
 pub use verbs::font_list::{
-    FontEntry, FontListArgs, FontListData, FontListError, FontListVerb, FontSource, FontStyle,
+    FontFamilyEntry, FontListArgs, FontListData, FontListError, FontListVerb,
 };
 pub use verbs::help::{HelpArgs, HelpData, HelpError, HelpVerb, VerbDoc};
 pub use verbs::keyframe_list::{

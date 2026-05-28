@@ -10,8 +10,8 @@ use verbreel_state::verbs::text_add::{
     compute_patch, data_envelope_from_warnings,
 };
 use verbreel_state::{
-    MutateOutcome, Project, RecordedEvent, TextElement, Track, TrackKind, Verb, VerbRegistry,
-    default_fixtures, default_registry, validate_reconstructors,
+    MutateOutcome, Project, ReconstructError, RecordedEvent, TextElement, Track, TrackKind, Verb,
+    VerbRegistry, default_fixtures, default_registry, validate_reconstructors,
 };
 use verbreel_types::{ProjectId, Tick};
 
@@ -392,6 +392,50 @@ fn preset_style_errors_preset_unknown() {
 }
 
 #[test]
+fn unknown_font_family_errors_font_unknown_with_available_list() {
+    let prior = empty_project();
+    let mut args = text_add_args();
+    args.style = Some(style_object(json!({
+        "font_family": "__no_such_font_family__",
+    })));
+
+    let err = compute_patch(&prior, &args).expect_err("unknown family must fail");
+
+    assert!(matches!(
+        err,
+        TextAddError::FontUnknown { ref family, .. } if family == "__no_such_font_family__"
+    ));
+    let TextAddError::FontUnknown { available, .. } = err else {
+        panic!("expected TextAddError::FontUnknown");
+    };
+    assert!(
+        available.iter().any(|name| name == "Inter"),
+        "available list should include bundled Inter"
+    );
+}
+
+#[test]
+fn style_font_family_is_stored_as_canonical_registry_name() {
+    let prior = project_with_tracks(vec![text_track(TRACK_TEXT_A, "Text 1", false, vec![])]);
+    let mut args = text_add_args();
+    args.style = Some(style_object(json!({
+        "font_family": "  inter  ",
+    })));
+
+    let (patch, _warnings, _data) = compute_patch(&prior, &args).expect("text.add");
+    let post = apply_patch(&prior, patch);
+
+    assert_eq!(
+        added_text_clip(&post, 0)
+            .text
+            .as_ref()
+            .expect("text")
+            .font_family,
+        "Inter"
+    );
+}
+
+#[test]
 fn overlapping_clip_errors_clip_overlap() {
     let prior = project_with_tracks(vec![text_track(
         TRACK_TEXT_A,
@@ -558,4 +602,18 @@ fn default_fixture_data_matches_warning_envelope() {
         serde_json::to_value(data).expect("data serializes"),
         expected_data
     );
+}
+
+#[test]
+fn reconstruct_missing_envelope_warning_errors() {
+    let err = TextAddVerb
+        .reconstruct(&json!({}), &json!([]), &[], &empty_project())
+        .expect_err("successful text.add events must carry W_TEXT_ADD_ENVELOPE");
+
+    assert!(matches!(
+        err,
+        ReconstructError::MissingField {
+            name: "warnings[].W_TEXT_ADD_ENVELOPE"
+        }
+    ));
 }

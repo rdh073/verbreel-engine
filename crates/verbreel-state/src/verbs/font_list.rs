@@ -5,36 +5,15 @@
 //! > CLI: `verbreel font list`
 //! > MCP: `font.list`
 //! > Args: none
-//! > Returns (`data`): `{ fonts: { family: string;
-//! >   styles: { weight: integer; italic: boolean }[];
-//! >   source: "bundled" | "system" }[] }`
-//!
-//! ## v1 floor — empty list.
-//!
-//! Per §7.5, the full fonts list is bundled engine fonts plus
-//! system-discovered fonts. v1 ships zero bundled fonts and defers
-//! system enumeration: walking cross-platform font directories
-//! (`/usr/share/fonts/`, `/System/Library/Fonts/`, `C:\Windows\Fonts\`)
-//! and parsing family/style metadata with a crate such as `fontdb`
-//! or `font-kit` is file I/O — forbidden in the `Verb` trait's pure
-//! `compute_patch`. Both sources need a `VerbContext` / storage facade
-//! threaded through `ProjectStore::mutate_via_verb` — the same
-//! architectural gap that `stock.list_providers` defers config-file
-//! providers for and `list_capabilities` defers v1.1+ subsystem fields
-//! for. A future slice introduces `VerbContext` and wires several
-//! deferred features at once.
-//!
-//! ## Bundle metadata, not project state.
-//!
-//! `font.list` is read-only and does not read or mutate project state;
-//! it only exposes the engine's compile-time fonts list (currently
-//! empty).
+//! > Returns (`data`): `{ families: { name: string;
+//! >   source: "bundled" | "system"; path?: string }[] }`
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 use verbreel_types::ProjectId;
 
+use crate::font_registry;
 use crate::project::Project;
 use crate::reconstructor::{ReconstructError, Verb, VerbError};
 
@@ -49,41 +28,23 @@ pub struct FontListArgs {
     pub project_id: ProjectId,
 }
 
-/// A single weight + italic combination for a font family.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FontStyle {
-    /// CSS-style font weight (`100`..=`900`).
-    pub weight: u32,
-    /// Whether this style is italic.
-    pub italic: bool,
-}
-
-/// Where the font was discovered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FontSource {
-    /// Bundled by the engine.
-    Bundled,
-    /// Discovered on the host system.
-    System,
-}
-
-/// Single font family entry returned by `font.list`.
+/// Single family entry returned by `font.list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FontEntry {
+pub struct FontFamilyEntry {
     /// Font family name (e.g. `"Inter"`).
-    pub family: String,
-    /// Available styles for this family.
-    pub styles: Vec<FontStyle>,
+    pub name: String,
     /// Discovery source.
-    pub source: FontSource,
+    pub source: font_registry::RegistrySource,
+    /// Optional font-file path for filesystem-backed families.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 /// Envelope returned by `font.list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FontListData {
     /// Available fonts in deterministic order.
-    pub fonts: Vec<FontEntry>,
+    pub families: Vec<FontFamilyEntry>,
 }
 
 #[allow(dead_code)]
@@ -97,7 +58,15 @@ pub enum FontListError {
 
 /// Build the canonical `font.list` data envelope.
 fn build_data() -> FontListData {
-    FontListData { fonts: Vec::new() }
+    let families = font_registry::list()
+        .into_iter()
+        .map(|family| FontFamilyEntry {
+            name: family.name,
+            source: family.source,
+            path: family.path,
+        })
+        .collect();
+    FontListData { families }
 }
 
 /// Build the RFC 6902 patch for `font.list`.

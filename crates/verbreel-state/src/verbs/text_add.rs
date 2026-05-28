@@ -2,9 +2,8 @@
 //!
 //! Adds a text clip to an existing text track or auto-creates the first
 //! text track when the project has none. This slice intentionally
-//! defers the preset registry, font registry, and structural `text[N]`
-//! selectors. Preset names return `E_PRESET_UNKNOWN`, any font string
-//! in a literal style object is accepted, and `track` accepts only a
+//! defers the preset registry and structural `text[N]` selectors.
+//! Preset names return `E_PRESET_UNKNOWN`, and `track` accepts only a
 //! bare `UUIDv7` or `track:<uuid>`.
 
 use std::sync::OnceLock;
@@ -17,6 +16,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use verbreel_types::{ClipId, ProjectId, TICK_RATE_HZ, Tick, TrackId};
 
 use crate::clip::{BlendMode, Clip, FadeCurve};
+use crate::font_registry;
 use crate::invariants::timeline_duration_tk;
 use crate::newtypes::AssetRef;
 use crate::project::Project;
@@ -170,6 +170,17 @@ pub enum TextAddError {
         /// Target track id.
         track_id: String,
     },
+
+    /// `font_family` is not present in the canonical registry.
+    #[error(
+        "E_FONT_UNKNOWN: text.add: font family `{family}` is unavailable; details.available={available:?}"
+    )]
+    FontUnknown {
+        /// Requested family.
+        family: String,
+        /// Canonical available family names.
+        available: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -205,6 +216,7 @@ pub fn compute_patch(
 
     let mut text = resolve_style(args.style.as_ref())?;
     text.content.clone_from(&args.content);
+    text.font_family = resolve_font_family(&text.font_family)?;
 
     let (target, maybe_new_track) = resolve_target_track(prior, args.track.as_deref())?;
     let target_clips = if target.auto_created {
@@ -408,6 +420,15 @@ fn validate_style_object(map: &Map<String, Value>) -> Result<(), TextAddError> {
         )?;
     }
     Ok(())
+}
+
+fn resolve_font_family(font_family: &str) -> Result<String, TextAddError> {
+    font_registry::resolve(font_family)
+        .map(|family| family.name)
+        .ok_or_else(|| TextAddError::FontUnknown {
+            family: font_family.to_string(),
+            available: font_registry::available(),
+        })
 }
 
 fn style_schema_violation(detail: impl Into<String>) -> TextAddError {

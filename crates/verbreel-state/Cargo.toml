@@ -45,6 +45,7 @@ unicode-segmentation.workspace = true
 # `tempfile + rename + parent-dir fsync` for the atomic project.json
 # write per §2.3.
 tempfile.workspace = true
+fontdb = "0.16"
 
 # Dev-dependencies:
 #   - `jsonschema` is used by `tests/schema_validation.rs` to lock the

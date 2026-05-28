@@ -6372,8 +6372,8 @@ fn stock_describe_fixture() -> RecordedEvent {
 ///
 /// `font.list` ignores project state, so the prior is just the empty
 /// synthetic project and the patch is empty. Expected data comes from
-/// a forward `compute_patch` against that same prior — currently an
-/// empty `fonts` list per the v1 floor.
+/// a forward `compute_patch` against that same prior and includes the
+/// canonical registry families snapshot for this runtime.
 fn font_list_fixture() -> RecordedEvent {
     let project_id = DEFAULT_FIXTURE_PROJECT_ID
         .parse()

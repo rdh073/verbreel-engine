@@ -7,16 +7,11 @@
 //! an args-layer sentinel that removes the optional `shadow` field from
 //! project state; persisted `TextElement.shadow` is non-null when present.
 //!
-//! ## Deferred checks
-//!
-//! `E_FONT_UNKNOWN` is intentionally deferred until the font registry
-//! (`font.list` §7.5) lands; this state-layer slice accepts any
-//! `font_family` string.
-//!
 //! `E_ARGS_INCOMPATIBLE` for CLI flags (`--no_shadow` + `--shadow_*`) is
 //! a verb-args/CLI responsibility. The state layer receives a resolved
 //! `style` object where `shadow` is absent, null, or an object.
 
+use crate::font_registry;
 use crate::project::Project;
 use crate::reconstructor::{ReconstructError, Verb, VerbError};
 use crate::shadow::Shadow;
@@ -114,6 +109,17 @@ pub enum TextStyleError {
         /// Human-readable detail.
         detail: String,
     },
+
+    /// `font_family` is not present in the canonical registry.
+    #[error(
+        "E_FONT_UNKNOWN: text.style: font family `{family}` is unavailable; details.available={available:?}"
+    )]
+    FontUnknown {
+        /// Requested family.
+        family: String,
+        /// Canonical available family names.
+        available: Vec<String>,
+    },
 }
 
 fn schema_violation(detail: impl Into<String>) -> TextStyleError {
@@ -155,6 +161,15 @@ fn validate_shadow(shadow: &Shadow) -> Result<(), TextStyleError> {
     finite_f64("shadow.offset_x", shadow.offset_x)?;
     finite_f64("shadow.offset_y", shadow.offset_y)?;
     Ok(())
+}
+
+fn resolve_font_family(font_family: &str) -> Result<String, TextStyleError> {
+    font_registry::resolve(font_family)
+        .map(|family| family.name)
+        .ok_or_else(|| TextStyleError::FontUnknown {
+            family: font_family.to_string(),
+            available: font_registry::available(),
+        })
 }
 
 fn f64_changed(next: f64, current: f64) -> bool {
@@ -305,8 +320,7 @@ pub fn compute_patch(
 
     if let Some(value) = style.get("font_family") {
         let font_family: String = deserialize_leaf("font_family", value)?;
-        // TODO(text.style): spec/commands/text.md §7.3 `E_FONT_UNKNOWN`
-        // is deferred until `font.list` §7.5 provides a font registry.
+        let font_family = resolve_font_family(&font_family)?;
         if font_family != current_text.font_family {
             push_text_op(&mut ops, t_idx, c_idx, "font_family", &font_family)?;
             next_text.font_family = font_family;
@@ -525,7 +539,8 @@ impl From<TextStyleError> for VerbError {
             | TextStyleError::ClipNotFound { .. }
             | TextStyleError::ClipKindMismatch { .. }
             | TextStyleError::Locked { .. }
-            | TextStyleError::SchemaViolation { .. } => VerbError::BadArgs {
+            | TextStyleError::SchemaViolation { .. }
+            | TextStyleError::FontUnknown { .. } => VerbError::BadArgs {
                 detail: value.to_string(),
             },
         }
