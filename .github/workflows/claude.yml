@@ -63,6 +63,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
           use_sticky_comment: true # re-reviews on sync update one comment, not a stack
           additional_permissions: |
             actions: read
@@ -125,6 +126,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
           use_sticky_comment: true # PR timeline comments arrive as issue_comment; keep replies in one PR comment
           additional_permissions: |
             actions: read
