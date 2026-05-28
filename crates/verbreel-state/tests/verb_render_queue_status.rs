@@ -299,9 +299,9 @@ fn verb_routes_through_mutate_via_verb_and_errors() {
 
 /// v1 floor happy-path deferral marker.
 ///
-/// In v1 the queue is always empty (no `render.queue.add` /
-/// `render.start` verb exists yet) so `render.queue.status` cannot
-/// resolve any id. The happy path — returning a populated `QueueEntry`
+/// In v1 the queue is always empty (`render.queue.add` always errors
+/// with `E_QUEUE_FULL`) so `render.queue.status` cannot resolve any id.
+/// The happy path — returning a populated `QueueEntry`
 /// matching a real queued/running/completed job — lights up when the
 /// queue persistence layer ships and a `VerbContext` plumbs file I/O
 /// into `compute_patch`. This test is intentionally a no-op so the

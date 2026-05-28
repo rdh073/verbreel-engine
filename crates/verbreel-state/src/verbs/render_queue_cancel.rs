@@ -15,10 +15,11 @@
 //! `~/.verbreel/render-queue.json` persistence file shared across all
 //! Verbreel processes on the host. The `Verb` trait's purity contract
 //! forbids file I/O in `compute_patch`, so v1 cannot consult the
-//! persistence file. The v1 floor is also semantically correct: no
-//! `render.start` or `render.queue.add` verb exists yet, so the
-//! persistence file is never written and the queue is genuinely empty —
-//! every queried `queue_job_id` truly does not resolve. Wiring the file
+//! persistence file. The v1 floor is also semantically correct:
+//! `render.queue.add` is a queue-enqueue floor that always errors with
+//! `E_QUEUE_FULL`, so no successful enqueue is recorded and the queue is
+//! genuinely empty — every queried `queue_job_id` truly does not
+//! resolve. Wiring the file
 //! read/write needs a `VerbContext` / storage facade threaded through
 //! `ProjectStore::mutate_via_verb` — same architectural gap that
 //! `render.queue.list` (§21.2), `render.queue.clear` (§21.5), and

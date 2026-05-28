@@ -382,6 +382,10 @@ pub use verbs::render_list_presets::{
     Preset, RenderListPresetsArgs, RenderListPresetsData, RenderListPresetsError,
     RenderListPresetsVerb,
 };
+pub use verbs::render_queue_add::{
+    RenderQueueAddArgs, RenderQueueAddData, RenderQueueAddError, RenderQueueAddJobError,
+    RenderQueueAddVerb,
+};
 pub use verbs::render_queue_cancel::{
     RenderQueueCancelArgs, RenderQueueCancelData, RenderQueueCancelError, RenderQueueCancelVerb,
 };

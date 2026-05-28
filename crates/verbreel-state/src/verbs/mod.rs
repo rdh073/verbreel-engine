@@ -159,6 +159,7 @@ pub mod project_set_fps;
 pub mod project_set_metadata;
 pub mod render_cancel;
 pub mod render_list_presets;
+pub mod render_queue_add;
 pub mod render_queue_cancel;
 pub mod render_queue_clear;
 pub mod render_queue_list;
@@ -839,6 +840,12 @@ pub fn default_registry() -> VerbRegistry {
              default_registry(); cannot collide with prior verbs",
         );
     registry
+        .register(Arc::new(render_queue_add::RenderQueueAddVerb))
+        .expect(
+            "RenderQueueAddVerb registration in default_registry() cannot collide with prior \
+             verbs",
+        );
+    registry
         .register(Arc::new(render_queue_list::RenderQueueListVerb))
         .expect(
             "RenderQueueListVerb is the seventy-third registration in \
@@ -1084,6 +1091,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         tracker_list_fixture(),
         tracker_remove_fixture(),
         tracker_run_fixture(),
+        render_queue_add_fixture(),
         render_queue_list_fixture(),
         render_queue_clear_fixture(),
         render_queue_status_fixture(),
@@ -6884,6 +6892,51 @@ fn tracker_run_fixture() -> RecordedEvent {
     }
 }
 
+/// Build the canonical `render.queue.add` fixture used by
+/// [`default_fixtures`].
+///
+/// `render.queue.add` validates static args in v1, then always errors
+/// with `E_QUEUE_FULL` because queue persistence/worker context is
+/// deferred. No successful event can ever be recorded, so the
+/// reconstructor's input tuple carries no semantically-meaningful
+/// payload — the verb's `reconstruct()` exercises args-deserialization
+/// and returns `Value::Null` to satisfy the §0.8 gate. The fixture
+/// records `expected_data: null` so the gate's canonical-SHA equality
+/// holds.
+fn render_queue_add_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let prior = synthetic_empty_project(project_id);
+
+    let args = render_queue_add::RenderQueueAddArgs {
+        project_id,
+        preset: "youtube-1080p".to_string(),
+        out_path: "exports/queue-floor.mp4".to_string(),
+        from_tk: None,
+        to_tk: None,
+        video_codec: None,
+        audio_codec: None,
+        bitrate_bps: None,
+        crf: None,
+        deterministic: false,
+        keep_temp: false,
+        overwrite: false,
+        priority: 0,
+        wait: false,
+    };
+
+    RecordedEvent {
+        verb: "render.queue.add".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: json!([]),
+        warnings: vec![],
+        post_state: prior,
+        expected_data: Value::Null,
+    }
+}
+
 /// Build the canonical `render.queue.list` fixture used by
 /// [`default_fixtures`].
 ///
@@ -7742,6 +7795,7 @@ mod tests {
                 "project.set_metadata",
                 "render.cancel",
                 "render.list_presets",
+                "render.queue.add",
                 "render.queue.cancel",
                 "render.queue.clear",
                 "render.queue.list",
