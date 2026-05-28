@@ -239,3 +239,122 @@ fn run_with_empty_inputs_passes_with_zero_counts() {
         "output must report zeros explicitly, got:\n{body}"
     );
 }
+
+// --- DataMismatch synthetic-failure injection ----------------------------
+
+use std::sync::Arc;
+use verbreel_state::{Project, ReconstructError, Verb, VerbError};
+
+/// Tiny `Verb` impl whose `reconstruct()` returns a known JSON value.
+/// Pairing this with a fixture whose `expected_data` is deliberately
+/// offset triggers the `DataMismatch` formatter branch.
+#[derive(Debug)]
+struct EchoVerb;
+
+impl Verb for EchoVerb {
+    fn verb(&self) -> &'static str {
+        "test.echo"
+    }
+
+    fn compute_patch(
+        &self,
+        _prior: &Project,
+        _args: &serde_json::Value,
+    ) -> Result<(json_patch::Patch, serde_json::Value, Vec<serde_json::Value>), VerbError> {
+        // Not exercised by validate_reconstructors (the validator only
+        // calls reconstruct). Return a deterministic stub so the
+        // signature is satisfied.
+        Ok((
+            serde_json::from_value(serde_json::json!([])).unwrap(),
+            serde_json::json!({"echo": "ok"}),
+            vec![],
+        ))
+    }
+
+    fn reconstruct(
+        &self,
+        _args: &serde_json::Value,
+        _patch: &serde_json::Value,
+        _warnings: &[serde_json::Value],
+        _post_state: &Project,
+    ) -> Result<serde_json::Value, ReconstructError> {
+        // Pin a deterministic output. The fixture's expected_data will
+        // intentionally differ to trigger DataMismatch.
+        Ok(serde_json::json!({"echo": "ok"}))
+    }
+}
+
+#[test]
+fn run_with_data_mismatch_writes_full_fail_envelope() {
+    // Build a registry with EchoVerb whose reconstruct() returns
+    // {"echo":"ok"}, and a fixture whose expected_data is {"echo":"wrong"}.
+    // run_with must surface the mismatch as exit 1 plus the four-line
+    // DataMismatch envelope (variant header + expected sha + produced
+    // sha + the two pretty diff blocks).
+    let mut registry = VerbRegistry::default();
+    registry
+        .register(Arc::new(EchoVerb))
+        .expect("EchoVerb registers cleanly into an empty registry");
+
+    let mismatched = RecordedEvent {
+        verb: "test.echo".to_string(),
+        args: serde_json::json!({}),
+        patch: serde_json::json!([]),
+        warnings: vec![],
+        post_state: synthetic_empty_project(ProjectId::now()),
+        expected_data: serde_json::json!({"echo": "wrong"}),
+    };
+
+    let mut out: Vec<u8> = Vec::new();
+    let code = run_with(&registry, std::slice::from_ref(&mismatched), &mut out);
+
+    assert_eq!(code, 1, "DataMismatch must surface as exit 1");
+    let body = String::from_utf8(out).expect("output is utf-8");
+
+    // Variant header line — name and verb id both required.
+    assert!(
+        body.contains("conformance: FAIL — DataMismatch on test.echo"),
+        "variant header line missing or malformed; got:\n{body}"
+    );
+
+    // Both SHA hex lines present and distinguishable from each other.
+    assert!(
+        body.contains("  expected sha: "),
+        "missing 'expected sha:' line; got:\n{body}"
+    );
+    assert!(
+        body.contains("  produced sha: "),
+        "missing 'produced sha:' line; got:\n{body}"
+    );
+
+    // Pretty-printed diff blocks for both sides must include the
+    // discriminating value so a human reading the report can locate
+    // the offset.
+    assert!(
+        body.contains("\"wrong\""),
+        "expected pretty block must echo the expected_data discriminator; got:\n{body}"
+    );
+    assert!(
+        body.contains("\"ok\""),
+        "produced pretty block must echo the actual reconstruct() output; got:\n{body}"
+    );
+
+    // The two SHA lines must carry different hex digests — same hash on
+    // both sides would mean canonicalisation collapsed the diff and the
+    // mismatch detection itself is broken.
+    let mut expected_sha = None;
+    let mut produced_sha = None;
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("  expected sha: ") {
+            expected_sha = Some(rest.to_string());
+        }
+        if let Some(rest) = line.strip_prefix("  produced sha: ") {
+            produced_sha = Some(rest.to_string());
+        }
+    }
+    assert!(expected_sha.is_some() && produced_sha.is_some());
+    assert_ne!(
+        expected_sha, produced_sha,
+        "expected and produced SHAs must differ on a real DataMismatch"
+    );
+}
