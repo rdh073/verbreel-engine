@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lib]
+name = "verbreel_http"
+path = "src/lib.rs"
+
 [[bin]]
 name = "verbreel_http"
 path = "src/main.rs"
@@ -21,3 +25,12 @@ tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# `Router::oneshot` integration tests collect response bodies with
+# `BodyExt::collect()` — that lives in `http-body-util`, which is a
+# direct dep of axum but is not re-exported from the public surface.
+http-body-util = "0.1"
+tower.workspace = true
