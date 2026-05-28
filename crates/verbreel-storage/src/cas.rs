@@ -35,6 +35,19 @@ pub enum CasError {
     /// character is included for diagnostics.
     #[error("sha256_hex must be lowercase hex; bad char {0:?}")]
     NotLowercaseHex(char),
+    /// Extension segment was empty or contained non `[a-z0-9]`.
+    #[error("extension must match [a-z0-9]+, got {0:?}")]
+    BadExtension(String),
+}
+
+/// Content-addressed key for imported bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CasKey {
+    /// SHA-256 hex digest (64 lowercase chars).
+    pub sha256_hex: String,
+    /// Project-relative CAS path:
+    /// `assets/<aa>/<sha256>.<ext>`.
+    pub relative_path: String,
 }
 
 /// Build the spec §0.13 content-addressed asset path
@@ -89,6 +102,37 @@ pub fn sha256_file(path: &Path) -> io::Result<String> {
         hasher.update(&buf[..n]);
     }
     Ok(hex_lower(&hasher.finalize()))
+}
+
+/// Compute the content-addressed key for in-memory bytes.
+///
+/// Produces:
+///
+/// - `sha256_hex`: 64-char lowercase SHA-256.
+/// - `relative_path`: `assets/<aa>/<sha256>.<ext>`.
+///
+/// # Errors
+///
+/// Returns [`CasError::BadExtension`] when `ext` is empty or contains
+/// characters outside `[a-z0-9]`.
+pub fn key_for_bytes(bytes: &[u8], ext: &str) -> Result<CasKey, CasError> {
+    if ext.is_empty()
+        || !ext
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
+        return Err(CasError::BadExtension(ext.to_string()));
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let sha256_hex = hex_lower(&hasher.finalize());
+    let relative_path = format!("assets/{}/{sha256_hex}.{ext}", &sha256_hex[..2]);
+
+    Ok(CasKey {
+        sha256_hex,
+        relative_path,
+    })
 }
 
 /// Local lowercase-hex encoder. Avoids pulling in `hex` just for this.

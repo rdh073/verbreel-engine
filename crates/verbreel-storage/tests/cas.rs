@@ -11,7 +11,7 @@
 use std::path::Path;
 
 use tempfile::TempDir;
-use verbreel_storage::cas::{CasError, cas_path, sha256_file};
+use verbreel_storage::cas::{CasError, cas_path, key_for_bytes, sha256_file};
 
 // SHA-256 of the empty byte string. Canonical fixture from RFC 6234.
 const SHA256_EMPTY: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -197,4 +197,23 @@ fn sha256_file_round_trips_through_cas_path() {
 
     let dest_digest = sha256_file(&dest).unwrap();
     assert_eq!(digest, dest_digest);
+}
+
+#[test]
+fn key_for_bytes_returns_digest_and_canonical_relative_path() {
+    let key = key_for_bytes(b"abc", "mp4").expect("valid extension");
+    assert_eq!(key.sha256_hex, SHA256_ABC);
+    assert_eq!(key.relative_path, format!("assets/ba/{SHA256_ABC}.mp4"));
+}
+
+#[test]
+fn key_for_bytes_rejects_empty_extension() {
+    let err = key_for_bytes(b"x", "").expect_err("empty extension rejected");
+    assert!(matches!(err, CasError::BadExtension(_)));
+}
+
+#[test]
+fn key_for_bytes_rejects_non_canonical_extension_chars() {
+    let err = key_for_bytes(b"x", "Mp4").expect_err("uppercase extension rejected");
+    assert!(matches!(err, CasError::BadExtension(_)));
 }

@@ -16,7 +16,7 @@ default = ["native"]
 # filesystem + flock backend by default. wasm32 builds opt out via
 # `default-features = false`; Phase 2 will add a `wasm` feature for the OPFS
 # backend symmetrically.
-native = ["verbreel-events/native"]
+native = ["verbreel-events/native", "dep:verbreel-storage"]
 
 [dependencies]
 verbreel-types = { path = "../verbreel-types" }
@@ -28,6 +28,7 @@ verbreel-events = { path = "../verbreel-events", default-features = false }
 # round-trip test); promoting it to a runtime dep so the kernel can
 # compute fingerprints at `ProjectStore::mutate` time.
 verbreel-canon = { path = "../verbreel-canon" }
+verbreel-storage = { path = "../verbreel-storage", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
