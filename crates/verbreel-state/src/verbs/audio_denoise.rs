@@ -108,15 +108,6 @@ pub enum AudioDenoiseError {
         target_id: String,
     },
 
-    /// Reserved for selector forms that structurally match no target.
-    #[error("E_NO_MATCH: audio.denoise: selector `{selector}` matched no {target_kind}")]
-    NoMatch {
-        /// Target kind (`"clip"` or `"track"`).
-        target_kind: &'static str,
-        /// Original selector string.
-        selector: String,
-    },
-
     /// Target clip's parent track is not `kind: "audio"`.
     #[error("E_CLIP_KIND_MISMATCH: audio.denoise: clip `{clip_id}` is on a `{actual_kind}` track")]
     ClipKindMismatch {
@@ -178,8 +169,7 @@ struct LocatedDenoise {
 /// # Errors
 ///
 /// Returns [`AudioDenoiseError`] for range, selector, missing target,
-/// non-audio target, locked target, or malformed existing track-effect
-/// state.
+/// non-audio target, or locked target.
 pub fn compute_patch(
     prior: &Project,
     args: &AudioDenoiseArgs,
@@ -812,7 +802,6 @@ impl From<AudioDenoiseError> for VerbError {
             | AudioDenoiseError::BadSelector { .. }
             | AudioDenoiseError::SelectorKindMismatch { .. }
             | AudioDenoiseError::NotFound { .. }
-            | AudioDenoiseError::NoMatch { .. }
             | AudioDenoiseError::ClipKindMismatch { .. }
             | AudioDenoiseError::TrackKindMismatch { .. }
             | AudioDenoiseError::Locked { .. } => VerbError::BadArgs {
