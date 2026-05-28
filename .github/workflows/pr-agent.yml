@@ -77,3 +77,12 @@ jobs:
             - Don't suggest replacing serde derive (#[serde(transparent)] caveat).
           pr_code_suggestions.num_code_suggestions:        "6"
           pr_code_suggestions.suggestions_score_threshold: "7"
+
+          # ── Auto-commit suggestions above the score threshold ──
+          # When true, PR-Agent commits each /improve suggestion that clears
+          # `suggestions_score_threshold` directly to the PR branch as a new
+          # commit. Trade-off: removes the manual-review gate on suggestions.
+          # Threshold is set to 7 above, so only high-confidence suggestions
+          # auto-commit; the `extra_instructions` guardrails further filter
+          # out the "don't suggest" patterns that would otherwise churn.
+          pr_code_suggestions.commit_changes_to_pr: "true"
