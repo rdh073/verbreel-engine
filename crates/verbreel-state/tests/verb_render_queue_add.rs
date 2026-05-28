@@ -412,6 +412,7 @@ fn valid_h264_crf_reaches_queue_full_custom() {
         .expect_err("valid request should hit v1 floor"),
     );
     assert!(detail.contains("E_QUEUE_FULL"));
+    assert!(detail.contains("queue persistence/worker context unavailable"));
 }
 
 #[test]
@@ -498,7 +499,7 @@ fn future_data_serializes_non_wait_fields() {
     let data = RenderQueueAddData {
         queue_job_id: "0190b8d3-15e3-7000-bd00-0000feedbeef".to_string(),
         project_id: FIXTURE_PROJECT_ID.to_string(),
-        position_in_queue: 0,
+        position_in_queue: Some(0),
         state: QueueJobState::Queued,
         added_at: "2026-05-28T00:00:00Z".to_string(),
         started_at: None,
@@ -521,6 +522,28 @@ fn future_data_serializes_non_wait_fields() {
             "state"
         ]
     );
+}
+
+#[test]
+fn future_data_wait_terminal_omits_position_and_keeps_terminal_fields() {
+    let data = RenderQueueAddData {
+        queue_job_id: "0190b8d3-15e3-7000-bd00-0000feedbeef".to_string(),
+        project_id: FIXTURE_PROJECT_ID.to_string(),
+        position_in_queue: None,
+        state: QueueJobState::Completed,
+        added_at: "2026-05-28T00:00:00Z".to_string(),
+        started_at: Some("2026-05-28T00:00:10Z".to_string()),
+        finished_at: Some("2026-05-28T00:00:30Z".to_string()),
+        output_path: Some("exports/final.mp4".to_string()),
+        partial_path: None,
+        error: None,
+    };
+    let value = serde_json::to_value(&data).expect("data serializes");
+    let obj = value.as_object().expect("object");
+    assert!(obj.get("position_in_queue").is_none());
+    assert_eq!(obj.get("started_at"), Some(&json!("2026-05-28T00:00:10Z")));
+    assert_eq!(obj.get("finished_at"), Some(&json!("2026-05-28T00:00:30Z")));
+    assert_eq!(obj.get("output_path"), Some(&json!("exports/final.mp4")));
 }
 
 #[test]

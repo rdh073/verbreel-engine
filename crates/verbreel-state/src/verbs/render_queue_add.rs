@@ -93,7 +93,10 @@ pub struct RenderQueueAddData {
     /// Project id associated with the queue entry.
     pub project_id: String,
     /// Queue position (`0` next to run; `-1` already running).
-    pub position_in_queue: i64,
+    ///
+    /// Omitted for wait-mode terminal responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_in_queue: Option<i64>,
     /// Queue job state.
     pub state: QueueJobState,
     /// RFC3339 enqueue timestamp.
@@ -170,7 +173,7 @@ pub enum RenderQueueAddError {
 
     /// Queue capacity exceeded.
     #[error(
-        "render.queue.add: E_QUEUE_FULL — project_id `{project_id}` cap={cap} current_length={current_length}"
+        "render.queue.add: E_QUEUE_FULL — queue persistence/worker context unavailable in v1 floor; project_id `{project_id}` cap={cap} current_length={current_length}"
     )]
     QueueFull {
         /// Target project id.
