@@ -392,6 +392,29 @@ fn preset_style_errors_preset_unknown() {
 }
 
 #[test]
+fn unknown_font_family_errors_font_unknown_with_available_list() {
+    let prior = empty_project();
+    let mut args = text_add_args();
+    args.style = Some(style_object(json!({
+        "font_family": "__no_such_font_family__",
+    })));
+
+    let err = compute_patch(&prior, &args).expect_err("unknown family must fail");
+
+    assert!(matches!(
+        err,
+        TextAddError::FontUnknown { ref family, .. } if family == "__no_such_font_family__"
+    ));
+    let TextAddError::FontUnknown { available, .. } = err else {
+        panic!("expected TextAddError::FontUnknown");
+    };
+    assert!(
+        available.iter().any(|name| name == "Inter"),
+        "available list should include bundled Inter"
+    );
+}
+
+#[test]
 fn overlapping_clip_errors_clip_overlap() {
     let prior = project_with_tracks(vec![text_track(
         TRACK_TEXT_A,
@@ -557,5 +580,23 @@ fn default_fixture_data_matches_warning_envelope() {
     assert_eq!(
         serde_json::to_value(data).expect("data serializes"),
         expected_data
+    );
+}
+
+#[test]
+fn default_fixtures_include_unknown_font_error_case() {
+    let fixtures: Vec<RecordedEvent> = default_fixtures()
+        .into_iter()
+        .filter(|event| event.verb == "text.add")
+        .collect();
+
+    assert!(
+        fixtures.iter().any(|event| {
+            event.expected_data == Value::Null
+                && event.patch == json!([])
+                && event.warnings.is_empty()
+                && event.args["style"]["font_family"] == "__no_such_font_family__"
+        }),
+        "default_fixtures must include text.add unknown-font error case"
     );
 }

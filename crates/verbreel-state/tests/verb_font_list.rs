@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use verbreel_state::verbs::font_list::{compute_patch, data_envelope_from_args};
 use verbreel_state::{
-    FontEntry, FontListArgs, FontListData, FontListVerb, FontSource, FontStyle, Project, Verb,
+    FontFamilyEntry, FontListArgs, FontListData, FontListVerb, Project, RegistrySource, Verb,
     VerbError, VerbRegistry, default_fixtures, default_registry, validate_reconstructors,
 };
 
@@ -62,21 +62,25 @@ fn args_wrong_type_fails_through_verb() {
 }
 
 #[test]
-fn happy_path_returns_empty_fonts_list() {
+fn happy_path_returns_non_empty_family_list() {
     let prior = empty_project();
     let (_, _, data) = compute_patch(&prior, &args()).expect("happy path");
-    assert!(data.fonts.is_empty());
+    assert!(!data.families.is_empty());
 }
 
 #[test]
-fn fonts_is_empty() {
+fn bundled_inter_exists() {
     let prior = empty_project();
     let (_, _, data) = compute_patch(&prior, &args()).expect("happy path");
-    assert_eq!(data.fonts.len(), 0);
+    assert!(
+        data.families
+            .iter()
+            .any(|family| { family.name == "Inter" && family.source == RegistrySource::Bundled })
+    );
 }
 
 #[test]
-fn data_envelope_has_exactly_one_field_named_fonts() {
+fn data_envelope_has_exactly_one_field_named_families() {
     let prior = empty_project();
     let (_, _, data) = compute_patch(&prior, &args()).expect("happy path");
     let value: Value = serde_json::to_value(&data).expect("envelope → Value");
@@ -84,81 +88,68 @@ fn data_envelope_has_exactly_one_field_named_fonts() {
 
     assert_eq!(obj.keys().count(), 1);
     let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
-    assert_eq!(keys, vec!["fonts"]);
+    assert_eq!(keys, vec!["families"]);
 }
 
 #[test]
-fn font_entry_serializes_with_three_fields() {
-    let entry = FontEntry {
-        family: "Inter".to_string(),
-        styles: vec![FontStyle {
-            weight: 400,
-            italic: false,
-        }],
-        source: FontSource::Bundled,
+fn family_entry_serializes_with_three_or_four_fields() {
+    let entry = FontFamilyEntry {
+        name: "Inter".to_string(),
+        source: RegistrySource::Bundled,
+        path: None,
     };
     let value = serde_json::to_value(&entry).expect("FontEntry → Value");
     let obj = value.as_object().expect("FontEntry is a JSON object");
 
     let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
     keys.sort_unstable();
-    let mut expected = vec!["family", "styles", "source"];
-    expected.sort_unstable();
-    assert_eq!(keys, expected);
-    assert_eq!(obj.keys().count(), 3);
-}
-
-#[test]
-fn font_style_serializes_with_two_fields() {
-    let style = FontStyle {
-        weight: 700,
-        italic: true,
-    };
-    let value = serde_json::to_value(style).expect("FontStyle → Value");
-    let obj = value.as_object().expect("FontStyle is a JSON object");
-
-    let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
-    keys.sort_unstable();
-    let mut expected = vec!["italic", "weight"];
+    let mut expected = vec!["name", "source"];
     expected.sort_unstable();
     assert_eq!(keys, expected);
     assert_eq!(obj.keys().count(), 2);
 }
 
 #[test]
+fn family_entry_with_path_serializes_path_field() {
+    let entry = FontFamilyEntry {
+        name: "Inter".to_string(),
+        source: RegistrySource::System,
+        path: Some("/tmp/Inter.ttf".to_string()),
+    };
+    let value = serde_json::to_value(entry).expect("FontFamilyEntry → Value");
+    let obj = value.as_object().expect("FontFamilyEntry is a JSON object");
+
+    let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    let mut expected = vec!["name", "path", "source"];
+    expected.sort_unstable();
+    assert_eq!(keys, expected);
+    assert_eq!(obj.keys().count(), 3);
+}
+
+#[test]
 fn font_source_bundled_serializes_to_lowercase_string() {
-    let value = serde_json::to_value(FontSource::Bundled).expect("FontSource::Bundled → Value");
+    let value =
+        serde_json::to_value(RegistrySource::Bundled).expect("RegistrySource::Bundled → Value");
     assert_eq!(value, json!("bundled"));
 }
 
 #[test]
 fn font_source_system_serializes_to_lowercase_string() {
-    let value = serde_json::to_value(FontSource::System).expect("FontSource::System → Value");
+    let value =
+        serde_json::to_value(RegistrySource::System).expect("RegistrySource::System → Value");
     assert_eq!(value, json!("system"));
 }
 
 #[test]
-fn font_entry_round_trip() {
-    let original = FontEntry {
-        family: "Roboto".to_string(),
-        styles: vec![
-            FontStyle {
-                weight: 300,
-                italic: false,
-            },
-            FontStyle {
-                weight: 400,
-                italic: true,
-            },
-            FontStyle {
-                weight: 700,
-                italic: false,
-            },
-        ],
-        source: FontSource::System,
+fn family_entry_round_trip() {
+    let original = FontFamilyEntry {
+        name: "Roboto".to_string(),
+        source: RegistrySource::System,
+        path: Some("/usr/share/fonts/Roboto.ttf".to_string()),
     };
-    let value = serde_json::to_value(&original).expect("FontEntry → Value");
-    let parsed: FontEntry = serde_json::from_value(value).expect("Value → FontEntry");
+    let value = serde_json::to_value(&original).expect("FontFamilyEntry → Value");
+    let parsed: FontFamilyEntry = serde_json::from_value(value).expect("Value → FontFamilyEntry");
     assert_eq!(parsed, original);
 }
 
@@ -173,6 +164,15 @@ fn verb_is_project_agnostic() {
     let (_, _, data_b) = compute_patch(&prior_b, &args()).expect("happy path b");
 
     assert_eq!(data_a, data_b);
+}
+
+#[test]
+fn family_list_is_sorted_case_insensitive() {
+    let prior = empty_project();
+    let (_, _, data) = compute_patch(&prior, &args()).expect("happy path");
+    let mut sorted = data.families.clone();
+    sorted.sort_by_key(|family| family.name.to_lowercase());
+    assert_eq!(data.families, sorted);
 }
 
 #[test]
@@ -235,7 +235,13 @@ fn verb_trait_surface_lookup_via_default_registry() {
     assert!(warnings.is_empty());
     let typed: FontListData =
         serde_json::from_value(data).expect("envelope deserializes to FontListData");
-    assert!(typed.fonts.is_empty());
+    assert!(!typed.families.is_empty());
+    assert!(
+        typed
+            .families
+            .iter()
+            .any(|family| { family.name == "Inter" && family.source == RegistrySource::Bundled })
+    );
 }
 
 #[cfg(feature = "native")]
@@ -262,5 +268,9 @@ fn verb_routes_through_mutate_via_verb() {
     assert!(warnings.is_empty());
 
     let data: FontListData = serde_json::from_value(data).expect("font.list data deserializes");
-    assert!(data.fonts.is_empty());
+    assert!(
+        data.families
+            .iter()
+            .any(|family| { family.name == "Inter" && family.source == RegistrySource::Bundled })
+    );
 }
