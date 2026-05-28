@@ -92,7 +92,7 @@ fn data_envelope_has_exactly_one_field_named_families() {
 }
 
 #[test]
-fn family_entry_serializes_with_three_or_four_fields() {
+fn family_entry_without_path_serializes_public_fields() {
     let entry = FontFamilyEntry {
         name: "Inter".to_string(),
         source: RegistrySource::Bundled,
@@ -107,6 +107,14 @@ fn family_entry_serializes_with_three_or_four_fields() {
     expected.sort_unstable();
     assert_eq!(keys, expected);
     assert_eq!(obj.keys().count(), 2);
+}
+
+#[test]
+fn registry_output_omits_font_paths() {
+    let prior = empty_project();
+    let (_, _, data) = compute_patch(&prior, &args()).expect("happy path");
+
+    assert!(data.families.iter().all(|family| family.path.is_none()));
 }
 
 #[test]

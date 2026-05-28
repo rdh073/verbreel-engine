@@ -3,7 +3,7 @@
 //! Invariant: every font-family lookup must resolve against this single
 //! registry before a text mutation enters state.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
 
 use fontdb::{Database, Source};
@@ -76,14 +76,6 @@ pub fn available() -> Vec<String> {
 fn build_registry() -> Registry {
     let mut db = Database::new();
     db.load_font_data(BUNDLED_INTER_TTF.to_vec());
-
-    let mut bundled_names = HashSet::new();
-    for face in db.faces() {
-        for (name, _) in &face.families {
-            bundled_names.insert(name.clone());
-        }
-    }
-
     db.load_system_fonts();
 
     let mut by_key = BTreeMap::<String, RegistryFamily>::new();
@@ -96,8 +88,8 @@ fn build_registry() -> Registry {
 
             let row = RegistryFamily {
                 name: name.clone(),
-                source: classify_source(&face.source, &bundled_names, name),
-                path: source_path(&face.source),
+                source: classify_source(&face.source),
+                path: None,
             };
             upsert_family(&mut by_key, key, row);
         }
@@ -141,24 +133,10 @@ fn upsert_family(
     }
 }
 
-fn classify_source(
-    source: &Source,
-    bundled_names: &HashSet<String>,
-    family: &str,
-) -> RegistrySource {
-    if bundled_names.contains(family) {
-        return RegistrySource::Bundled;
-    }
+fn classify_source(source: &Source) -> RegistrySource {
     match source {
         Source::Binary(_) => RegistrySource::Bundled,
         Source::File(_) | Source::SharedFile(_, _) => RegistrySource::System,
-    }
-}
-
-fn source_path(source: &Source) -> Option<String> {
-    match source {
-        Source::File(path) | Source::SharedFile(path, _) => Some(path.display().to_string()),
-        Source::Binary(_) => None,
     }
 }
 
