@@ -1,0 +1,301 @@
+{
+  "project_id": "PVT_kwHOD1U4Ys4BYk3J",
+  "fields": [
+    {
+      "name": "Title",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpvi4",
+      "options": null
+    },
+    {
+      "name": "Assignees",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpvi8",
+      "options": null
+    },
+    {
+      "name": "Status",
+      "id": "PVTSSF_lAHOD1U4Ys4BYk3JzhTpvjA",
+      "options": [
+        {
+          "id": "f75ad846",
+          "name": "Backlog"
+        },
+        {
+          "id": "61e4505c",
+          "name": "Ready"
+        },
+        {
+          "id": "47fc9ee4",
+          "name": "In progress"
+        },
+        {
+          "id": "df73e18b",
+          "name": "In review"
+        },
+        {
+          "id": "98236657",
+          "name": "Done"
+        }
+      ]
+    },
+    {
+      "name": "Labels",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpvjE",
+      "options": null
+    },
+    {
+      "name": "Linked pull requests",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpvjI",
+      "options": null
+    },
+    {
+      "name": "Milestone",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpvjM",
+      "options": null
+    },
+    {
+      "name": "Repository",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpvjQ",
+      "options": null
+    },
+    {
+      "name": "Reviewers",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpvjU",
+      "options": null
+    },
+    {
+      "name": "Parent issue",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpvjY",
+      "options": null
+    },
+    {
+      "name": "Sub-issues progress",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpvjc",
+      "options": null
+    },
+    {
+      "name": "Created",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpvjg",
+      "options": null
+    },
+    {
+      "name": "Updated",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpvjk",
+      "options": null
+    },
+    {
+      "name": "Closed",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpvjo",
+      "options": null
+    },
+    {
+      "name": "Priority",
+      "id": "PVTSSF_lAHOD1U4Ys4BYk3JzhTpv2E",
+      "options": [
+        {
+          "id": "79628723",
+          "name": "P0"
+        },
+        {
+          "id": "0a877460",
+          "name": "P1"
+        },
+        {
+          "id": "da944a9c",
+          "name": "P2"
+        }
+      ]
+    },
+    {
+      "name": "Size",
+      "id": "PVTSSF_lAHOD1U4Ys4BYk3JzhTpv2I",
+      "options": [
+        {
+          "id": "6c6483d2",
+          "name": "XS"
+        },
+        {
+          "id": "f784b110",
+          "name": "S"
+        },
+        {
+          "id": "7515a9f1",
+          "name": "M"
+        },
+        {
+          "id": "817d0097",
+          "name": "L"
+        },
+        {
+          "id": "db339eb2",
+          "name": "XL"
+        }
+      ]
+    },
+    {
+      "name": "Estimate",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpv2M",
+      "options": null
+    },
+    {
+      "name": "Start date",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpv2Q",
+      "options": null
+    },
+    {
+      "name": "Target date",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTpv2U",
+      "options": null
+    },
+    {
+      "name": "Spec Section",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTqNKs",
+      "options": null
+    },
+    {
+      "name": "Layer",
+      "id": "PVTSSF_lAHOD1U4Ys4BYk3JzhTqNMM",
+      "options": [
+        {
+          "id": "b85b13fa",
+          "name": "ir"
+        },
+        {
+          "id": "77c98aea",
+          "name": "render"
+        },
+        {
+          "id": "5302d05b",
+          "name": "codec"
+        },
+        {
+          "id": "c841f512",
+          "name": "state"
+        },
+        {
+          "id": "ccc0fde0",
+          "name": "cli"
+        },
+        {
+          "id": "556ff56d",
+          "name": "mcp"
+        },
+        {
+          "id": "079c2541",
+          "name": "http"
+        },
+        {
+          "id": "ba0084b5",
+          "name": "wasm"
+        },
+        {
+          "id": "40386a0e",
+          "name": "storage"
+        },
+        {
+          "id": "ce9df7db",
+          "name": "ai"
+        },
+        {
+          "id": "c119559e",
+          "name": "spec"
+        },
+        {
+          "id": "d78333bc",
+          "name": "docs"
+        },
+        {
+          "id": "7548fb1d",
+          "name": "ci"
+        }
+      ]
+    },
+    {
+      "name": "Crate",
+      "id": "PVTF_lAHOD1U4Ys4BYk3JzhTqNN4",
+      "options": null
+    },
+    {
+      "name": "Spike",
+      "id": "PVTSSF_lAHOD1U4Ys4BYk3JzhTqNN8",
+      "options": [
+        {
+          "id": "de3aaab2",
+          "name": "S1"
+        },
+        {
+          "id": "eeb4ceeb",
+          "name": "S2"
+        },
+        {
+          "id": "671f0b8d",
+          "name": "S3"
+        },
+        {
+          "id": "20dada0b",
+          "name": "N/A"
+        }
+      ]
+    },
+    {
+      "name": "Phase",
+      "id": "PVTSSF_lAHOD1U4Ys4BYk3JzhTqNOc",
+      "options": [
+        {
+          "id": "a031de65",
+          "name": "Phase 0: Bootstrap"
+        },
+        {
+          "id": "b265431a",
+          "name": "Phase 1: Spikes"
+        },
+        {
+          "id": "56c3fd76",
+          "name": "Phase 2: Core"
+        },
+        {
+          "id": "f288992e",
+          "name": "Phase 3: Streaming"
+        },
+        {
+          "id": "93f2bf5b",
+          "name": "Phase 4: AI"
+        },
+        {
+          "id": "b75044c2",
+          "name": "Phase 5: Polish"
+        },
+        {
+          "id": "ecd6eb86",
+          "name": "Phase 6: Release"
+        }
+      ]
+    },
+    {
+      "name": "Codebase",
+      "id": "PVTSSF_lAHOD1U4Ys4BYk3JzhTqNbE",
+      "options": [
+        {
+          "id": "23c24886",
+          "name": "spec"
+        },
+        {
+          "id": "c3d6b75c",
+          "name": "engine"
+        },
+        {
+          "id": "cc6c1e0e",
+          "name": "examples"
+        },
+        {
+          "id": "02f9c35a",
+          "name": "docs"
+        }
+      ]
+    },
+    {
+      "name": "Sprint",
+      "id": "PVTIF_lAHOD1U4Ys4BYk3JzhUAH_0",
+      "options": null
+    }
+  ]
+}
