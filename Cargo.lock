@@ -2827,8 +2827,11 @@ version = "0.1.0"
 dependencies = [
  "fs4",
  "parking_lot",
+ "serde",
+ "serde_json",
  "sha2",
  "tempfile",
+ "thiserror",
  "tracing",
  "verbreel-events",
  "verbreel-types",
