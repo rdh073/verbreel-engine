@@ -351,9 +351,9 @@ fn data_shape_includes_partial_path_when_some() {
 
 /// v1 floor happy-path deferral marker.
 ///
-/// In v1 the queue is always empty (no `render.queue.add` /
-/// `render.start` verb exists yet) so `render.queue.cancel` cannot
-/// resolve any id. The happy path — transitioning a `queued` /
+/// In v1 the queue is always empty (`render.queue.add` always errors
+/// with `E_QUEUE_FULL`) so `render.queue.cancel` cannot resolve any id.
+/// The happy path — transitioning a `queued` /
 /// `running` job to `canceled`, returning a `RenderQueueCancelData`
 /// with `state: "canceled"` and optional `partial_path` — lights up
 /// when the queue persistence layer ships and a `VerbContext` plumbs

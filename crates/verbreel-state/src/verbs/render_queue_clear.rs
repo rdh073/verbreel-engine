@@ -21,9 +21,10 @@
 //! Verbreel processes on the host. The `Verb` trait's purity contract
 //! forbids file I/O in `compute_patch`, so v1 always reports empty
 //! `removed_queue_job_ids` and `canceled_running_job_ids` arrays. This
-//! is also semantically correct in v1: no `render.start` or
-//! `render.queue.add` verb exists yet, so the persistence file is never
-//! written and the queue is empty regardless. Wiring the file mutation
+//! is also semantically correct in v1: `render.queue.add` is a
+//! queue-enqueue floor that always errors with `E_QUEUE_FULL`, so no
+//! successful enqueue is recorded and the persistence file is never
+//! written; the queue is empty regardless. Wiring the file mutation
 //! needs a `VerbContext` / storage facade threaded through
 //! `ProjectStore::mutate_via_verb` — same architectural gap that
 //! `render.queue.list` (§21.2, just shipped) defers queue reads for, and

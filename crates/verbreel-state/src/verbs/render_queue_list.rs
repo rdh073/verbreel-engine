@@ -16,9 +16,10 @@
 //! `~/.verbreel/render-queue.json` persistence file shared across all
 //! Verbreel processes on the host. The `Verb` trait's purity contract
 //! forbids file I/O in `compute_patch`, so v1 always reports an empty
-//! queue. This is also semantically correct in v1: no `render.start` or
-//! `render.queue.add` verb exists yet, so the persistence file is never
-//! written and reading it would always return empty regardless. Wiring
+//! queue. This is also semantically correct in v1: `render.queue.add`
+//! is a queue-enqueue floor that always errors with `E_QUEUE_FULL`, so
+//! no successful enqueue is recorded and the persistence file is never
+//! written. Reading it therefore returns empty regardless. Wiring
 //! the file read needs a `VerbContext` / storage facade threaded through
 //! `ProjectStore::mutate_via_verb` — same architectural gap that
 //! `project.info` defers `event_count` for, `stock.list_providers`
