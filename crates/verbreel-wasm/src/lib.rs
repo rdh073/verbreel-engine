@@ -1,8 +1,11 @@
 //! verbreel-wasm — browser preview engine entry point.
 //!
 //! v0 ships the type surface that the eventual `wasm-bindgen` + wgpu +
-//! `WebCodecs` implementation will satisfy. Every public method routes
-//! to [`WasmError::NotYetImplemented`] until Spike S2 lands the real
+//! `WebCodecs` implementation will satisfy. The exported embedding
+//! scope is [`EmbeddingScope::PreviewOnly`]: browser WASM owns preview
+//! playback/scrubbing, while editor mutation and export remain on the
+//! native/HTTP/MCP surfaces. Every public method routes to
+//! [`WasmError::NotYetImplemented`] until Spike S2 lands the real
 //! browser render path (Research 01 §0 "web preview build" rationale,
 //! §11 spike acceptance criteria).
 //!
@@ -36,7 +39,9 @@
 pub mod engine;
 pub mod error;
 pub mod frame;
+pub mod scope;
 
 pub use engine::EngineHandle;
 pub use error::WasmError;
 pub use frame::run_frame;
+pub use scope::{EMBEDDING_SCOPE_WIRE, EmbeddingScope};
