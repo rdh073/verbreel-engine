@@ -415,6 +415,48 @@ fn mutate_via_verb_non_empty_import_writes_cas_and_records_canonical_hash_path()
     );
 }
 
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_rejects_corrupt_existing_cas_object() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    let source = dir.path().join("sample.srt");
+    std::fs::write(&source, b"1\n00:00:00,000 --> 00:00:00,500\nhi\n").expect("write source file");
+
+    let mut store = ProjectStore::create_with_registry(
+        dir.path(),
+        empty_project(),
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .expect("create_with_registry succeeds");
+
+    let args = json!({"project_id": FIXTURE_PROJECT_ID, "paths": [source.to_string_lossy()]});
+    let outcome = store
+        .mutate_via_verb("asset.import", args.clone(), None)
+        .expect("initial import writes CAS object");
+    let MutateOutcome::Applied { data, .. } = outcome else {
+        panic!("expected Applied outcome for initial asset.import");
+    };
+    let data: AssetImportData =
+        serde_json::from_value(data).expect("asset.import data deserializes");
+    let path = data.assets[0]
+        .get("path")
+        .and_then(Value::as_str)
+        .expect("imported asset has path");
+    std::fs::write(dir.path().join(path), b"corrupt bytes").expect("corrupt CAS object");
+
+    let err = store
+        .mutate_via_verb("asset.import", args, None)
+        .expect_err("corrupt CAS object must be rejected");
+    assert!(
+        err.to_string()
+            .contains("existing CAS object contents do not match expected hash"),
+        "unexpected error: {err}"
+    );
+}
+
 // --- data shape lock --------------------------------------------------------
 
 #[test]

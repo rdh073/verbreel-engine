@@ -297,7 +297,18 @@ pub fn compute_patch_with_root(
             detail: e.to_string(),
         })?;
         let dst = project_root.join(&key.relative_path);
-        if !dst.exists() {
+        if dst.exists() {
+            let existing = fs::read(&dst).map_err(|e| AssetImportError::Io {
+                path: dst.display().to_string(),
+                detail: e.to_string(),
+            })?;
+            if existing != bytes {
+                return Err(AssetImportError::Io {
+                    path: dst.display().to_string(),
+                    detail: "existing CAS object contents do not match expected hash".to_string(),
+                });
+            }
+        } else {
             if let Some(parent) = dst.parent() {
                 fs::create_dir_all(parent).map_err(|e| AssetImportError::Io {
                     path: parent.display().to_string(),
