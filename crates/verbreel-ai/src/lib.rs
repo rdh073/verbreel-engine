@@ -31,8 +31,13 @@
 
 pub mod capability;
 pub mod error;
+pub mod execution_provider;
 pub mod provider;
 
 pub use capability::Capability;
 pub use error::AiError;
+pub use execution_provider::{
+    ExecutionProvider, ORT_AUTO_PROMOTE_ORDER_V1, ORT_AUTO_PROMOTE_ORDER_V1_IDS,
+    ort_auto_promote_order_v1,
+};
 pub use provider::{Provider, run};
