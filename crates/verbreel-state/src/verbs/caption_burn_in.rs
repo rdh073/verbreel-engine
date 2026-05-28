@@ -16,6 +16,7 @@ use verbreel_types::{ClipId, EffectId, ProjectId, Tick, TrackId};
 use crate::clip::Clip;
 use crate::effect::{Effect, EffectKind, EffectWindow};
 use crate::invariants::timeline_duration_tk;
+use crate::newtypes::Color;
 use crate::project::Project;
 use crate::reconstructor::{ReconstructError, Verb, VerbError};
 use crate::track::TrackKind;
@@ -317,14 +318,22 @@ fn resolve_style(style: Option<&StyleArg>) -> Result<Option<Value>, CaptionBurnI
             preset: preset.clone(),
             hint: PRESET_REGISTRY_DEFERRED_HINT,
         }),
-        Some(StyleArg::Object(map)) => {
-            validate_style_object(map)?;
-            Ok(Some(Value::Object(map.clone())))
-        }
+        Some(StyleArg::Object(map)) => Ok(Some(Value::Object(normalize_style_object(map)?))),
     }
 }
 
-fn validate_style_object(map: &Map<String, Value>) -> Result<(), CaptionBurnInError> {
+/// Validate every supplied style leaf through its typed newtype and
+/// return the map with all color leaves normalized to the lowercase
+/// canonical form (§0.5.2). The returned map — not `map` — is what
+/// enters the `burned_caption` effect's `params.style`, so a caller
+/// who passes `#FF0000FF` writes `#ff0000ff` into canonical event data,
+/// matching every other color-bearing verb (`text.add`, `text.style`,
+/// `marker.add`). Each color leaf round-trips through [`Color`] so an
+/// invalid value (`"red"`, missing alpha) is rejected here rather than
+/// reaching the patch unvalidated.
+fn normalize_style_object(
+    map: &Map<String, Value>,
+) -> Result<Map<String, Value>, CaptionBurnInError> {
     for field in map.keys() {
         if !TEXT_STYLE_FIELDS.contains(&field.as_str()) {
             return Err(CaptionBurnInError::StyleSchemaViolation {
@@ -332,7 +341,52 @@ fn validate_style_object(map: &Map<String, Value>) -> Result<(), CaptionBurnInEr
             });
         }
     }
-    Ok(())
+
+    let mut normalized = map.clone();
+
+    for field in ["color", "bg_color", "stroke_color"] {
+        if let Some(value) = normalized.get(field)
+            && !value.is_null()
+        {
+            let color: Color = deserialize_leaf(field, value)?;
+            normalized.insert(
+                field.to_string(),
+                serde_json::to_value(&color).expect("Color serializes to a string"),
+            );
+        }
+    }
+
+    // Only the nested `shadow.color` leaf needs Color normalization.
+    // Deserializing the whole object into `Shadow` would re-emit it with
+    // every default-valued field materialized, injecting `blur_px` /
+    // `offset_x` / `offset_y` the caller never sent — a shape change
+    // beyond this slice's color-normalization scope. Normalize the
+    // `color` key in place and leave the rest of the partial map intact.
+    if let Some(shadow_value) = normalized.get_mut("shadow")
+        && let Some(shadow_map) = shadow_value.as_object_mut()
+        && let Some(color_value) = shadow_map.get("color")
+        && !color_value.is_null()
+    {
+        let color: Color = deserialize_leaf("shadow.color", color_value)?;
+        shadow_map.insert(
+            "color".to_string(),
+            serde_json::to_value(&color).expect("Color serializes to a string"),
+        );
+    }
+
+    Ok(normalized)
+}
+
+/// Deserialize one style leaf into its typed form, mapping any serde
+/// failure (malformed color, malformed shadow) onto the verb's
+/// `E_SCHEMA_VIOLATION` taxonomy.
+fn deserialize_leaf<T>(field: &str, value: &Value) -> Result<T, CaptionBurnInError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_value(value.clone()).map_err(|err| CaptionBurnInError::StyleSchemaViolation {
+        detail: format!("field `{field}` is invalid: {err}"),
+    })
 }
 
 fn track_kind_name(kind: TrackKind) -> &'static str {
