@@ -16,6 +16,7 @@
 
 pub mod backend;
 pub mod event;
+pub mod timestamp;
 
 #[cfg(feature = "native")]
 pub mod native;
@@ -24,7 +25,8 @@ pub mod native;
 pub mod wasm;
 
 pub use backend::{BackendError, EventBackend};
-pub use event::{Event, EventBuilder, EventLine, timestamp_rfc3339_now};
+pub use event::{Event, EventBuilder, EventLine};
+pub use timestamp::{Timestamp, TimestampParseError};
 
 #[cfg(feature = "native")]
 pub use native::NativeBackend;

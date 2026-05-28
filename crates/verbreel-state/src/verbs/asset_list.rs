@@ -15,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
+use verbreel_events::Timestamp;
 use verbreel_types::ProjectId;
 
 use crate::asset::Asset;
@@ -71,7 +72,7 @@ fn asset_kind_str(asset: &Asset) -> &'static str {
     }
 }
 
-fn asset_imported_at(asset: &Asset) -> &str {
+fn asset_imported_at(asset: &Asset) -> &Timestamp {
     match asset {
         Asset::Video(a) => &a.imported_at,
         Asset::Audio(a) => &a.imported_at,

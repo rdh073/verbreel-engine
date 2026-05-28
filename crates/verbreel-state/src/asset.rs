@@ -9,6 +9,7 @@
 //! `kind` field.
 
 use serde::{Deserialize, Serialize};
+use verbreel_events::Timestamp;
 use verbreel_types::AssetId;
 
 use crate::asset_meta::{
@@ -93,12 +94,10 @@ pub struct VideoAsset {
     pub path: AssetPath,
     /// Original filename at import time.
     pub original_filename: String,
-    /// RFC 3339 timestamp of import.
-    ///
-    // TODO(#21 follow-up): swap `String` for a `chrono::DateTime` or
-    // `time::OffsetDateTime` newtype once the workspace picks a time
-    // crate. Same TODO as Project::created_at.
-    pub imported_at: String,
+    /// RFC 3339 timestamp of import. Typed via [`Timestamp`] (issue
+    /// #382): validated on construction, serialized as a date-time
+    /// string.
+    pub imported_at: Timestamp,
     /// Codec / container / fingerprint details.
     pub metadata: VideoAssetMetadata,
 }
@@ -118,8 +117,8 @@ pub struct AudioAsset {
     pub path: AssetPath,
     /// Original filename at import time.
     pub original_filename: String,
-    /// RFC 3339 timestamp of import.
-    pub imported_at: String,
+    /// RFC 3339 timestamp of import. Typed via [`Timestamp`] (issue #382).
+    pub imported_at: Timestamp,
     /// Codec / container / fingerprint details.
     pub metadata: AudioAssetMetadata,
 }
@@ -139,8 +138,8 @@ pub struct ImageAsset {
     pub path: AssetPath,
     /// Original filename at import time.
     pub original_filename: String,
-    /// RFC 3339 timestamp of import.
-    pub imported_at: String,
+    /// RFC 3339 timestamp of import. Typed via [`Timestamp`] (issue #382).
+    pub imported_at: Timestamp,
     /// Dimensions / fingerprint details.
     pub metadata: ImageAssetMetadata,
 }
@@ -160,8 +159,8 @@ pub struct SubtitleAsset {
     pub path: AssetPath,
     /// Original filename at import time.
     pub original_filename: String,
-    /// RFC 3339 timestamp of import.
-    pub imported_at: String,
+    /// RFC 3339 timestamp of import. Typed via [`Timestamp`] (issue #382).
+    pub imported_at: Timestamp,
     /// Format / language / fingerprint details.
     pub metadata: SubtitleAssetMetadata,
 }

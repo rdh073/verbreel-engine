@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
+use verbreel_events::Timestamp;
 use verbreel_types::{EventId, ProjectId, TICK_RATE_HZ, Tick};
 
 use crate::asset::Asset;
@@ -53,17 +54,15 @@ pub struct Project {
     /// Human display name.
     pub name: String,
 
-    /// RFC 3339 timestamp of project creation.
-    ///
-    // TODO(#19 follow-up): replace `String` with a `chrono::DateTime`
-    // or `time::OffsetDateTime` newtype once the time crate is wired
-    // into the workspace.
-    pub created_at: String,
+    /// RFC 3339 timestamp of project creation. Typed via [`Timestamp`]
+    /// (issue #382): construction validates RFC 3339 and serde keeps the
+    /// `"format": "date-time"` string shape on disk.
+    pub created_at: Timestamp,
 
     /// RFC 3339 timestamp of the last in-memory mutation. **Stripped
     /// from `project_hash`** per the `verbreel-canon` projection rule
     /// — two projects identical apart from `updated_at` hash equally.
-    pub updated_at: String,
+    pub updated_at: Timestamp,
 
     /// Canvas geometry and background.
     pub canvas: Canvas,

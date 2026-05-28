@@ -60,7 +60,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
-use verbreel_events::timestamp_rfc3339_now;
+use verbreel_events::Timestamp;
 use verbreel_types::ProjectId;
 
 use crate::project::Project;
@@ -257,7 +257,7 @@ pub fn duplicate(
     // non-null id pointing at a source event would fail the
     // duplicate's first project.open consistency check.
     let new_id = ProjectId::now();
-    let now = timestamp_rfc3339_now();
+    let now = Timestamp::now();
     project.id = new_id;
     project.created_at.clone_from(&now);
     project.updated_at = now;

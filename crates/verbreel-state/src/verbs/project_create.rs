@@ -88,7 +88,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use verbreel_events::timestamp_rfc3339_now;
+use verbreel_events::Timestamp;
 use verbreel_types::{ProjectId, TICK_RATE_HZ, Tick, TrackId};
 
 use crate::canvas::Canvas;
@@ -377,7 +377,7 @@ pub fn create(args: &ProjectCreateArgs) -> Result<ProjectCreateData, ProjectCrea
     let audio_track_id = TrackId::now();
 
     // Step 4: build the initial graph.
-    let now = timestamp_rfc3339_now();
+    let now = Timestamp::now();
     let project = Project {
         id: project_id,
         schema_version: SCHEMA_VERSION.to_string(),

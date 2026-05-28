@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use verbreel_types::EventId;
 
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use crate::timestamp::Timestamp;
 
 /// A single event log line — Appendix C minimal-but-real shape.
 ///
@@ -34,8 +34,11 @@ pub struct Event {
     /// layer registers known verbs; this crate keeps the field opaque.
     pub verb: String,
 
-    /// RFC 3339 timestamp (`OffsetDateTime::now_utc()` formatted).
-    pub ts: String,
+    /// Canonical RFC 3339 timestamp. Typed via [`Timestamp`] so the
+    /// value is validated on construction and serialized transparently
+    /// as a JSON string — no un-normalized RFC 3339 can reach the
+    /// event-data wire form.
+    pub ts: Timestamp,
 
     /// Verb args bag. Opaque at this slice — verb-arg typing lands per-
     /// verb in Phase 3. Empty `{}` is acceptable for verbs with no args.
@@ -63,15 +66,15 @@ pub struct Event {
 
 impl Event {
     /// Construct a fresh event with `id = EventId::now()` and
-    /// `ts = OffsetDateTime::now_utc().format(Rfc3339)`. `args` and
-    /// `patch` come from the verb-layer; `warnings`, `idempotency_key`,
-    /// `parent_event_id` default to empty / None.
+    /// `ts = Timestamp::now()`. `args` and `patch` come from the
+    /// verb-layer; `warnings`, `idempotency_key`, `parent_event_id`
+    /// default to empty / None.
     #[must_use]
     pub fn new(verb: impl Into<String>, args: Value, patch: json_patch::Patch) -> Self {
         Self {
             id: EventId::now(),
             verb: verb.into(),
-            ts: timestamp_rfc3339_now(),
+            ts: Timestamp::now(),
             args,
             patch,
             warnings: Vec::new(),
@@ -147,7 +150,7 @@ impl EventBuilder {
         Event {
             id: EventId::now(),
             verb: self.verb.unwrap_or_default(),
-            ts: timestamp_rfc3339_now(),
+            ts: Timestamp::now(),
             args: self.args.unwrap_or(Value::Null),
             patch: self.patch.unwrap_or_else(|| json_patch::Patch(Vec::new())),
             warnings: self.warnings.unwrap_or_default(),
@@ -159,26 +162,6 @@ impl EventBuilder {
 
 /// A line as serialized bytes (no trailing `\n`).
 pub type EventLine = Vec<u8>;
-
-/// RFC 3339 UTC timestamp from system time, via [`time::OffsetDateTime`].
-///
-/// Replaces the v0 placeholder which used a hand-rolled day-counter that
-/// ignored leap years. The `time` crate handles every calendrical edge.
-///
-/// # Panics
-///
-/// Panics only if `time::OffsetDateTime::now_utc()` produces a value
-/// that the RFC 3339 well-known format can't render — this is an
-/// upstream invariant of the `time` crate (the format spec is a
-/// compile-time constant, the date is always valid) and treated here
-/// as a "would-indicate-an-upstream-bug" expectation rather than a
-/// runtime error worth propagating.
-#[must_use]
-pub fn timestamp_rfc3339_now() -> String {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .expect("Rfc3339 format of OffsetDateTime::now_utc is infallible")
-}
 
 #[cfg(test)]
 mod tests {
@@ -208,17 +191,13 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_is_rfc3339_shape() {
-        let ts = timestamp_rfc3339_now();
-        // RFC 3339 form: YYYY-MM-DDTHH:MM:SS[.fraction]Z or with offset
-        assert!(ts.contains('T'), "ts must contain 'T' separator");
-        // Either ends with Z or has a `+HH:MM`/`-HH:MM` offset.
-        assert!(
-            ts.ends_with('Z') || ts.matches(':').count() >= 3,
-            "ts must end with Z or carry an offset: {ts}"
-        );
-        // Parses back via the `time` crate's Rfc3339.
-        let _ = OffsetDateTime::parse(&ts, &Rfc3339).expect("ts must parse as RFC 3339");
+    fn event_ts_is_typed_timestamp() {
+        let ev = EventBuilder::new().verb("clip.add").build();
+        // `ev.ts` is a `Timestamp`, not a `String` — it validated on
+        // construction. Re-parsing its canonical form must succeed.
+        let s = ev.ts.as_str().to_string();
+        assert!(s.contains('T'), "ts must contain 'T' separator");
+        let _ = Timestamp::parse(s).expect("event ts must be valid RFC 3339");
     }
 
     #[test]

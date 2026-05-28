@@ -54,6 +54,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
+use verbreel_events::Timestamp;
 use verbreel_types::ProjectId;
 
 use crate::project::Project;
@@ -115,8 +116,9 @@ pub struct ProjectInfoData {
     pub asset_count: u32,
     /// Total events.jsonl line count. **Deferred** — see module-level docs.
     pub event_count: u32,
-    /// RFC 3339 timestamp of the last in-memory mutation.
-    pub updated_at: String,
+    /// RFC 3339 timestamp of the last in-memory mutation. Typed via
+    /// [`Timestamp`]; serializes as the spec's `updated_at: string`.
+    pub updated_at: Timestamp,
 }
 
 /// Verb-level error type for `project.info`.

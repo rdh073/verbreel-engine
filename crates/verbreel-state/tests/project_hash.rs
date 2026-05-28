@@ -8,6 +8,7 @@
 
 use serde_json::Value;
 use verbreel_canon::project_hash;
+use verbreel_events::Timestamp;
 use verbreel_state::Project;
 use verbreel_types::{EventId, UuidV7};
 
@@ -45,7 +46,7 @@ fn project_hash_ignores_updated_at_and_last_saved_event_id() {
 
     // Mutate `updated_at` — projection rule strips this before
     // canonicalization, so the hash must NOT change.
-    p1.updated_at = "9999-12-31T23:59:59Z".to_string();
+    p1.updated_at = Timestamp::parse("9999-12-31T23:59:59Z").unwrap();
     let h_after_updated_at = hash_of(&p1);
     assert_eq!(
         h_baseline, h_after_updated_at,
