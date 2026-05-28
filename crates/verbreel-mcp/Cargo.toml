@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lib]
+name = "verbreel_mcp"
+path = "src/lib.rs"
+
 [[bin]]
 name = "verbreel_mcp"
 path = "src/main.rs"
@@ -19,3 +23,10 @@ rmcp.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# Used in tests/tools.rs to mint a caller-supplied project_id and
+# confirm dispatch() preserves it (does not overwrite with the
+# internally-synthesised id).
+uuid.workspace = true
