@@ -216,7 +216,7 @@ pub fn compute_patch(
 
     let mut text = resolve_style(args.style.as_ref())?;
     text.content.clone_from(&args.content);
-    validate_font_family(&text.font_family)?;
+    text.font_family = resolve_font_family(&text.font_family)?;
 
     let (target, maybe_new_track) = resolve_target_track(prior, args.track.as_deref())?;
     let target_clips = if target.auto_created {
@@ -422,14 +422,13 @@ fn validate_style_object(map: &Map<String, Value>) -> Result<(), TextAddError> {
     Ok(())
 }
 
-fn validate_font_family(font_family: &str) -> Result<(), TextAddError> {
-    if font_registry::resolve(font_family).is_some() {
-        return Ok(());
-    }
-    Err(TextAddError::FontUnknown {
-        family: font_family.to_string(),
-        available: font_registry::available(),
-    })
+fn resolve_font_family(font_family: &str) -> Result<String, TextAddError> {
+    font_registry::resolve(font_family)
+        .map(|family| family.name)
+        .ok_or_else(|| TextAddError::FontUnknown {
+            family: font_family.to_string(),
+            available: font_registry::available(),
+        })
 }
 
 fn style_schema_violation(detail: impl Into<String>) -> TextAddError {

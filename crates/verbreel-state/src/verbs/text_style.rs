@@ -163,14 +163,13 @@ fn validate_shadow(shadow: &Shadow) -> Result<(), TextStyleError> {
     Ok(())
 }
 
-fn validate_font_family(font_family: &str) -> Result<(), TextStyleError> {
-    if font_registry::resolve(font_family).is_some() {
-        return Ok(());
-    }
-    Err(TextStyleError::FontUnknown {
-        family: font_family.to_string(),
-        available: font_registry::available(),
-    })
+fn resolve_font_family(font_family: &str) -> Result<String, TextStyleError> {
+    font_registry::resolve(font_family)
+        .map(|family| family.name)
+        .ok_or_else(|| TextStyleError::FontUnknown {
+            family: font_family.to_string(),
+            available: font_registry::available(),
+        })
 }
 
 fn f64_changed(next: f64, current: f64) -> bool {
@@ -321,7 +320,7 @@ pub fn compute_patch(
 
     if let Some(value) = style.get("font_family") {
         let font_family: String = deserialize_leaf("font_family", value)?;
-        validate_font_family(&font_family)?;
+        let font_family = resolve_font_family(&font_family)?;
         if font_family != current_text.font_family {
             push_text_op(&mut ops, t_idx, c_idx, "font_family", &font_family)?;
             next_text.font_family = font_family;

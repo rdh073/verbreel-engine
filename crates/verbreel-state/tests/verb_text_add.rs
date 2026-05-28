@@ -415,6 +415,27 @@ fn unknown_font_family_errors_font_unknown_with_available_list() {
 }
 
 #[test]
+fn style_font_family_is_stored_as_canonical_registry_name() {
+    let prior = project_with_tracks(vec![text_track(TRACK_TEXT_A, "Text 1", false, vec![])]);
+    let mut args = text_add_args();
+    args.style = Some(style_object(json!({
+        "font_family": "  inter  ",
+    })));
+
+    let (patch, _warnings, _data) = compute_patch(&prior, &args).expect("text.add");
+    let post = apply_patch(&prior, patch);
+
+    assert_eq!(
+        added_text_clip(&post, 0)
+            .text
+            .as_ref()
+            .expect("text")
+            .font_family,
+        "Inter"
+    );
+}
+
+#[test]
 fn overlapping_clip_errors_clip_overlap() {
     let prior = project_with_tracks(vec![text_track(
         TRACK_TEXT_A,
