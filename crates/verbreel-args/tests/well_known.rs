@@ -5,8 +5,9 @@
 
 use serde_json::{Value, json};
 use verbreel_args::well_known::{
-    ASSET_LIST_SCHEMA, FONT_LIST_SCHEMA, HELP_SCHEMA, LIST_CAPABILITIES_SCHEMA,
-    PROJECT_LIST_SCHEMA, default_registry,
+    ASSET_LIST_SCHEMA, CLIP_LIST_SCHEMA, COMPOUND_FLATTEN_SCHEMA, FONT_LIST_SCHEMA, HELP_SCHEMA,
+    KEYFRAME_LIST_SCHEMA, LIST_CAPABILITIES_SCHEMA, PROJECT_LIST_SCHEMA, TIMELINE_HISTORY_SCHEMA,
+    TIMELINE_UNDO_SCHEMA, TRACKER_LIST_SCHEMA, default_registry,
 };
 use verbreel_args::{Schema, ValidationError, validate};
 
@@ -23,24 +24,33 @@ fn compile(raw: &str) -> Schema {
 
 // --- 1. Every schema compiles -------------------------------------------
 
+/// Every schema literal shipped by the module, paired with its verb id.
+/// New entries land here so the compile / valid-JSON-object contracts
+/// cover them without per-schema boilerplate.
+const ALL_SCHEMAS: &[(&str, &str)] = &[
+    ("help", HELP_SCHEMA),
+    ("project.list", PROJECT_LIST_SCHEMA),
+    ("list_capabilities", LIST_CAPABILITIES_SCHEMA),
+    ("font.list", FONT_LIST_SCHEMA),
+    ("asset.list", ASSET_LIST_SCHEMA),
+    ("tracker.list", TRACKER_LIST_SCHEMA),
+    ("compound.flatten", COMPOUND_FLATTEN_SCHEMA),
+    ("timeline.undo", TIMELINE_UNDO_SCHEMA),
+    ("timeline.history", TIMELINE_HISTORY_SCHEMA),
+    ("keyframe.list", KEYFRAME_LIST_SCHEMA),
+    ("clip.list", CLIP_LIST_SCHEMA),
+];
+
 #[test]
 fn every_well_known_schema_compiles() {
-    let _ = compile(HELP_SCHEMA);
-    let _ = compile(PROJECT_LIST_SCHEMA);
-    let _ = compile(LIST_CAPABILITIES_SCHEMA);
-    let _ = compile(FONT_LIST_SCHEMA);
-    let _ = compile(ASSET_LIST_SCHEMA);
+    for (_verb, raw) in ALL_SCHEMAS {
+        let _ = compile(raw);
+    }
 }
 
 #[test]
 fn schema_literals_are_valid_json_objects() {
-    for raw in [
-        HELP_SCHEMA,
-        PROJECT_LIST_SCHEMA,
-        LIST_CAPABILITIES_SCHEMA,
-        FONT_LIST_SCHEMA,
-        ASSET_LIST_SCHEMA,
-    ] {
+    for (_verb, raw) in ALL_SCHEMAS {
         let value = parse(raw);
         assert!(
             value.is_object(),
@@ -52,21 +62,15 @@ fn schema_literals_are_valid_json_objects() {
 // --- 2. default_registry shape ------------------------------------------
 
 #[test]
-fn default_registry_contains_exactly_five_entries() {
+fn default_registry_contains_one_entry_per_well_known_schema() {
     let registry = default_registry();
-    assert_eq!(registry.len(), 5);
+    assert_eq!(registry.len(), ALL_SCHEMAS.len());
 }
 
 #[test]
 fn default_registry_resolves_every_verb_id() {
     let registry = default_registry();
-    for verb in [
-        "help",
-        "project.list",
-        "list_capabilities",
-        "font.list",
-        "asset.list",
-    ] {
+    for (verb, _raw) in ALL_SCHEMAS {
         assert!(
             registry.get(verb).is_some(),
             "default_registry must resolve verb `{verb}`"
@@ -347,3 +351,274 @@ fn asset_list_kind_accepts_null() {
     )
     .expect("asset.list schema must accept kind: null");
 }
+
+// --- 11. Sprint-2 minimal-args slice (table-driven) ---------------------
+//
+// Each newly-registered verb is exercised by one table of (label,
+// payload, expectation) rows: at least one accept-case and the
+// relevant reject-cases (missing required field, unknown key, wrong
+// type). `Expect::Ok` asserts the payload validates; `Expect::Schema`
+// asserts a `ValidationError::SchemaViolation`. Adding a verb = adding
+// a `case![...]` block, no new test fn.
+
+enum Expect {
+    Ok,
+    Schema,
+}
+
+macro_rules! case {
+    ($name:ident, $verb:expr, [ $( ($label:expr, $payload:expr, $exp:expr) ),+ $(,)? ]) => {
+        #[test]
+        fn $name() {
+            let registry = default_registry();
+            $(
+                let payload: Value = $payload;
+                let outcome = validate($verb, &payload, &registry);
+                match $exp {
+                    Expect::Ok => {
+                        outcome.unwrap_or_else(|e| {
+                            panic!("{}: `{}` must validate, got error: {e:?}", $verb, $label)
+                        });
+                    }
+                    Expect::Schema => {
+                        let err = outcome.expect_err(&format!(
+                            "{}: `{}` must be rejected, but validated",
+                            $verb, $label
+                        ));
+                        assert!(
+                            matches!(err, ValidationError::SchemaViolation { .. }),
+                            "{}: `{}` must fail with SchemaViolation, got: {err:?}",
+                            $verb,
+                            $label
+                        );
+                    }
+                }
+            )+
+        }
+    };
+}
+
+case!(
+    tracker_list_table,
+    "tracker.list",
+    [
+        ("uuid-only", json!({ "project_id": VALID_UUID }), Expect::Ok),
+        ("missing project_id", json!({}), Expect::Schema),
+        (
+            "project_id wrong type",
+            json!({ "project_id": 42 }),
+            Expect::Schema
+        ),
+        (
+            "unknown key",
+            json!({ "project_id": VALID_UUID, "extra": 1 }),
+            Expect::Schema
+        ),
+    ]
+);
+
+case!(
+    compound_flatten_table,
+    "compound.flatten",
+    [
+        (
+            "uuid + clip",
+            json!({ "project_id": VALID_UUID, "clip": "01900000-0000-7000-8000-0000000000aa" }),
+            Expect::Ok
+        ),
+        (
+            "clip prefix selector",
+            json!({ "project_id": VALID_UUID, "clip": "clip:01900000-0000-7000-8000-0000000000aa" }),
+            Expect::Ok
+        ),
+        (
+            "missing clip",
+            json!({ "project_id": VALID_UUID }),
+            Expect::Schema
+        ),
+        ("missing project_id", json!({ "clip": "x" }), Expect::Schema),
+        (
+            "clip wrong type",
+            json!({ "project_id": VALID_UUID, "clip": 7 }),
+            Expect::Schema
+        ),
+        (
+            "unknown key",
+            json!({ "project_id": VALID_UUID, "clip": "x", "extra": true }),
+            Expect::Schema
+        ),
+    ]
+);
+
+case!(
+    timeline_undo_table,
+    "timeline.undo",
+    [
+        (
+            "uuid-only (steps omitted)",
+            json!({ "project_id": VALID_UUID }),
+            Expect::Ok
+        ),
+        (
+            "steps = 1",
+            json!({ "project_id": VALID_UUID, "steps": 1 }),
+            Expect::Ok
+        ),
+        (
+            "steps = 5",
+            json!({ "project_id": VALID_UUID, "steps": 5 }),
+            Expect::Ok
+        ),
+        (
+            "steps null",
+            json!({ "project_id": VALID_UUID, "steps": null }),
+            Expect::Ok
+        ),
+        (
+            "steps = 0 below minimum",
+            json!({ "project_id": VALID_UUID, "steps": 0 }),
+            Expect::Schema
+        ),
+        (
+            "steps negative",
+            json!({ "project_id": VALID_UUID, "steps": -3 }),
+            Expect::Schema
+        ),
+        (
+            "steps non-integer",
+            json!({ "project_id": VALID_UUID, "steps": "two" }),
+            Expect::Schema
+        ),
+        ("missing project_id", json!({ "steps": 1 }), Expect::Schema),
+        (
+            "unknown key",
+            json!({ "project_id": VALID_UUID, "limit": 10 }),
+            Expect::Schema
+        ),
+    ]
+);
+
+case!(
+    timeline_history_table,
+    "timeline.history",
+    [
+        ("uuid-only", json!({ "project_id": VALID_UUID }), Expect::Ok),
+        (
+            "all optional fields",
+            json!({ "project_id": VALID_UUID, "limit": 50, "since": "empty", "include_undone": true }),
+            Expect::Ok
+        ),
+        (
+            "all optional null",
+            json!({ "project_id": VALID_UUID, "limit": null, "since": null, "include_undone": null }),
+            Expect::Ok
+        ),
+        ("missing project_id", json!({ "limit": 10 }), Expect::Schema),
+        (
+            "limit wrong type",
+            json!({ "project_id": VALID_UUID, "limit": "10" }),
+            Expect::Schema
+        ),
+        (
+            "since wrong type",
+            json!({ "project_id": VALID_UUID, "since": 1 }),
+            Expect::Schema
+        ),
+        (
+            "include_undone wrong type",
+            json!({ "project_id": VALID_UUID, "include_undone": "yes" }),
+            Expect::Schema
+        ),
+        (
+            "unknown key",
+            json!({ "project_id": VALID_UUID, "stranger": 1 }),
+            Expect::Schema
+        ),
+    ]
+);
+
+case!(
+    keyframe_list_table,
+    "keyframe.list",
+    [
+        (
+            "uuid + clip",
+            json!({ "project_id": VALID_UUID, "clip": "01900000-0000-7000-8000-0000000000bb" }),
+            Expect::Ok
+        ),
+        (
+            "with property filter",
+            json!({ "project_id": VALID_UUID, "clip": "01900000-0000-7000-8000-0000000000bb", "property": "transform.scale" }),
+            Expect::Ok
+        ),
+        (
+            "property null",
+            json!({ "project_id": VALID_UUID, "clip": "01900000-0000-7000-8000-0000000000bb", "property": null }),
+            Expect::Ok
+        ),
+        (
+            "missing clip",
+            json!({ "project_id": VALID_UUID }),
+            Expect::Schema
+        ),
+        ("missing project_id", json!({ "clip": "x" }), Expect::Schema),
+        (
+            "clip wrong type",
+            json!({ "project_id": VALID_UUID, "clip": 9 }),
+            Expect::Schema
+        ),
+        (
+            "property wrong type",
+            json!({ "project_id": VALID_UUID, "clip": "x", "property": 9 }),
+            Expect::Schema
+        ),
+        (
+            "unknown key",
+            json!({ "project_id": VALID_UUID, "clip": "x", "extra": 1 }),
+            Expect::Schema
+        ),
+    ]
+);
+
+case!(
+    clip_list_table,
+    "clip.list",
+    [
+        ("uuid-only", json!({ "project_id": VALID_UUID }), Expect::Ok),
+        (
+            "with track filter",
+            json!({ "project_id": VALID_UUID, "track": "01900000-0000-7000-8000-0000000000cc" }),
+            Expect::Ok
+        ),
+        (
+            "with at_tk filter",
+            json!({ "project_id": VALID_UUID, "at_tk": 4800 }),
+            Expect::Ok
+        ),
+        (
+            "both filters null",
+            json!({ "project_id": VALID_UUID, "track": null, "at_tk": null }),
+            Expect::Ok
+        ),
+        (
+            "missing project_id",
+            json!({ "track": "x" }),
+            Expect::Schema
+        ),
+        (
+            "track wrong type",
+            json!({ "project_id": VALID_UUID, "track": 1 }),
+            Expect::Schema
+        ),
+        (
+            "at_tk non-integer",
+            json!({ "project_id": VALID_UUID, "at_tk": "4800" }),
+            Expect::Schema
+        ),
+        (
+            "unknown key",
+            json!({ "project_id": VALID_UUID, "limit": 10 }),
+            Expect::Schema
+        ),
+    ]
+);
