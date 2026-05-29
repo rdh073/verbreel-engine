@@ -26,7 +26,8 @@
 //!   [`FadeCurve`] / [`BlendMode`] / [`MaskKind`] enums +
 //!   [`ClipMask`] / [`SpeedCurvePoint`] (Phase 2 third slice).
 //! - [`Effect`] + [`EffectKind`] + [`EffectWindow`] (Phase 2 fourth
-//!   slice). [`Clip::effects`] is now `Vec<Effect>`.
+//!   slice). [`Clip::effects`] and [`Track::effects`] are now
+//!   `Vec<Effect>`.
 //! - [`Keyframe`] + [`KeyframeProperty`] + [`Easing`] (Phase 2 fifth
 //!   slice). [`Clip::keyframes`] is now `Vec<Keyframe>`. Every
 //!   nested `$def` in `spec/project-schema.json` is now typed.
@@ -36,10 +37,6 @@
 //!
 //! ## What's deferred (follow-up slices)
 //!
-//! - `Effect` typing on tracks (currently `Vec<serde_json::Value>`
-//!   placeholder on [`Track::effects`] — replacement coupled with
-//!   track-level effects work in a future slice; the Effect slice
-//!   only replaced [`Clip::effects`] per task scope).
 //! - Event-log integration (§0.8 write-ordering).
 //! - §0.13 invariant enforcement (track contiguity, no-overlap,
 //!   fade clamp, asset hash uniqueness, `AssetPath` prefix-of-hash,

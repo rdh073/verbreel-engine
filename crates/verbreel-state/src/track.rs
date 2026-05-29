@@ -2,10 +2,10 @@
 //! `spec/project-schema.json`.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use verbreel_types::TrackId;
 
 use crate::clip::Clip;
+use crate::effect::Effect;
 
 /// The kind of a track. Spec `$defs/Track::kind` enum.
 ///
@@ -82,12 +82,11 @@ pub struct Track {
     #[serde(default)]
     pub pan: f64,
 
-    /// Track-level effects (adjustment layers). Default `[]`.
-    ///
-    // TODO(#19 follow-up): replace `Vec<serde_json::Value>` with
-    // `Vec<Effect>` once `Effect` is typed.
+    /// Track-level effects (adjustment layers). Default `[]`. Typed
+    /// [`Effect`] records; on-disk JSON shape is identical to the clip
+    /// effects array (`$defs/Effect`).
     #[serde(default)]
-    pub effects: Vec<Value>,
+    pub effects: Vec<Effect>,
 }
 
 fn default_volume() -> f64 {
