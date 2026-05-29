@@ -191,7 +191,7 @@ pub enum ProjectDuplicateError {
 /// 7. Walk `<source>/assets/` recursively. Each file: `hard_link`,
 ///    fall back to `copy` on `EXDEV`. Subdirs are mirrored.
 /// 8. Atomic-write the mutated `Project` to `<dest>/project.json`
-///    via `NamedTempFile::new_in(<dest>) + persist + parent fsync`.
+///    via `verbreel_storage::fs::atomic_write_bytes`.
 /// 9. Create empty `<dest>/.verbreel/events.jsonl` (touched +
 ///    fsync'd; no flock — duplicate is not opened by this call).
 /// 10. On any failure in steps 6-9, recursively delete `<dest>`
