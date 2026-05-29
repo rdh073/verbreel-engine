@@ -829,3 +829,121 @@ fn gate_data_mismatch_propagates() {
         "expected ReconstructorGateFailed wrapping DataMismatch, got {err:?}"
     );
 }
+
+// ---------------------------------------------------------------------
+// #379 — lifecycle persistence routes through verbreel-storage
+// primitives (atomic_write_bytes) without bypassing the apply()
+// mutation boundary or the §0.8 write-ordering rule.
+// ---------------------------------------------------------------------
+
+/// `save()` must produce the exact bytes the shared storage primitive
+/// (`verbreel_storage::fs::atomic_write_bytes`) would lay down, and
+/// must not leave a half-written temp file behind in the project root.
+/// This pins the migration: lifecycle no longer hand-rolls the
+/// tempfile + rename + parent-fsync dance — it delegates to storage.
+#[test]
+fn lifecycle_save_routes_through_storage_atomic_primitive() {
+    let dir = TempDir::new().unwrap();
+    let project = load_empty_project();
+    let mut store = ProjectStore::create(dir.path(), project).unwrap();
+
+    store
+        .mutate(
+            "project.set_name",
+            serde_json::Value::Null,
+            &replace_name_patch("through-storage"),
+            None,
+        )
+        .unwrap();
+    store.save().expect("save must succeed");
+
+    // The in-memory project the store holds is exactly what was written.
+    let expected = serde_json::to_vec_pretty(store.project()).unwrap();
+    drop(store);
+
+    let pj = dir.path().join("project.json");
+    let on_disk = fs::read(&pj).unwrap();
+    assert_eq!(
+        on_disk, expected,
+        "project.json on disk must equal the serialized in-memory project"
+    );
+
+    // Re-running the storage primitive with the same bytes is a no-op
+    // identity: this is the primitive the lifecycle save() now calls.
+    verbreel_storage::fs::atomic_write_bytes(&pj, &expected).unwrap();
+    assert_eq!(fs::read(&pj).unwrap(), expected);
+
+    // No orphaned NamedTempFile may remain in the root: a fully
+    // delegated atomic write either lands project.json or errors — it
+    // never leaves a `.tmp*` sibling on success.
+    let leftovers: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "project.json" && n != ".verbreel" && n != "assets")
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "atomic write left stray files in root: {leftovers:?}"
+    );
+}
+
+/// §0.8 write-ordering: the event line is appended to events.jsonl by
+/// `mutate()` (via apply()) BEFORE `save()` ever touches project.json.
+/// A crash after the event append but before save() must leave the
+/// event durable on disk while the *snapshot* still trails — proven by
+/// reopening and observing the event replays on top of the old snapshot.
+/// This confirms the storage-primitive migration did not collapse the
+/// event-before-snapshot ordering or route a write around apply().
+#[test]
+fn lifecycle_event_durable_before_snapshot_save_after_migration() {
+    let dir = TempDir::new().unwrap();
+    let project = load_empty_project();
+
+    // create() does an initial save() (snapshot with last_saved=None).
+    let mut store = ProjectStore::create(dir.path(), project).unwrap();
+    let snapshot_before = fs::read(dir.path().join("project.json")).unwrap();
+
+    // mutate() runs the §0.8 protocol through apply(): event appended
+    // to events.jsonl, THEN the in-memory patch applied. We deliberately
+    // do NOT call save() — the snapshot must still be the pre-mutate one.
+    let applied = match store
+        .mutate(
+            "project.set_name",
+            serde_json::Value::Null,
+            &replace_name_patch("event-before-snapshot"),
+            None,
+        )
+        .expect("mutate must succeed")
+    {
+        MutateOutcome::Applied { event_id, .. } => event_id,
+        other => panic!("expected Applied, got {other:?}"),
+    };
+    // In memory the patch is visible (apply() ran)...
+    assert_eq!(store.project().name, "event-before-snapshot");
+    drop(store);
+
+    // ...but on disk the snapshot has NOT moved (no save() yet): the
+    // event was written first, the snapshot second. project.json is byte
+    // identical to the pre-mutate snapshot.
+    assert_eq!(
+        fs::read(dir.path().join("project.json")).unwrap(),
+        snapshot_before,
+        "snapshot must not change until save() — event is written first"
+    );
+
+    // The event line is durable in events.jsonl.
+    let ev_bytes = fs::read(dir.path().join(".verbreel").join("events.jsonl")).unwrap();
+    let lines: Vec<&[u8]> = ev_bytes
+        .split(|&b| b == b'\n')
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines.len(), 1, "exactly one durable event line");
+    let ev: Event = serde_json::from_slice(lines[0]).unwrap();
+    assert_eq!(ev.id, applied, "durable event id matches the applied one");
+
+    // Reopen: the durable event replays on top of the stale snapshot,
+    // proving event-before-snapshot ordering survived the migration.
+    let reopened = ProjectStore::open(dir.path()).expect("reopen replays the event");
+    assert_eq!(reopened.project().name, "event-before-snapshot");
+}

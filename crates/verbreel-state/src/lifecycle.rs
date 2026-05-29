@@ -9,8 +9,10 @@
 //! - `project.open` replays post-save events on top of the snapshot per
 //!   §2.2's 6-step load workflow.
 //! - Torn-line recovery via [`EventBackend::truncate`].
-//! - Atomic project.json writes via [`tempfile::NamedTempFile::persist`]
-//!   + parent-dir fsync.
+//! - Atomic project.json writes via
+//!   [`verbreel_storage::fs::atomic_write_bytes`] (tempfile + rename +
+//!   parent-dir fsync) — the shared storage primitive, not a per-call
+//!   re-derivation of the rename dance.
 //!
 //! ## What this module does NOT do
 //!
@@ -36,13 +38,11 @@
 //! - Appendix C — events.jsonl line shape.
 //! - Appendix D — file layout.
 
-use std::fs::{self, File};
-use std::io::Write as _;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use tempfile::NamedTempFile;
 use tracing::warn;
 use verbreel_events::{BackendError, Event, EventBackend, EventBuilder, NativeBackend};
 use verbreel_types::EventId;
@@ -1021,12 +1021,16 @@ impl ProjectStore {
     /// 1. Update `self.project.last_saved_event_id` ←
     ///    `self.last_applied_event_id` (no-op when zero mutations).
     /// 2. Serialize `&self.project` to bytes.
-    /// 3. `NamedTempFile::new_in(<root>)` → write bytes → `sync_data`.
-    /// 4. `tempfile.persist(<root>/project.json)` — POSIX rename is
-    ///    atomic when source + dest are on the same filesystem (which
-    ///    they always are here because we used `new_in(<root>)`).
-    /// 5. `fsync(<root>)` so the rename itself is durable.
-    /// 6. Return [`SaveInfo`].
+    /// 3. Hand the bytes to [`verbreel_storage::fs::atomic_write_bytes`],
+    ///    which performs the tempfile → write → `sync_data` → rename →
+    ///    parent-dir fsync sequence. Routing through the shared storage
+    ///    primitive keeps the atomicity/durability contract uniform with
+    ///    `asset.import` and the project-index writer rather than
+    ///    re-deriving the rename dance per call site.
+    /// 4. Return [`SaveInfo`].
+    ///
+    /// This is read-only with respect to `events.jsonl` (§2.3) — no event
+    /// is written and the §0.8 `mutate()` ordering is untouched.
     ///
     /// # Errors
     ///
@@ -1041,16 +1045,8 @@ impl ProjectStore {
         })?;
         let bytes_written = bytes.len() as u64;
 
-        let mut tmp = NamedTempFile::new_in(&self.root)?;
-        tmp.as_file_mut().write_all(&bytes)?;
-        tmp.as_file_mut().sync_data()?;
         let target = self.root.join("project.json");
-        tmp.persist(&target)
-            .map_err(|e| LifecycleError::Io(e.error))?;
-
-        // Parent-dir fsync — POSIX guarantee that the rename is durable.
-        let dir = File::open(&self.root)?;
-        dir.sync_data()?;
+        verbreel_storage::fs::atomic_write_bytes(&target, &bytes)?;
 
         Ok(SaveInfo {
             path: target,
