@@ -55,11 +55,9 @@
 //!   file. When it lands, add the copy here.
 
 use std::fs::{self, File};
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tempfile::NamedTempFile;
 use verbreel_events::Timestamp;
 use verbreel_types::ProjectId;
 
@@ -341,13 +339,12 @@ fn write_destination(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let bytes = verbreel_canon::canonicalize(&project_value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let mut tmp = NamedTempFile::new_in(dest)?;
-    tmp.as_file_mut().write_all(&bytes)?;
-    tmp.as_file_mut().sync_data()?;
     let target = dest.join("project.json");
-    tmp.persist(&target).map_err(|e| e.error)?;
-    let dir = File::open(dest)?;
-    dir.sync_data()?;
+    // Route through the shared storage primitive (tempfile + rename +
+    // parent-dir fsync) so the duplicate's first snapshot lands with the
+    // same atomicity/durability contract as `project.save` and
+    // `asset.import` rather than a re-derived rename dance here.
+    verbreel_storage::fs::atomic_write_bytes(&target, &bytes)?;
 
     // Step 9: empty events.jsonl. Mirrors NativeBackend::open's
     // file shape (zero-byte file) without taking the flock — the
