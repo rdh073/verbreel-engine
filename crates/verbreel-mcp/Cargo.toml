@@ -12,7 +12,7 @@ name = "verbreel_mcp"
 path = "src/lib.rs"
 
 [[bin]]
-name = "verbreel_mcp"
+name = "verbreel-mcp"
 path = "src/main.rs"
 
 [dependencies]

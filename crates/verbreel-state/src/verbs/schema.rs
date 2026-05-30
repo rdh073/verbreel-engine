@@ -107,7 +107,9 @@ pub enum SchemaError {
     /// `target` value did not match any [`SchemaTarget`] variant. Maps
     /// to `E_UNKNOWN_TARGET`. Carries the raw serde error string for
     /// diagnostics.
-    #[error("schema: E_UNKNOWN_TARGET {0}")]
+    #[error(
+        "schema: E_UNKNOWN_TARGET — target deserialize failed: {0}; expected one of project, command, effect"
+    )]
     UnknownTarget(String),
 
     /// `target` is `command`/`effect` but `name` was not supplied. The

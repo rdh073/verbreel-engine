@@ -1,0 +1,37 @@
+[package]
+name = "examples"
+description = "Runnable Verbreel end-to-end examples."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+autobins = false
+
+[[bin]]
+name = "verbreel_examples"
+path = "src/main.rs"
+
+[features]
+default = []
+native-render = [
+    "dep:serde_json",
+    "dep:sha2",
+    "dep:verbreel-canon",
+    "dep:verbreel-codec-native",
+    "dep:verbreel-ir",
+    "dep:verbreel-render",
+    "dep:verbreel-state",
+    "verbreel-render/rsmpeg",
+]
+
+[dependencies]
+anyhow.workspace = true
+serde_json = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+verbreel-canon = { path = "../crates/verbreel-canon", optional = true }
+verbreel-codec-native = { path = "../crates/verbreel-codec-native", optional = true }
+verbreel-ir = { path = "../crates/verbreel-ir", optional = true }
+verbreel-render = { path = "../crates/verbreel-render", optional = true }
+verbreel-state = { path = "../crates/verbreel-state", optional = true }

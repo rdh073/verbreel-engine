@@ -13,9 +13,9 @@ use thiserror::Error;
 use verbreel_types::ProjectId;
 
 #[cfg(feature = "native")]
-use crate::asset::{Asset, SubtitleAsset};
+use crate::asset::{Asset, ImageAsset, SubtitleAsset};
 #[cfg(feature = "native")]
-use crate::asset_meta::{FileFingerprint, SubtitleAssetMetadata};
+use crate::asset_meta::{FileFingerprint, ImageAssetMetadata, SubtitleAssetMetadata};
 #[cfg(feature = "native")]
 use crate::newtypes::{AssetPath, Sha256};
 use std::collections::HashMap;
@@ -245,6 +245,140 @@ fn build_subtitle_asset(
     }))
 }
 
+#[cfg(feature = "native")]
+fn build_image_asset(
+    source_path: &Path,
+    sha256_hex: &str,
+    cas_rel_path: &str,
+    ext: &str,
+    width: u32,
+    height: u32,
+) -> Result<Asset, AssetImportError> {
+    let hash =
+        Sha256::new(sha256_hex.to_string()).map_err(|e| AssetImportError::InconsistentPatch {
+            detail: e.to_string(),
+        })?;
+    let path = AssetPath::new(cas_rel_path.to_string()).map_err(|e| {
+        AssetImportError::InconsistentPatch {
+            detail: e.to_string(),
+        }
+    })?;
+    let fingerprint = fingerprint_for(source_path)?;
+
+    Ok(Asset::Image(ImageAsset {
+        id: AssetId::now(),
+        hash,
+        path,
+        original_filename: source_path.file_name().map_or_else(
+            || source_path.display().to_string(),
+            |n| n.to_string_lossy().to_string(),
+        ),
+        imported_at: Timestamp::parse("1970-01-01T00:00:00Z")
+            .expect("epoch literal is valid RFC 3339"),
+        metadata: ImageAssetMetadata {
+            width,
+            height,
+            container: ext.to_string(),
+            has_alpha: Some(false),
+            color_space: Some("srgb".to_string()),
+            rotation_deg: None,
+            fingerprint,
+        },
+    }))
+}
+
+#[cfg(feature = "native")]
+fn build_asset_for_import(
+    source_path: &Path,
+    bytes: &[u8],
+    sha256_hex: &str,
+    cas_rel_path: &str,
+    ext: &str,
+) -> Result<Asset, AssetImportError> {
+    if ext == "ppm"
+        && let Some((width, height)) = ppm_p6_dimensions(bytes)
+    {
+        return build_image_asset(source_path, sha256_hex, cas_rel_path, ext, width, height);
+    }
+
+    build_subtitle_asset(source_path, sha256_hex, cas_rel_path, ext)
+}
+
+#[cfg(feature = "native")]
+fn ppm_p6_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let mut cursor = PpmCursor { bytes, offset: 0 };
+    if cursor.next_token()? != b"P6" {
+        return None;
+    }
+    let width = parse_positive_u32(cursor.next_token()?)?;
+    let height = parse_positive_u32(cursor.next_token()?)?;
+    let maxval = parse_positive_u32(cursor.next_token()?)?;
+    let expected_len = usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?
+        .checked_mul(3)?;
+    if maxval > 255 || cursor.raster_len_after_separator()? < expected_len {
+        return None;
+    }
+    Some((width, height))
+}
+
+#[cfg(feature = "native")]
+struct PpmCursor<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+#[cfg(feature = "native")]
+impl<'a> PpmCursor<'a> {
+    fn next_token(&mut self) -> Option<&'a [u8]> {
+        self.skip_ws_and_comments();
+        let start = self.offset;
+        while self
+            .bytes
+            .get(self.offset)
+            .is_some_and(|b| !b.is_ascii_whitespace() && *b != b'#')
+        {
+            self.offset += 1;
+        }
+        (self.offset > start).then_some(&self.bytes[start..self.offset])
+    }
+
+    fn skip_ws_and_comments(&mut self) {
+        loop {
+            while self
+                .bytes
+                .get(self.offset)
+                .is_some_and(u8::is_ascii_whitespace)
+            {
+                self.offset += 1;
+            }
+            if self.bytes.get(self.offset) != Some(&b'#') {
+                return;
+            }
+            while self.bytes.get(self.offset).is_some_and(|b| *b != b'\n') {
+                self.offset += 1;
+            }
+        }
+    }
+
+    fn raster_len_after_separator(&mut self) -> Option<usize> {
+        self.bytes
+            .get(self.offset)
+            .is_some_and(u8::is_ascii_whitespace)
+            .then_some(self.bytes.len().saturating_sub(self.offset + 1))
+    }
+}
+
+#[cfg(feature = "native")]
+fn parse_positive_u32(token: &[u8]) -> Option<u32> {
+    if token.is_empty() || !token.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let value = std::str::from_utf8(token).ok()?.parse::<u32>().ok()?;
+    (value > 0).then_some(value)
+}
+
 fn mode_used_for(_args: &AssetImportArgs) -> &'static str {
     "copy"
 }
@@ -325,7 +459,7 @@ pub fn compute_patch_with_root(
             })?;
         }
 
-        let asset = build_subtitle_asset(src, &key.sha256_hex, &key.relative_path, &ext)?;
+        let asset = build_asset_for_import(src, &bytes, &key.sha256_hex, &key.relative_path, &ext)?;
         let asset_value =
             serde_json::to_value(&asset).map_err(|e| AssetImportError::InconsistentPatch {
                 detail: e.to_string(),

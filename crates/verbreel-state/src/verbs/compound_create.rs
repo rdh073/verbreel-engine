@@ -63,7 +63,9 @@ pub struct CompoundCreateData {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CompoundCreateError {
     /// No clips were selected.
-    #[error("compound.create: E_COMPOUND_EMPTY")]
+    #[error(
+        "compound.create: E_COMPOUND_EMPTY — clips selection is empty; provide at least one clip id"
+    )]
     CompoundEmpty,
 
     /// Selected clips span multiple tracks.
