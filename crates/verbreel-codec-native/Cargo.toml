@@ -10,11 +10,22 @@ authors.workspace = true
 [lib]
 name = "verbreel_codec_native"
 
+[features]
+# rsmpeg links system FFmpeg 6.x at build time, so it stays OFF by default:
+# CI has no FFmpeg headers and feature-off `cargo check` must remain
+# toolchain-free. `ffmpeg6` selects the FFmpeg 6.x ABI in rsmpeg's bindgen;
+# `link_system_ffmpeg` points it at the host's pkg-config libav* instead of
+# vendoring a build.
+rsmpeg = ["dep:rsmpeg", "dep:tempfile"]
+
 [dependencies]
 verbreel-ir = { path = "../verbreel-ir" }
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+rsmpeg = { version = "0.14.2", default-features = false, features = ["ffmpeg6", "link_system_ffmpeg"], optional = true }
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json.workspace = true
+sha2.workspace = true

@@ -1,28 +1,44 @@
-//! [`CodecError`] — v0 error surface for the encode path.
+//! [`CodecError`] — v0 error surface for the encode/decode/probe paths.
 //!
-//! Four variants in v0:
+//! Variants:
 //!
-//! - [`CodecError::NotYetImplemented`] — temporary placeholder while
-//!   the rsmpeg+libx264 body is deferred to Spike S1.
+//! - [`CodecError::NotYetImplemented`] — historical placeholder kept for
+//!   callers that still grep for it; no live call site emits it now that
+//!   the rsmpeg path is wired.
+//! - [`CodecError::FeatureDisabled`] — the entry point needs the
+//!   `rsmpeg` cargo feature (system `FFmpeg`) and it was compiled off.
+//!   This is the feature-off return for every decode/encode/probe call.
 //! - [`CodecError::InvalidParams`] — param-shape failures caught
 //!   before any encoder work runs.
 //! - [`CodecError::InputExhausted`] — caller-driven decode loop
 //!   reached EOF; structural signal, not a failure.
 //! - [`CodecError::EncoderInternal`] — rsmpeg / libav errors mapped
-//!   to a string body. Body lands with Spike S1.
+//!   to a string body.
 
 use thiserror::Error;
 
-/// Errors returned by [`crate::encode`] and its eventual sibling
+/// Errors returned by [`encode`](crate::encode()) and its sibling
 /// codec entry points.
 #[derive(Debug, Error)]
 pub enum CodecError {
-    /// The codec backend body has not been implemented yet. v0 stub
-    /// returns this from every call until Spike S1 lands the real
-    /// rsmpeg+libx264 path per Research 01 §11.
+    /// The codec backend body has not been implemented yet. Retained
+    /// for callers that still grep the v0 string; the rsmpeg+libx264
+    /// path is now wired, so no live call site emits this variant.
     #[error("codec backend not yet implemented: {detail}")]
     NotYetImplemented {
         /// Free-form context — typically the Spike S1 citation.
+        detail: String,
+    },
+
+    /// The requested entry point needs the `rsmpeg` cargo feature
+    /// (which links system `FFmpeg` 6.x) and the crate was compiled
+    /// without it. This is the deterministic feature-off return for
+    /// every decode / encode / probe call — CI builds the crate
+    /// feature-off and never links `FFmpeg`, so these calls fail closed
+    /// with a clear signal rather than a link error.
+    #[error("codec backend requires the `rsmpeg` feature: {detail}")]
+    FeatureDisabled {
+        /// Free-form context — typically the entry-point name.
         detail: String,
     },
 

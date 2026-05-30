@@ -1,9 +1,12 @@
-//! verbreel-codec-native — rsmpeg native decode/encode, hwaccel detection.
+//! verbreel-codec-native — rsmpeg native decode/encode/probe facade.
 //!
-//! First content slice: v0 type surface committing Research 01 §5 + §11's
-//! architectural decisions to types. The implementation body in
-//! [`encode`] returns [`CodecError::NotYetImplemented`] until Spike S1
-//! lands the real rsmpeg+libx264 pipeline.
+//! The encode half of Spike S1: rsmpeg decode → packed-`yuv420p` [`Frame`]s
+//! → libx264/encoder → MP4 bytes, with deterministic-mode byte stability
+//! pinned per Research 01 §11. The rsmpeg path links system `FFmpeg` 6.x and
+//! lives behind the `rsmpeg` cargo feature so the default workspace
+//! `cargo check` stays toolchain-free (CI has no `FFmpeg`). Feature-off, the
+//! full type surface still compiles and every decode/encode/probe entry
+//! point returns [`CodecError::FeatureDisabled`].
 //!
 //! Modules ([`SoC`](https://en.wikipedia.org/wiki/Separation_of_concerns)
 //! — one concern per file):
@@ -14,11 +17,13 @@
 //!   pinning Research 01 §5 + §11.1 / §11.2's two-preset model.
 //! - [`params`] — [`EncodeParams`] struct with the full encode-pass
 //!   parameter shape.
-//! - [`error`] — [`CodecError`] enum with the four v0 failure modes.
-//! - [`frame`] — opaque [`Frame`] placeholder so [`encode`] has a
-//!   complete signature.
-//! - [`encode`](self::encode::encode) — v0 entry point returning
-//!   [`CodecError::NotYetImplemented`].
+//! - [`probe`] — [`ProbeMetadata`] struct feeding `asset.probe` /
+//!   `asset.import` (`FFmpeg`-free type; populated by `decode::probe`).
+//! - [`error`] — [`CodecError`] enum with the codec failure modes.
+//! - [`frame`] — [`Frame`] packed-`yuv420p` pixel buffer shared by the
+//!   decode and encode facades.
+//! - [`encode`](self::encode::encode) — `EncodeParams` + frames → MP4 bytes.
+//! - `decode` — `rsmpeg` decode + probe facade (feature `rsmpeg`).
 //!
 //! Research 01 references:
 //!
@@ -34,11 +39,14 @@
 #![warn(clippy::pedantic)]
 
 pub mod codec;
+#[cfg(feature = "rsmpeg")]
+pub mod decode;
 pub mod encode;
 pub mod error;
 pub mod frame;
 pub mod params;
 pub mod preset;
+pub mod probe;
 
 pub use codec::Codec;
 pub use encode::encode;
@@ -46,3 +54,4 @@ pub use error::CodecError;
 pub use frame::Frame;
 pub use params::EncodeParams;
 pub use preset::CodecPreset;
+pub use probe::ProbeMetadata;

@@ -1,4 +1,4 @@
-//! [`Frame`] — opaque v0 placeholder so [`crate::encode`] has a
+//! [`Frame`] — opaque v0 placeholder so [`encode`](crate::encode()) has a
 //! complete signature.
 //!
 //! The real frame shape lives in `verbreel-render` and depends on the
