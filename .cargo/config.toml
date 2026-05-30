@@ -1,0 +1,7 @@
+# web-sys gates the WebCodecs types (VideoDecoder / EncodedVideoChunk /
+# VideoFrame) behind the unstable-apis cfg. verbreel-codec-web's wasm32
+# bindings need them, so set the flag for the wasm32 target only. This does
+# not touch native builds: `cargo check --workspace` on a host target reads
+# no rustflags from here.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg=web_sys_unstable_apis"]
