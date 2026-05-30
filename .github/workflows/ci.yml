@@ -104,8 +104,17 @@ jobs:
       # the concrete OPFS backend lands in Phase 2.
       - name: cargo check wasm32 — verbreel-events (no-default-features)
         run: cargo check -p verbreel-events --target wasm32-unknown-unknown --lib --no-default-features
+      # verbreel-wasm now depends on verbreel-codec-web (the preview-session
+      # bridge), so building it for wasm32 transitively compiles codec-web's
+      # WebCodecs bindings and therefore ALSO needs `--cfg=web_sys_unstable_apis`.
+      # The job-level `RUSTFLAGS` env fully overrides `.cargo/config.toml`'s
+      # target rustflags, so the cfg is set explicitly here (config.toml still
+      # covers local dev where RUSTFLAGS is unset). `--all-targets` exercises
+      # the wasm32 smoke harness.
       - name: cargo check wasm32 — verbreel-wasm
-        run: cargo check -p verbreel-wasm --target wasm32-unknown-unknown --lib
+        run: cargo check -p verbreel-wasm --target wasm32-unknown-unknown --all-targets
+        env:
+          RUSTFLAGS: "-D warnings --cfg=web_sys_unstable_apis"
       # codec-web's WebCodecs bindings (VideoDecoder / EncodedVideoChunk /
       # VideoFrame) are still unstable in web-sys 0.3, so the wasm32 build
       # needs `--cfg=web_sys_unstable_apis`. The job-level `RUSTFLAGS` env

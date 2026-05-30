@@ -7,9 +7,13 @@
 //! without breaking the public method surface — the opaque-fields
 //! pattern mirrors codec-native `Frame` / codec-web `DecodedFrame`.
 
+use verbreel_codec_web::{BrowserFamily, PreviewClientCapabilities, WebDecoder};
 use verbreel_state::SCHEMA_VERSION;
+use wasm_bindgen::prelude::wasm_bindgen;
 
+use crate::error::WasmError;
 use crate::scope::EmbeddingScope;
+use crate::session::PreviewSession;
 
 /// Browser-side engine lifecycle handle.
 ///
@@ -26,16 +30,19 @@ use crate::scope::EmbeddingScope;
 /// meaningful default). Committing to a bare `new()` + accessor
 /// surface keeps S2 free to add non-clone fields without breaking JS
 /// callers.
+#[wasm_bindgen]
 #[derive(Debug)]
 pub struct EngineHandle {
     schema_version: &'static str,
     embedding_scope: EmbeddingScope,
 }
 
+#[wasm_bindgen]
 impl EngineHandle {
     /// Construct a fresh handle bound to the current
     /// [`verbreel_state::SCHEMA_VERSION`].
     // Default is intentionally NOT derived — see type-level doc.
+    #[wasm_bindgen(constructor)]
     #[allow(clippy::new_without_default)]
     #[must_use]
     pub fn new() -> Self {
@@ -45,6 +52,52 @@ impl EngineHandle {
         }
     }
 
+    /// Open a browser preview decode session against
+    /// `verbreel-codec-web`.
+    ///
+    /// `has_webcodecs_decode` and `is_safari` are the client's reported
+    /// capabilities (the JS bridge fills them from
+    /// `verbreel_codec_web::capability::detect()` or a wire report);
+    /// codec-web resolves them into a `webcodecs`-or-`mse` transport.
+    /// `prefer_h265` selects the H.265 decode codec over the H.264
+    /// baseline. The returned [`PreviewSession`] owns the live decoder
+    /// on wasm32 and drives `seek` / `frameAt`.
+    ///
+    /// Mutation stays off this surface (decision #404): there is no
+    /// `apply` / persistence method on the browser handle, and any future
+    /// in-memory preview path must surface
+    /// [`WasmError::BrowserNoPersistence`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmError::PreviewDecode`] if the browser refuses to
+    /// construct or configure the `VideoDecoder` (wasm32). Infallible on
+    /// native targets, where no decoder is built.
+    #[wasm_bindgen(js_name = openPreviewSession)]
+    pub fn open_preview_session(
+        &self,
+        has_webcodecs_decode: bool,
+        is_safari: bool,
+        prefer_h265: bool,
+    ) -> Result<PreviewSession, WasmError> {
+        let caps = PreviewClientCapabilities {
+            browser_family: if is_safari {
+                BrowserFamily::Safari
+            } else {
+                BrowserFamily::Other
+            },
+            has_webcodecs_decode,
+        };
+        let codec = if prefer_h265 {
+            WebDecoder::H265
+        } else {
+            WebDecoder::H264
+        };
+        PreviewSession::open(caps, codec)
+    }
+}
+
+impl EngineHandle {
     /// Project schema version this engine recognises (`SemVer` string).
     /// JS callers branch on this before loading a project.
     #[must_use]

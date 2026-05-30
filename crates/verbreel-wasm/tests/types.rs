@@ -3,8 +3,9 @@
 //! the `Send + Sync` bounds JS-bridge callers will rely on.
 
 use verbreel_wasm::{
-    EMBEDDING_SCOPE_WIRE, EmbeddingScope, EngineHandle, WasmError, embedding_scope_wire_export,
-    supports_editor_embedding_export, supports_preview_embedding_export,
+    EMBEDDING_SCOPE_WIRE, EmbeddingScope, EngineHandle, W_BROWSER_NO_PERSISTENCE, WasmError,
+    embedding_scope_wire_export, supports_editor_embedding_export,
+    supports_preview_embedding_export,
 };
 
 // --- EngineHandle ---------------------------------------------------------
@@ -175,4 +176,35 @@ fn wasm_error_same_variant_with_different_detail_compares_unequal() {
         detail: "beta".to_string(),
     };
     assert_ne!(a, b);
+}
+
+#[test]
+fn wasm_error_preview_decode_variant_constructs_and_surfaces_detail() {
+    let err = WasmError::PreviewDecode {
+        detail: "decoder internal error: VideoDecoder closed".to_string(),
+    };
+    assert!(matches!(err, WasmError::PreviewDecode { .. }));
+    assert!(
+        err.to_string().contains("VideoDecoder closed"),
+        "Display must surface the codec-web detail, got: {err}"
+    );
+}
+
+#[test]
+fn wasm_error_browser_no_persistence_displays_stable_token() {
+    // The mutation-rejection code is the wire contract (#404): JS
+    // branches on the exact token, so Display must equal it verbatim.
+    let err = WasmError::BrowserNoPersistence;
+    assert_eq!(err.to_string(), W_BROWSER_NO_PERSISTENCE);
+    assert_eq!(W_BROWSER_NO_PERSISTENCE, "W_BROWSER_NO_PERSISTENCE");
+}
+
+#[test]
+fn wasm_error_browser_no_persistence_is_distinct_variant() {
+    let a = WasmError::BrowserNoPersistence;
+    let b = WasmError::PreviewDecode {
+        detail: "x".to_string(),
+    };
+    assert_ne!(a, b);
+    assert_eq!(a, WasmError::BrowserNoPersistence);
 }
