@@ -1,23 +1,24 @@
 //! verbreel-ai — ONNX Runtime + Python sidecar dispatch.
 //!
-//! v0 ships the type surface that the eventual `ort` + sidecar IPC
-//! implementation will satisfy. Every provider method returns
-//! [`AiError::NotYetImplemented`] until the real AI orchestration
-//! lands (Research 04 §3 — engine spawns Python sidecars over
-//! JSON-stdio, engine-side ONNX models go through `ort`).
+//! Two inference transports land here (Research 04 §3 / §9.3):
 //!
-//! ## Why ship types now
+//! - **Python sidecar** ([`sidecar`]) — JSON-over-stdin/stdout to a
+//!   spawned child (faster-whisper STT, `BeatNet`). This transport is
+//!   exercised end-to-end against a real `python3` child in the crate
+//!   tests: a request is written, the child responds, and the response
+//!   is decoded into the state-owned canonical struct. The model science
+//!   lives in the (operator-installed) sidecar script, not in this crate.
+//! - **`ort` session** ([`session`], feature `ort`) — in-process ONNX
+//!   Runtime. The session-open call is a runtime gate that fails loud
+//!   ([`AiError::ModelLoadFailed`]) when `libonnxruntime` is absent.
+//!   Folding model output into a result needs shipped `.onnx` weights,
+//!   which are NOT part of this slice — so the `ort` adapter arm is a
+//!   provably loud error path today, never a fabricated result (Linus
+//!   rule). It returns a result only once the weight assets ship.
 //!
-//! - Closes the workspace exit-condition counter (was a 1-line stub).
-//! - Caption / beat-detection / tracker verbs in `verbreel-state`
-//!   already enumerate spec-level capability ids; this crate
-//!   commits those ids at the type level so future ai-impl spike
-//!   can land by body replacement, not API design.
-//! - The opaque-handle pattern mirrors codec-native `Frame`,
-//!   codec-web `DecodedFrame`, `verbreel-wasm::EngineHandle`, and
-//!   `verbreel-render::Pipeline` — same trait discipline
-//!   (no `Clone`/`Default`/`Copy` so future internals can grow
-//!   without breaking the public API).
+//! Note `onset` / `tempo` audio analysis are spec'd as **native Rust
+//! DSP** (Research 04 §6.1), not a transport this crate spawns; the
+//! registry advertises them as engine-native entries.
 //!
 //! ## Crate dependency rule
 //!

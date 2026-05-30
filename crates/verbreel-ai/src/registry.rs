@@ -2,8 +2,6 @@
 //!
 //! Reports the three algorithm classes the inference runtime can serve:
 //! tracker algorithms, caption (STT) models, and audio-analysis algorithms.
-//! The composition layer (cli / mcp / http) will read this to populate the
-//! v1.1+ capability fields once those are unfrozen.
 //!
 //! ## Why this is a *parallel* surface, not the `list_capabilities` verb
 //!
@@ -13,8 +11,20 @@
 //! pins it — stays byte-stable. `verbreel-ai` depends on `verbreel-state`
 //! (not the other way round), so the verb cannot call into this registry
 //! without inverting the dependency edge and breaking the conformance
-//! fixture. This registry is therefore an additive surface the composition
-//! root consumes directly.
+//! fixture.
+//!
+//! ## No composition-root consumer in this slice
+//!
+//! The intended consumer is the composition layer (cli / mcp / http), which
+//! sits *above* both `verbreel-ai` and `verbreel-state` and is the one place
+//! allowed to import this crate (the decision packet pins "report into
+//! `list_capabilities` *without importing UI or transport crates*", so the
+//! fold must happen in the higher crate, not here). Those crates are still
+//! at their v1 floor and do not yet expose a `capabilities` surface, so this
+//! registry currently has **no caller outside this crate** — wiring it in is
+//! a deferred follow-up slice in cli / mcp / http, out of scope for the
+//! single-crate `verbreel-ai` change. It is shipped now so that follow-up is
+//! an additive `ProviderRegistry::v1()` read, not an API redesign.
 
 /// A single algorithm/model the inference runtime advertises, tagged with
 /// where it runs (in-process via `ort`/DSP, or out-of-process via sidecar).
