@@ -58,9 +58,13 @@ pub enum Backend {
 
 /// Run the tracker algorithm and return the canonical [`TrackerRunData`].
 ///
-/// `tracker_id` and the resolved analysis window are echoed by the caller
-/// into the returned struct; this adapter produces the inference-derived
-/// fields (`sample_count`, `mean_confidence`, `bbox_trace_summary`).
+/// The sidecar supplies every field of the returned struct — including
+/// `tracker_id`, `cache_path`, and `cache_hit`, not just the
+/// inference-derived `sample_count` / `mean_confidence` / `bbox_trace_summary`
+/// — and [`decode_tracker`] deserializes the whole struct verbatim. The
+/// `tracker_id` argument is forwarded into the sidecar request and used to
+/// frame decode errors; the adapter does not overwrite the decoded fields
+/// with it, so the sidecar owns the cache-identity fields end to end.
 ///
 /// # Errors
 ///
@@ -214,6 +218,7 @@ mod tests {
     use super::*;
     use crate::model::{ModelId, ModelVersion};
     use std::io::Write as _;
+    use verbreel_state::AudioAnalysisTargetKind;
     use verbreel_types::AssetHash;
 
     const ASSET: &str = "aa11bb22cc33dd44ee55ff66001122334455667788990011223344556677889900";
@@ -275,6 +280,46 @@ print(json.dumps({{"op": "stt", "result": {{
         let data = run_stt(&key, &backend, Some("en")).expect("stt round-trip");
         assert_eq!(data.detected_language, "en");
         assert!(data.segments.is_empty());
+    }
+
+    #[test]
+    fn sidecar_audio_analysis_decodes_canonical_struct_via_real_python() {
+        // Sidecar emits an AudioAnalyzeData-shaped result; the adapter must
+        // deserialize it into the state-owned canonical struct. Guards the
+        // `op` string ("audio_analysis") and struct type against copy-paste
+        // drift from the stt/tracker arms.
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("audio_analysis.py");
+        let target_id = "0192a000-0000-7000-8000-000000000def";
+        let mut f = std::fs::File::create(&script).unwrap();
+        write!(
+            f,
+            r#"import sys, json
+json.loads(sys.stdin.readline())
+print(json.dumps({{"op": "audio_analysis", "result": {{
+    "target_id": "{target_id}",
+    "target_kind": "clip",
+    "features_returned": ["tempo"],
+    "tempo_bpm": 120.0,
+    "cache_path": "/cache/audio/{target_id}.json",
+    "cache_hit": False
+}}}}))
+"#,
+        )
+        .unwrap();
+
+        let key = cache_key("beatnet");
+        let backend = Backend::Sidecar {
+            program: "/usr/bin/python3".to_string(),
+            args: vec![script.to_str().unwrap().to_string()],
+        };
+        let data =
+            run_audio_analysis(&key, &backend, target_id).expect("audio-analysis round-trip");
+        assert_eq!(data.target_id, target_id);
+        assert_eq!(data.target_kind, AudioAnalysisTargetKind::Clip);
+        assert_eq!(data.features_returned, vec!["tempo".to_string()]);
+        assert_eq!(data.tempo_bpm, Some(120.0));
+        assert!(!data.cache_hit);
     }
 
     #[test]

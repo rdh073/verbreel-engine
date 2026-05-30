@@ -57,6 +57,10 @@ fn dylib_candidate() -> PathBuf {
 
 /// `true` when the ONNX Runtime shared library is present and loadable.
 ///
+/// Operator note: native (`ort`-backed) inference is enabled only when
+/// `ORT_DYLIB_PATH` points at an existing `libonnxruntime` file; absent that,
+/// this probe returns `false` and adapters fall back to a loud error.
+///
 /// This probe is deliberately *outside* any `ort` API call: `ort`'s lazy
 /// global init panic-deadlocks on a missing library (see module docs), so
 /// the runtime must be confirmed present before [`OrtSession::open`] enters
