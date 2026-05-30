@@ -289,7 +289,7 @@ fn build_layers(
     let mut layers = Vec::with_capacity(plan.layers.len());
     for layer in &plan.layers {
         let planes = match &layer.source_asset {
-            Some(asset) => decoded_frame_planes(spec, asset, frame_index, frame_len),
+            Some(asset) => decoded_frame_planes(spec, asset, frame_index, frame_len)?,
             None => black_yuv420p(frame_len),
         };
         layers.push(CompositeLayer {
@@ -306,27 +306,37 @@ fn build_layers(
 /// a direct `decoded[asset]` lookup, so each layer in a multi-track
 /// composition reads its correct video and the result never depends on map
 /// iteration order. The frame index is clamped to the source's last frame so
-/// a short source holds on its final picture. A missing asset, an empty
-/// source, or a frame whose plane length disagrees with the output geometry
-/// falls back to opaque black so the pipeline never panics on a gap.
+/// a short source holds on its final picture. A missing asset or an empty
+/// source falls back to opaque black so the pipeline never panics on a gap.
+///
+/// A decoded frame whose plane length disagrees with the output geometry is a
+/// state↔render contract violation, not a gap: the state crate handed us a
+/// source whose geometry contradicts the job spec. Returning black there would
+/// hash deterministically while masking corrupt visible output, so we surface
+/// it as [`RenderError::InvalidInput`] instead.
 fn decoded_frame_planes(
     spec: &RenderJobSpec,
     asset: &AssetHash,
     frame_index: usize,
     frame_len: usize,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, RenderError> {
     let Some(source) = spec.decoded.get(asset) else {
-        return black_yuv420p(frame_len);
+        return Ok(black_yuv420p(frame_len));
     };
     if source.frames.is_empty() {
-        return black_yuv420p(frame_len);
+        return Ok(black_yuv420p(frame_len));
     }
     let idx = frame_index.min(source.frames.len() - 1);
     let frame = &source.frames[idx];
-    if frame.planes().len() == frame_len {
-        frame.planes().to_vec()
+    let actual = frame.planes().len();
+    if actual == frame_len {
+        Ok(frame.planes().to_vec())
     } else {
-        black_yuv420p(frame_len)
+        Err(RenderError::InvalidInput {
+            detail: format!(
+                "decoded source {asset} frame {idx} plane length {actual} != output geometry {frame_len}"
+            ),
+        })
     }
 }
 
@@ -418,8 +428,8 @@ mod tests {
         let spec = spec_with_two_sources();
         let frame_len = yuv420p_len(spec.width, spec.height);
 
-        let planes_a = decoded_frame_planes(&spec, &asset('a'), 0, frame_len);
-        let planes_b = decoded_frame_planes(&spec, &asset('b'), 0, frame_len);
+        let planes_a = decoded_frame_planes(&spec, &asset('a'), 0, frame_len).unwrap();
+        let planes_b = decoded_frame_planes(&spec, &asset('b'), 0, frame_len).unwrap();
 
         assert_eq!(planes_a[0], 200, "layer A must read source A's luma");
         assert_eq!(planes_b[0], 40, "layer B must read source B's luma");
@@ -435,11 +445,11 @@ mod tests {
     fn source_resolution_is_order_independent() {
         let spec = spec_with_two_sources();
         let frame_len = yuv420p_len(spec.width, spec.height);
-        let first = decoded_frame_planes(&spec, &asset('a'), 0, frame_len);
+        let first = decoded_frame_planes(&spec, &asset('a'), 0, frame_len).unwrap();
         for _ in 0..16 {
             assert_eq!(
                 first,
-                decoded_frame_planes(&spec, &asset('a'), 0, frame_len),
+                decoded_frame_planes(&spec, &asset('a'), 0, frame_len).unwrap(),
                 "per-layer source resolution must be byte-stable across calls"
             );
         }
@@ -462,8 +472,35 @@ mod tests {
     fn missing_asset_falls_back_to_black() {
         let spec = spec_with_two_sources();
         let frame_len = yuv420p_len(spec.width, spec.height);
-        let planes = decoded_frame_planes(&spec, &asset('c'), 0, frame_len);
+        let planes = decoded_frame_planes(&spec, &asset('c'), 0, frame_len).unwrap();
         assert_eq!(planes, black_yuv420p(frame_len));
+    }
+
+    /// A decoded frame whose plane length disagrees with the output geometry is
+    /// a state↔render contract violation. It must surface as
+    /// [`RenderError::InvalidInput`] — NOT be masked as black, which would hash
+    /// deterministically while hiding visible-output corruption. GPU-free.
+    #[test]
+    fn decoded_plane_size_mismatch_is_invalid_input_not_black() {
+        let mut spec = spec_with_two_sources();
+        // Source 'a' decoded at 4x4 (its planes are sized for 4x4)...
+        let frame_len_a = yuv420p_len(spec.width, spec.height);
+        assert_eq!(
+            spec.decoded[&asset('a')].frames[0].planes().len(),
+            frame_len_a
+        );
+        // ...but the job spec now demands 8x8 output, so the decoded planes no
+        // longer match the requested geometry.
+        spec.width = 8;
+        spec.height = 8;
+        let frame_len = yuv420p_len(spec.width, spec.height);
+        assert_ne!(frame_len, frame_len_a);
+
+        let err = decoded_frame_planes(&spec, &asset('a'), 0, frame_len).unwrap_err();
+        assert!(
+            matches!(err, RenderError::InvalidInput { .. }),
+            "size mismatch must be InvalidInput, got {err:?}"
+        );
     }
 
     /// `status` on an unregistered id returns [`RenderError::UnknownJob`].

@@ -99,9 +99,13 @@ impl Compositor {
         // Deterministic mode pins the software fallback adapter for vendor
         // independence; performance mode takes the host's preferred GPU.
         let force_fallback = matches!(preset, RenderPreset::Deterministic);
+        let power_preference = match preset {
+            RenderPreset::Deterministic => wgpu::PowerPreference::None,
+            RenderPreset::Performance => wgpu::PowerPreference::HighPerformance,
+        };
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::None,
+                power_preference,
                 force_fallback_adapter: force_fallback,
                 compatible_surface: None,
             })
