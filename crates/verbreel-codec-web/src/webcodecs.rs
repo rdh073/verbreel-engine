@@ -21,9 +21,16 @@
 //! 3. [`WebCodecsSession::decode_chunk`] submits one
 //!    `EncodedVideoChunk`.
 //! 4. The browser invokes the `output` callback per decoded
-//!    `VideoFrame`; the callback retains the frame handle on the queue.
-//! 5. [`WebCodecsSession::drain`] awaits each frame's `copyTo` promise
+//!    `VideoFrame` *on a later task*; the callback retains the frame
+//!    handle on the queue.
+//! 5. [`WebCodecsSession::flush`] awaits `VideoDecoder.flush()` so the
+//!    decoder emits the output for every submitted chunk. Because
+//!    `decode()` is asynchronous, skipping this leaves [`drain`] with
+//!    an empty or partial queue.
+//! 6. [`WebCodecsSession::drain`] awaits each frame's `copyTo` promise
 //!    and yields owned [`DecodedFrame`]s.
+//!
+//! [`drain`]: WebCodecsSession::drain
 //!
 //! The copy is awaited because `VideoFrame.copyTo()` resolves
 //! asynchronously: the destination buffer is only valid once the
@@ -185,10 +192,8 @@ impl WebCodecsSession {
     ///
     /// # Errors
     ///
-    /// Returns [`DecodeError::MalformedBitstream`] if `pts_micros`
-    /// overflows the `WebCodecs` `i32` timestamp field, or
-    /// [`DecodeError::DecoderInternal`] if chunk construction or the
-    /// `decode()` call fails.
+    /// Returns [`DecodeError::DecoderInternal`] if chunk construction or
+    /// the `decode()` call fails.
     pub fn decode_chunk(
         &self,
         data: &[u8],
@@ -200,11 +205,15 @@ impl WebCodecsSession {
         } else {
             EncodedVideoChunkType::Delta
         };
-        let timestamp = i32::try_from(pts_micros).map_err(|_| DecodeError::MalformedBitstream {
-            detail: format!("chunk timestamp {pts_micros}us exceeds WebCodecs i32 range"),
-        })?;
         let data_array = js_sys::Uint8Array::from(data);
-        let init = EncodedVideoChunkInit::new_with_u8_array(&data_array, timestamp, chunk_type);
+        // WebCodecs `timestamp` is a 64-bit microsecond value. The
+        // `new_with_u8_array` constructor only takes the i32 overload,
+        // so seed it with 0 and set the real value through the f64
+        // setter — a preview longer than ~35 min (the i32-µs cap) is a
+        // valid input, not a framing error.
+        let init = EncodedVideoChunkInit::new_with_u8_array(&data_array, 0, chunk_type);
+        #[allow(clippy::cast_precision_loss)]
+        init.set_timestamp_f64(pts_micros as f64);
         let chunk = EncodedVideoChunk::new(&init).map_err(|e| DecodeError::DecoderInternal {
             detail: js_error_message(&e),
         })?;
@@ -215,8 +224,41 @@ impl WebCodecsSession {
             })
     }
 
+    /// Flush the decoder, blocking until every chunk submitted so far
+    /// has been emitted to the `output` callback.
+    ///
+    /// `VideoDecoder.decode()` is asynchronous — the browser emits each
+    /// `VideoFrame` on a later task, not synchronously after
+    /// [`decode_chunk`]. Callers that need the frames for the chunks
+    /// they submitted must `flush().await` before [`drain`], otherwise
+    /// the queue is empty or partial. This wraps the `WebCodecs`
+    /// `flush()` promise, which resolves once all pending output is
+    /// delivered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::DecoderInternal`] if the browser rejects
+    /// the flush (e.g. the decoder hit a fatal error).
+    ///
+    /// [`decode_chunk`]: WebCodecsSession::decode_chunk
+    /// [`drain`]: WebCodecsSession::drain
+    pub async fn flush(&self) -> Result<(), DecodeError> {
+        JsFuture::from(self.decoder.flush())
+            .await
+            .map(|_| ())
+            .map_err(|e| DecodeError::DecoderInternal {
+                detail: js_error_message(&e),
+            })
+    }
+
     /// Await every queued frame's `copyTo`, returning owned
     /// [`DecodedFrame`]s and emptying the queue.
+    ///
+    /// This drains only frames the decoder has *already* emitted. To
+    /// retrieve the frames for chunks just submitted, call
+    /// [`flush`](WebCodecsSession::flush) first — `decode()` is
+    /// asynchronous, so without a flush this returns an empty or
+    /// partial queue.
     ///
     /// Each `VideoFrame` is closed after its planes are copied so the
     /// JS-heap surface is released promptly.
@@ -277,25 +319,8 @@ async fn copy_video_frame(frame: &VideoFrame) -> Result<DecodedFrame, DecodeErro
         width,
         height,
         planes,
-        timestamp_to_micros(frame.timestamp()),
+        crate::frame::timestamp_to_micros(frame.timestamp()),
     ))
-}
-
-/// Convert a `VideoFrame.timestamp` (`f64` microseconds, may be
-/// fractional or negative) into the non-negative integer-microsecond
-/// unit [`DecodedFrame`] carries.
-fn timestamp_to_micros(timestamp: f64) -> u64 {
-    if timestamp <= 0.0 || !timestamp.is_finite() {
-        0
-    } else {
-        // Guarded above: value is finite and strictly positive, so the
-        // sign-loss cast cannot lose information, and the float-to-int
-        // `as` saturates to `u64::MAX` for the (physically impossible)
-        // overflow case — the correct clamp for a presentation stamp.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let micros = timestamp.round() as u64;
-        micros
-    }
 }
 
 /// Extract a human-readable message from a JS error value.

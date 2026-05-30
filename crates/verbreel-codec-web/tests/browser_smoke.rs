@@ -53,3 +53,25 @@ fn webcodecs_session_configures_in_browser() {
         .configure(WebDecoder::H264)
         .expect("H.264 config must be accepted");
 }
+
+#[wasm_bindgen_test]
+async fn flush_then_drain_returns_empty_for_no_input() {
+    // Exercises the full submit/flush/drain plumbing against a live
+    // decoder. With no chunks submitted, flush resolves and drain
+    // returns no frames — the decode loop's control path, asserted
+    // without a codec fixture (those belong to the pixel-diff harness,
+    // #17).
+    if !capability::detect().has_webcodecs_decode {
+        return;
+    }
+    let session = WebCodecsSession::new().expect("VideoDecoder must construct when present");
+    session
+        .configure(WebDecoder::H264)
+        .expect("H.264 config must be accepted");
+    session
+        .flush()
+        .await
+        .expect("flush of empty queue resolves");
+    let frames = session.drain().await.expect("drain of empty queue ok");
+    assert!(frames.is_empty(), "no chunks submitted => no frames");
+}
