@@ -492,6 +492,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3215,11 +3225,17 @@ dependencies = [
 name = "verbreel-wasm"
 version = "0.1.0"
 dependencies = [
+ "console_error_panic_hook",
+ "js-sys",
  "thiserror 2.0.18",
  "tracing",
+ "verbreel-codec-web",
  "verbreel-ir",
  "verbreel-state",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "wasm-tracing",
  "wgpu",
 ]
 
@@ -3395,6 +3411,17 @@ dependencies = [
  "indexmap",
  "wasm-encoder",
  "wasmparser",
+]
+
+[[package]]
+name = "wasm-tracing"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11ab253baf6d3772bbdb37a0966b67d37ab80657ccd1a084b4d7b3de3232375d"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+ "wasm-bindgen",
 ]
 
 [[package]]
