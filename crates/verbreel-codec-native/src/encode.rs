@@ -35,7 +35,7 @@ use crate::preset::CodecPreset;
 /// - [`CodecError::InvalidParams`] — empty frame slice, odd dimensions,
 ///   zero `fps_den`, or a frame whose plane buffer length disagrees with
 ///   `width`/`height`.
-/// - [`CodecError::EncoderInternal`] — libav surfaced an encoder, muxer,
+/// - [`CodecError::BackendInternal`] — libav surfaced an encoder, muxer,
 ///   or temp-file error.
 #[cfg(not(feature = "rsmpeg"))]
 pub fn encode(_params: &EncodeParams, _frames: &[Frame]) -> Result<Vec<u8>, CodecError> {
@@ -128,7 +128,7 @@ mod imp {
         "threads=1:sliced-threads=0:sync-lookahead=0:rc-lookahead=0:bframes=0";
 
     fn map_rsmpeg(context: &str, err: &RsmpegError) -> CodecError {
-        CodecError::EncoderInternal {
+        CodecError::BackendInternal {
             detail: format!("{context}: {err}"),
         }
     }
@@ -156,21 +156,21 @@ mod imp {
         let tmp = tempfile::Builder::new()
             .suffix(".mp4")
             .tempfile()
-            .map_err(|e| CodecError::EncoderInternal {
+            .map_err(|e| CodecError::BackendInternal {
                 detail: format!("create temp file: {e}"),
             })?;
         let tmp_path = tmp.path().to_path_buf();
         let cpath = cstr(
             tmp_path
                 .to_str()
-                .ok_or_else(|| CodecError::EncoderInternal {
+                .ok_or_else(|| CodecError::BackendInternal {
                     detail: "temp path not valid UTF-8".to_string(),
                 })?,
         )?;
 
         let enc_name = cstr(encoder_name(params.codec))?;
         let encoder = AVCodec::find_encoder_by_name(&enc_name).ok_or_else(|| {
-            CodecError::EncoderInternal {
+            CodecError::BackendInternal {
                 detail: format!(
                     "encoder `{}` not found in this build",
                     encoder_name(params.codec)
@@ -253,7 +253,7 @@ mod imp {
         // Drop the output context (flushes AVIO) before reading the file.
         drop(out_ctx);
 
-        std::fs::read(&tmp_path).map_err(|e| CodecError::EncoderInternal {
+        std::fs::read(&tmp_path).map_err(|e| CodecError::BackendInternal {
             detail: format!("read encoded temp file: {e}"),
         })
     }

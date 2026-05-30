@@ -142,6 +142,62 @@ fn invalid_params_rejected_before_encode() {
 }
 
 #[test]
+fn over_range_params_rejected_as_invalid_params() {
+    use verbreel_codec_native::CodecError;
+    let frames = synth_sequence();
+
+    // `fps_num` past `i32::MAX` must surface InvalidParams at the i32
+    // coercion, not silently zero the rate. This passes `validate`
+    // (fps is only checked non-zero there) and reaches the i32::try_from
+    // guard commit 2 introduced.
+    let mut bad_fps = params();
+    bad_fps.fps_num = 3_000_000_000; // > i32::MAX
+    let err = encode(&bad_fps, &frames).unwrap_err();
+    assert!(
+        matches!(err, CodecError::InvalidParams { .. }),
+        "over-range fps_num should be InvalidParams, got {err:?}"
+    );
+
+    // An over-range coded dimension must also be rejected rather than
+    // coerced to 0. (Stays even so it clears the yuv420p parity guard.)
+    let mut bad_dim = params();
+    bad_dim.width = 3_000_000_000; // > i32::MAX, even
+    let err = encode(&bad_dim, &frames).unwrap_err();
+    assert!(
+        matches!(err, CodecError::InvalidParams { .. }),
+        "over-range width should be InvalidParams, got {err:?}"
+    );
+}
+
+#[test]
+fn non_video_file_probes_as_backend_internal() {
+    use verbreel_codec_native::CodecError;
+
+    // A few bytes of text is not a media container: libav's open/probe
+    // fails and the catch-all must name the failing decode-side operation
+    // (BackendInternal), not the encode half.
+    let mut tmp = tempfile::Builder::new()
+        .suffix(".txt")
+        .tempfile()
+        .expect("create temp text file");
+    tmp.write_all(b"not a media container\n")
+        .expect("write text bytes");
+    tmp.flush().expect("flush text");
+
+    let err = probe(tmp.path()).unwrap_err();
+    assert!(
+        matches!(err, CodecError::BackendInternal { .. }),
+        "probing a non-video file should be BackendInternal, got {err:?}"
+    );
+
+    let err = decode_frames(tmp.path()).unwrap_err();
+    assert!(
+        matches!(err, CodecError::BackendInternal { .. }),
+        "decoding a non-video file should be BackendInternal, got {err:?}"
+    );
+}
+
+#[test]
 fn frame_hashing_is_stable_for_identical_planes() {
     // Frame derives Hash; equal planes hash equal. Cheap guard that the
     // synthetic generator is deterministic across calls.

@@ -13,8 +13,8 @@
 //!   before any encoder work runs.
 //! - [`CodecError::InputExhausted`] — caller-driven decode loop
 //!   reached EOF; structural signal, not a failure.
-//! - [`CodecError::EncoderInternal`] — rsmpeg / libav errors mapped
-//!   to a string body.
+//! - [`CodecError::BackendInternal`] — rsmpeg / libav errors mapped
+//!   to a string body, from either the decode/probe or encode half.
 
 use thiserror::Error;
 
@@ -60,12 +60,17 @@ pub enum CodecError {
     InputExhausted,
 
     /// rsmpeg / libav surfaced an error the wrapper cannot classify
-    /// any further. v0 body is a free-form string; Spike S1 will
-    /// pin a stricter shape once the real libav error codes are
-    /// known.
-    #[error("encoder internal error: {detail}")]
-    EncoderInternal {
-        /// Free-form context — typically the libav error string.
+    /// any further, from EITHER codec half — the decode/probe path
+    /// (open input, find best stream, receive frame, sws-null, scale)
+    /// or the encode path (open encoder, write header, send frame,
+    /// mux). The body names which operation failed so the catch-all
+    /// does not hide which half broke. v0 body is a free-form string;
+    /// Spike S1 will pin a stricter shape once the real libav error
+    /// codes are known.
+    #[error("codec backend error: {detail}")]
+    BackendInternal {
+        /// Free-form context — typically the libav error string,
+        /// prefixed with the failing operation (e.g. `open input: ...`).
         detail: String,
     },
 }

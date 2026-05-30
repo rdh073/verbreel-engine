@@ -10,6 +10,12 @@
 //! `yuv420p` packed with no inter-row padding — the full `width * height` Y
 //! plane, then the `(width / 2) * (height / 2)` U plane, then the equally
 //! sized V plane. Width and height must both be even.
+//!
+//! Caveat: the round-trip assumes a constant pixel-format / resolution
+//! stream (the S1 target). The `SwsContext` is built once from the first
+//! decoded frame's source format and dimensions and cached; a mid-stream
+//! format or resolution change would scale subsequent frames against a
+//! stale context.
 
 use std::ffi::CString;
 use std::path::Path;
@@ -28,7 +34,7 @@ use crate::probe::ProbeMetadata;
 
 /// Map an `rsmpeg` error into the crate error surface.
 fn map_rsmpeg(context: &str, err: &RsmpegError) -> CodecError {
-    CodecError::EncoderInternal {
+    CodecError::BackendInternal {
         detail: format!("{context}: {err}"),
     }
 }
@@ -64,8 +70,9 @@ fn codec_from_id(id: ffi::AVCodecID) -> Result<Codec, CodecError> {
 ///
 /// - [`CodecError::InvalidParams`] — path is not representable for `FFmpeg`,
 ///   or the stream uses a codec outside the v0 [`Codec`] surface.
-/// - [`CodecError::EncoderInternal`] — the container has no video stream,
-///   or libav surfaced an open/probe error.
+/// - [`CodecError::BackendInternal`] — the container has no video stream,
+///   the stream reports a negative/garbage/zero coded dimension, or libav
+///   surfaced an open/probe error.
 pub fn probe(path: &Path) -> Result<ProbeMetadata, CodecError> {
     let cpath = path_cstr(path)?;
     let input = AVFormatContextInput::open(&cpath, None, &mut None)
@@ -74,14 +81,14 @@ pub fn probe(path: &Path) -> Result<ProbeMetadata, CodecError> {
     let (stream_index, _decoder) = input
         .find_best_stream(ffi::AVMediaType_AVMEDIA_TYPE_VIDEO)
         .map_err(|e| map_rsmpeg("find best stream", &e))?
-        .ok_or_else(|| CodecError::EncoderInternal {
+        .ok_or_else(|| CodecError::BackendInternal {
             detail: "no video stream in container".to_string(),
         })?;
 
     let stream = input
         .streams()
         .get(stream_index)
-        .ok_or_else(|| CodecError::EncoderInternal {
+        .ok_or_else(|| CodecError::BackendInternal {
             detail: "best video stream index out of range".to_string(),
         })?;
     let codecpar = stream.codecpar();
@@ -98,7 +105,7 @@ pub fn probe(path: &Path) -> Result<ProbeMetadata, CodecError> {
         (avg.num, avg.den)
     };
     if fps_num <= 0 || fps_den <= 0 {
-        return Err(CodecError::EncoderInternal {
+        return Err(CodecError::BackendInternal {
             detail: "stream reports no usable frame rate".to_string(),
         });
     }
@@ -114,10 +121,27 @@ pub fn probe(path: &Path) -> Result<ProbeMetadata, CodecError> {
         }
     };
 
+    // A negative or garbage coded dimension is an untrusted-container
+    // failure, not a 0-pixel stream: reject it rather than storing 0 in
+    // `ProbeMetadata` (the same silent-coercion class the encode path
+    // already rejects). `fps_num`/`fps_den` are guaranteed positive `i32`
+    // by the `> 0` guard above, so their `u32` conversion cannot fail.
+    let width = u32::try_from(codecpar.width).map_err(|_| CodecError::BackendInternal {
+        detail: format!("stream reports invalid coded width {}", codecpar.width),
+    })?;
+    let height = u32::try_from(codecpar.height).map_err(|_| CodecError::BackendInternal {
+        detail: format!("stream reports invalid coded height {}", codecpar.height),
+    })?;
+    if width == 0 || height == 0 {
+        return Err(CodecError::BackendInternal {
+            detail: format!("stream reports zero coded dimension {width}x{height}"),
+        });
+    }
+
     Ok(ProbeMetadata {
         codec: codec_from_id(codecpar.codec_id)?,
-        width: u32::try_from(codecpar.width).unwrap_or(0),
-        height: u32::try_from(codecpar.height).unwrap_or(0),
+        width,
+        height,
         fps_num: u32::try_from(fps_num).unwrap_or(0),
         fps_den: u32::try_from(fps_den).unwrap_or(0),
         duration_us,
@@ -134,7 +158,7 @@ pub fn probe(path: &Path) -> Result<ProbeMetadata, CodecError> {
 ///
 /// - [`CodecError::InvalidParams`] — unrepresentable path, or the stream
 ///   uses a codec outside the v0 surface.
-/// - [`CodecError::EncoderInternal`] — no video stream, or any libav
+/// - [`CodecError::BackendInternal`] — no video stream, or any libav
 ///   open/decode/scale error.
 pub fn decode_frames(path: &Path) -> Result<Vec<Frame>, CodecError> {
     let cpath = path_cstr(path)?;
@@ -144,7 +168,7 @@ pub fn decode_frames(path: &Path) -> Result<Vec<Frame>, CodecError> {
     let (stream_index, decoder) = input
         .find_best_stream(ffi::AVMediaType_AVMEDIA_TYPE_VIDEO)
         .map_err(|e| map_rsmpeg("find best stream", &e))?
-        .ok_or_else(|| CodecError::EncoderInternal {
+        .ok_or_else(|| CodecError::BackendInternal {
             detail: "no video stream in container".to_string(),
         })?;
 
@@ -187,7 +211,7 @@ fn decode_context(
     let stream = input
         .streams()
         .get(stream_index)
-        .ok_or_else(|| CodecError::EncoderInternal {
+        .ok_or_else(|| CodecError::BackendInternal {
             detail: "video stream index out of range".to_string(),
         })?;
     let mut dec_ctx = AVCodecContext::new(decoder);
@@ -224,7 +248,7 @@ fn to_yuv420p_frame(src: &AVFrame, sws: &mut Option<SwsContext>) -> Result<Frame
     let (uw, uh) = match (u32::try_from(width), u32::try_from(height)) {
         (Ok(w), Ok(h)) if w > 0 && h > 0 => (w, h),
         _ => {
-            return Err(CodecError::EncoderInternal {
+            return Err(CodecError::BackendInternal {
                 detail: "decoded frame has non-positive dimensions".to_string(),
             });
         }
@@ -252,7 +276,7 @@ fn to_yuv420p_frame(src: &AVFrame, sws: &mut Option<SwsContext>) -> Result<Frame
             ffi::AVPixelFormat_AV_PIX_FMT_YUV420P,
             ffi::SWS_BILINEAR,
         )
-        .ok_or_else(|| CodecError::EncoderInternal {
+        .ok_or_else(|| CodecError::BackendInternal {
             detail: format!(
                 "sws_getContext returned null for source pixel format {}",
                 src.format
