@@ -48,3 +48,9 @@ pub use node_id::IrNodeId;
 // (`verbreel-render`, future composition consumers) can spell typed
 // tick parameters without widening their crate edge.
 pub use verbreel_types::Tick;
+
+// `AssetHash` is already part of this crate's public graph surface
+// (`NodeKind::Source { asset: Option<AssetHash> }`). Re-export it so the
+// same downstream crates can name the asset a source node reads without a
+// direct `verbreel-types` edge.
+pub use verbreel_types::AssetHash;
