@@ -16,5 +16,33 @@ serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
+# Browser deps are wasm32-only. Native `cargo check --workspace` must pull
+# none of these so CI stays toolchain-free. The WebCodecs types
+# (`VideoDecoder`, `EncodedVideoChunk`, `VideoFrame`) are still unstable in
+# web-sys 0.3 and require `--cfg=web_sys_unstable_apis`, set for the wasm32
+# target in `.cargo/config.toml`.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "VideoDecoder",
+    "VideoDecoderInit",
+    "VideoDecoderConfig",
+    "EncodedVideoChunk",
+    "EncodedVideoChunkInit",
+    "EncodedVideoChunkType",
+    "VideoFrame",
+    "VideoFrameCopyToOptions",
+    "VideoPixelFormat",
+    "PlaneLayout",
+    "CodecState",
+    "Window",
+    "Navigator",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
 [dev-dependencies]
 serde_json.workspace = true

@@ -106,3 +106,13 @@ jobs:
         run: cargo check -p verbreel-events --target wasm32-unknown-unknown --lib --no-default-features
       - name: cargo check wasm32 — verbreel-wasm
         run: cargo check -p verbreel-wasm --target wasm32-unknown-unknown --lib
+      # codec-web's WebCodecs bindings (VideoDecoder / EncodedVideoChunk /
+      # VideoFrame) are still unstable in web-sys 0.3, so the wasm32 build
+      # needs `--cfg=web_sys_unstable_apis`. The job-level `RUSTFLAGS` env
+      # fully overrides `.cargo/config.toml`'s target rustflags, so the cfg
+      # is appended explicitly here (config.toml still covers local dev where
+      # RUSTFLAGS is unset). `--all-targets` exercises the wasm32 smoke tests.
+      - name: cargo check wasm32 — verbreel-codec-web
+        run: cargo check -p verbreel-codec-web --target wasm32-unknown-unknown --all-targets
+        env:
+          RUSTFLAGS: "-D warnings --cfg=web_sys_unstable_apis"

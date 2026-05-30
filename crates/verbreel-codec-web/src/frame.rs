@@ -66,3 +66,65 @@ impl DecodedFrame {
         self.pts_micros
     }
 }
+
+/// Convert a `WebCodecs` `VideoFrame.timestamp` (`f64` microseconds,
+/// which may be fractional, negative, or non-finite) into the
+/// non-negative integer-microsecond unit [`DecodedFrame`] carries.
+///
+/// Lives here (not in the wasm32-only `webcodecs` module) so the pure
+/// arithmetic is exercised by native unit tests. Negative or non-finite
+/// inputs clamp to `0`; an out-of-`u64`-range positive value saturates
+/// to `u64::MAX` — both are sensible clamps for a presentation stamp.
+///
+// Called from the wasm32-only `webcodecs` decode loop and from the
+// native unit tests below; unused on a native non-test lib build.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+#[must_use]
+pub(crate) fn timestamp_to_micros(timestamp: f64) -> u64 {
+    if timestamp <= 0.0 || !timestamp.is_finite() {
+        0
+    } else {
+        // Guarded above: value is finite and strictly positive, so the
+        // sign-loss cast cannot lose information, and the float-to-int
+        // `as` saturates to `u64::MAX` for the overflow case.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let micros = timestamp.round() as u64;
+        micros
+    }
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::timestamp_to_micros;
+
+    #[test]
+    fn positive_rounds_to_nearest_micro() {
+        assert_eq!(timestamp_to_micros(1_000.4), 1_000);
+        assert_eq!(timestamp_to_micros(1_000.6), 1_001);
+    }
+
+    #[test]
+    fn negative_clamps_to_zero() {
+        assert_eq!(timestamp_to_micros(-5.0), 0);
+    }
+
+    #[test]
+    fn zero_is_zero() {
+        assert_eq!(timestamp_to_micros(0.0), 0);
+    }
+
+    #[test]
+    fn non_finite_clamps_to_zero() {
+        assert_eq!(timestamp_to_micros(f64::NAN), 0);
+        assert_eq!(timestamp_to_micros(f64::INFINITY), 0);
+        assert_eq!(timestamp_to_micros(f64::NEG_INFINITY), 0);
+    }
+
+    #[test]
+    fn long_preview_timestamp_survives_past_i32_micros() {
+        // ~40 minutes in µs — past the old i32-µs cap (~35.8 min) that
+        // wrongly rejected long previews. Must round-trip intact.
+        let forty_minutes_micros = 40.0 * 60.0 * 1_000_000.0;
+        assert_eq!(timestamp_to_micros(forty_minutes_micros), 2_400_000_000);
+    }
+}
