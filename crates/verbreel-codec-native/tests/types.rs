@@ -172,15 +172,15 @@ fn error_invalid_params_distinguishable_by_match() {
 fn error_input_exhausted_distinguishable_by_match() {
     let err = CodecError::InputExhausted;
     assert!(matches!(err, CodecError::InputExhausted));
-    assert!(!matches!(err, CodecError::EncoderInternal { .. }));
+    assert!(!matches!(err, CodecError::BackendInternal { .. }));
 }
 
 #[test]
-fn error_encoder_internal_distinguishable_by_match() {
-    let err = CodecError::EncoderInternal {
+fn error_backend_internal_distinguishable_by_match() {
+    let err = CodecError::BackendInternal {
         detail: "libav -22".to_string(),
     };
-    assert!(matches!(err, CodecError::EncoderInternal { .. }));
+    assert!(matches!(err, CodecError::BackendInternal { .. }));
     assert!(!matches!(err, CodecError::InvalidParams { .. }));
 }
 
@@ -196,7 +196,7 @@ fn error_display_includes_detail_for_string_variants() {
     };
     assert!(e.to_string().contains("odd width"));
 
-    let e = CodecError::EncoderInternal {
+    let e = CodecError::BackendInternal {
         detail: "libav -22".to_string(),
     };
     assert!(e.to_string().contains("libav -22"));
