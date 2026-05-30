@@ -16,12 +16,7 @@
 //! pixel buffers) and keeps the rounding rule in one auditable spot for the
 //! determinism contract.
 
-use verbreel_ir::{AssetHash, CacheStatus, Evaluator, Graph, NodeKind};
-
-/// Engine tick base in Hz (§0.2 `TICK_RATE_HZ`). Redeclared as a private
-/// constant only for the windowing math; the canonical definition lives in
-/// `verbreel_types::tick`.
-const TICK_RATE_HZ: u64 = 240_000;
+use verbreel_ir::{AssetHash, CacheStatus, Evaluator, Graph, NodeKind, TICK_RATE_HZ};
 
 /// One compositing layer the GPU stage draws, in bottom-to-top order.
 ///

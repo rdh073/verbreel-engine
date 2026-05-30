@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use verbreel_ir::IrNodeId;
+use verbreel_ir::{AssetHash, IrNodeId};
 
 use crate::adapter::RenderPlan;
 use crate::error::RenderError;
@@ -63,10 +63,10 @@ impl std::fmt::Display for RenderJobId {
     }
 }
 
-/// One decoded source's frames, keyed by the content-addressed asset the plan
-/// referenced. The state crate resolves an [`verbreel_types::AssetHash`] to a
-/// concrete path and hands the decoded frames in; render never opens the asset
-/// store itself (dep-rule).
+/// One decoded source's frames, keyed in [`RenderJobSpec::decoded`] by the
+/// content-addressed [`AssetHash`] the plan layer references. The state crate
+/// resolves an [`AssetHash`] to a concrete path and hands the decoded frames
+/// in; render never opens the asset store itself (dep-rule).
 #[derive(Debug, Clone)]
 pub struct DecodedSource {
     /// Packed-yuv420p frames, in presentation order.
@@ -90,11 +90,17 @@ pub struct RenderJobSpec {
     /// The per-frame render plans, in output-frame order. Each plan names the
     /// layers (and their source assets) to composite for that frame.
     pub frames: Vec<RenderPlan>,
-    /// Decoded source frames keyed by source-node id, supplied by the state
-    /// crate (which owns asset resolution). The layer at frame `f`, layer `l`
-    /// reads `decoded[source_node].frames[f]` when the plan layer carries an
-    /// asset; layers with no asset composite as opaque black.
-    pub decoded: HashMap<IrNodeId, DecodedSource>,
+    /// Decoded source frames keyed by the layer's content-addressed
+    /// [`AssetHash`], supplied by the state crate (which owns asset
+    /// resolution). A plan layer that carries `source_asset = Some(h)` reads
+    /// `decoded[h].frames[f]` for output frame `f`; a layer with no asset (or
+    /// an asset absent from this map) composites as opaque black.
+    ///
+    /// Keyed by `AssetHash` rather than source-node id so each layer resolves
+    /// its *own* source: the layer holds the asset it reads, the lookup is a
+    /// direct content-addressed hit, and the result does not depend on map
+    /// iteration order — two renders of the same spec are byte-identical.
+    pub decoded: HashMap<AssetHash, DecodedSource>,
 }
 
 /// Terminal (or in-flight) state of a render job.
@@ -143,36 +149,27 @@ impl JobRegistry {
     /// [`RenderStatus::Failed`]) under a freshly minted id. Returns the id so
     /// the caller can read the status back via [`Self::status`].
     ///
-    /// The job runs the full pipeline before returning; a failure mid-pipeline
-    /// is captured as [`RenderStatus::Failed`] *and* returned as the `Err`, so
-    /// the caller sees the error directly without a second registry read.
+    /// The job runs the full pipeline before returning. On success the terminal
+    /// [`RenderStatus::Done`] is registered under the returned id; on failure
+    /// the error is returned directly and *nothing* is inserted — the id is
+    /// never handed to the caller, so a `Failed` entry under it would be an
+    /// unreachable orphan that leaks in the process-wide default registry.
+    /// The [`RenderStatus::Failed`] variant exists for the async executor,
+    /// which will register a job *before* running it under a caller-known id.
     ///
     /// # Errors
     ///
     /// Propagates the first [`RenderError`] from compositor init, compositing,
-    /// or encode. The same error is also recorded in the registry under the
-    /// returned-by-`Ok`-path-only id; on `Err` no terminal `Done` is stored.
+    /// or encode. On `Err` no registry entry is created.
     ///
     /// # Panics
     ///
     /// Panics if the registry mutex is poisoned (see [`Self::status`]).
     pub fn start_render(&self, spec: &RenderJobSpec) -> Result<RenderJobId, RenderError> {
+        let status = run_job(spec)?;
         let id = RenderJobId::now();
-        match run_job(spec) {
-            Ok(status) => {
-                self.insert(id, status);
-                Ok(id)
-            }
-            Err(e) => {
-                self.insert(
-                    id,
-                    RenderStatus::Failed {
-                        detail: e.to_string(),
-                    },
-                );
-                Err(e)
-            }
-        }
+        self.insert(id, status);
+        Ok(id)
     }
 
     /// Read a job's status.
@@ -292,7 +289,7 @@ fn build_layers(
     let mut layers = Vec::with_capacity(plan.layers.len());
     for layer in &plan.layers {
         let planes = match &layer.source_asset {
-            Some(_asset) => decoded_frame_planes(spec, frame_index, frame_len),
+            Some(asset) => decoded_frame_planes(spec, asset, frame_index, frame_len),
             None => black_yuv420p(frame_len),
         };
         layers.push(CompositeLayer {
@@ -303,23 +300,34 @@ fn build_layers(
     Ok(layers)
 }
 
-/// Pick the decoded planes for a frame. The v1 floor keys decoded sources by
-/// insertion order: it walks `spec.decoded` and uses the first source's frame
-/// at `frame_index` (clamped). A richer per-layer source mapping lands when the
-/// state crate wires asset->source-node resolution; until then a single source
-/// covers the smoke path.
-fn decoded_frame_planes(spec: &RenderJobSpec, frame_index: usize, frame_len: usize) -> Vec<u8> {
-    for source in spec.decoded.values() {
-        if source.frames.is_empty() {
-            continue;
-        }
-        let idx = frame_index.min(source.frames.len() - 1);
-        let frame = &source.frames[idx];
-        if frame.planes().len() == frame_len {
-            return frame.planes().to_vec();
-        }
+/// Pick the decoded planes a layer reads for one output frame.
+///
+/// Resolves the layer's *own* source by its content-addressed [`AssetHash`]:
+/// a direct `decoded[asset]` lookup, so each layer in a multi-track
+/// composition reads its correct video and the result never depends on map
+/// iteration order. The frame index is clamped to the source's last frame so
+/// a short source holds on its final picture. A missing asset, an empty
+/// source, or a frame whose plane length disagrees with the output geometry
+/// falls back to opaque black so the pipeline never panics on a gap.
+fn decoded_frame_planes(
+    spec: &RenderJobSpec,
+    asset: &AssetHash,
+    frame_index: usize,
+    frame_len: usize,
+) -> Vec<u8> {
+    let Some(source) = spec.decoded.get(asset) else {
+        return black_yuv420p(frame_len);
+    };
+    if source.frames.is_empty() {
+        return black_yuv420p(frame_len);
     }
-    black_yuv420p(frame_len)
+    let idx = frame_index.min(source.frames.len() - 1);
+    let frame = &source.frames[idx];
+    if frame.planes().len() == frame_len {
+        frame.planes().to_vec()
+    } else {
+        black_yuv420p(frame_len)
+    }
 }
 
 /// Packed-yuv420p length in bytes for `width`x`height`.
@@ -338,4 +346,154 @@ fn black_yuv420p(frame_len: usize) -> Vec<u8> {
     let mut buf = vec![16u8; luma];
     buf.extend(std::iter::repeat_n(128u8, 2 * chroma));
     buf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapter::RenderLayer;
+    use verbreel_codec_native::Frame;
+
+    /// A valid 64-char lowercase-hex `AssetHash` from a single repeated nibble.
+    fn asset(nibble: char) -> AssetHash {
+        AssetHash::new(std::iter::repeat_n(nibble, 64).collect::<String>()).unwrap()
+    }
+
+    /// A flat yuv420p buffer of 4x4 filled with one Y value (chroma at 128).
+    fn frame_4x4(y: u8) -> Frame {
+        let len = yuv420p_len(4, 4);
+        let chroma = len / 6;
+        let luma = len - 2 * chroma;
+        let mut buf = vec![y; luma];
+        buf.extend(std::iter::repeat_n(128u8, 2 * chroma));
+        Frame::new(4, 4, buf)
+    }
+
+    fn spec_with_two_sources() -> RenderJobSpec {
+        let mut decoded = HashMap::new();
+        decoded.insert(
+            asset('a'),
+            DecodedSource {
+                frames: vec![frame_4x4(200)],
+            },
+        );
+        decoded.insert(
+            asset('b'),
+            DecodedSource {
+                frames: vec![frame_4x4(40)],
+            },
+        );
+        RenderJobSpec {
+            preset: RenderPreset::Deterministic,
+            width: 4,
+            height: 4,
+            fps_num: 30,
+            fps_den: 1,
+            frames: vec![RenderPlan {
+                layers: vec![
+                    RenderLayer {
+                        source_asset: Some(asset('a')),
+                        alpha_q16: u16::MAX,
+                        cache_hash: [0u8; 32],
+                    },
+                    RenderLayer {
+                        source_asset: Some(asset('b')),
+                        alpha_q16: u16::MAX,
+                        cache_hash: [0u8; 32],
+                    },
+                ],
+                tick: 0,
+            }],
+            decoded,
+        }
+    }
+
+    /// The P1 regression test: each layer resolves its OWN source by asset
+    /// hash. Layer A (asset 'a') must read source A's pixels (Y=200) and layer
+    /// B (asset 'b') must read source B's (Y=40) — not "the first via
+    /// `.values()`", which fed every layer the same source. GPU-free: asserts
+    /// on `decoded_frame_planes` directly so it runs feature-off in CI.
+    #[test]
+    fn each_layer_resolves_its_own_source_by_asset_hash() {
+        let spec = spec_with_two_sources();
+        let frame_len = yuv420p_len(spec.width, spec.height);
+
+        let planes_a = decoded_frame_planes(&spec, &asset('a'), 0, frame_len);
+        let planes_b = decoded_frame_planes(&spec, &asset('b'), 0, frame_len);
+
+        assert_eq!(planes_a[0], 200, "layer A must read source A's luma");
+        assert_eq!(planes_b[0], 40, "layer B must read source B's luma");
+        assert_ne!(
+            planes_a, planes_b,
+            "two distinct sources must resolve to distinct planes"
+        );
+    }
+
+    /// Resolution is deterministic: repeated calls over a multi-source map
+    /// return identical bytes (no dependence on HashMap iteration order).
+    #[test]
+    fn source_resolution_is_order_independent() {
+        let spec = spec_with_two_sources();
+        let frame_len = yuv420p_len(spec.width, spec.height);
+        let first = decoded_frame_planes(&spec, &asset('a'), 0, frame_len);
+        for _ in 0..16 {
+            assert_eq!(
+                first,
+                decoded_frame_planes(&spec, &asset('a'), 0, frame_len),
+                "per-layer source resolution must be byte-stable across calls"
+            );
+        }
+    }
+
+    /// `build_layers` maps the two-layer plan to two composite layers, each
+    /// carrying its own source's planes.
+    #[test]
+    fn build_layers_maps_each_layer_to_its_source() {
+        let spec = spec_with_two_sources();
+        let frame_len = yuv420p_len(spec.width, spec.height);
+        let layers = build_layers(&spec, &spec.frames[0], 0, frame_len).unwrap();
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[0].planes[0], 200);
+        assert_eq!(layers[1].planes[0], 40);
+    }
+
+    /// A missing asset (or `None`) falls back to opaque black, never panics.
+    #[test]
+    fn missing_asset_falls_back_to_black() {
+        let spec = spec_with_two_sources();
+        let frame_len = yuv420p_len(spec.width, spec.height);
+        let planes = decoded_frame_planes(&spec, &asset('c'), 0, frame_len);
+        assert_eq!(planes, black_yuv420p(frame_len));
+    }
+
+    /// `status` on an unregistered id returns [`RenderError::UnknownJob`].
+    #[test]
+    fn status_unknown_job_errors() {
+        let reg = JobRegistry::new();
+        let err = reg.status(RenderJobId::now()).unwrap_err();
+        assert!(matches!(err, RenderError::UnknownJob { .. }));
+    }
+
+    /// `cancel` on an unregistered id returns [`RenderError::UnknownJob`].
+    #[test]
+    fn cancel_unknown_job_errors() {
+        let reg = JobRegistry::new();
+        let err = reg.cancel(RenderJobId::now()).unwrap_err();
+        assert!(matches!(err, RenderError::UnknownJob { .. }));
+    }
+
+    /// Feature-off, the codec facade fails closed with [`RenderError::Codec`]
+    /// rather than linking `FFmpeg`. Feature-on the stubs are replaced by the
+    /// real rsmpeg path, so this only asserts the fail-closed contract.
+    #[cfg(not(feature = "rsmpeg"))]
+    #[test]
+    fn codec_stub_fails_closed_feature_off() {
+        let decode_err =
+            crate::codec::decode_source(std::path::Path::new("/nonexistent.mp4")).unwrap_err();
+        assert!(matches!(decode_err, RenderError::Codec { .. }));
+
+        let encode_err =
+            crate::codec::encode_frames(RenderPreset::Deterministic, 4, 4, 30, 1, &[]).unwrap_err();
+        assert!(matches!(encode_err, RenderError::Codec { .. }));
+    }
 }

@@ -334,7 +334,7 @@ impl Compositor {
         let words: &[u32] = bytemuck::cast_slice(&data);
         let out: Vec<u8> = words[..frame_len]
             .iter()
-            .map(|w| u8::try_from(w & 0xff).unwrap_or(0))
+            .map(|w| u8::try_from(w & 0xff).expect("masked to 0..=255, always fits u8"))
             .collect();
         drop(data);
         readback.unmap();

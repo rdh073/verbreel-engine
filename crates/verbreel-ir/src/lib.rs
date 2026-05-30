@@ -47,7 +47,12 @@ pub use node_id::IrNodeId;
 // dep graph allows `verbreel-ir` but not direct `verbreel-types`
 // (`verbreel-render`, future composition consumers) can spell typed
 // tick parameters without widening their crate edge.
-pub use verbreel_types::Tick;
+//
+// `TICK_RATE_HZ` rides along for the same reason: `verbreel-render`'s
+// tick->frame windowing math needs the engine tick base (§0.2), and the
+// canonical definition lives in `verbreel_types::tick`. Re-exporting it
+// keeps one source of truth instead of a redeclared private constant.
+pub use verbreel_types::{TICK_RATE_HZ, Tick};
 
 // `AssetHash` is already part of this crate's public graph surface
 // (`NodeKind::Source { asset: Option<AssetHash> }`). Re-export it so the

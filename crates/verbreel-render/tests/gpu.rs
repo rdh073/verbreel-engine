@@ -123,6 +123,12 @@ fn composite_output_is_byte_stable_across_runs() {
 
 // --- full S1 smoke: composite -> rsmpeg encode, identical SHA ------------
 
+/// A valid 64-char lowercase-hex `AssetHash` from a single repeated nibble.
+#[cfg(feature = "rsmpeg")]
+fn asset(nibble: char) -> verbreel_ir::AssetHash {
+    verbreel_ir::AssetHash::new(std::iter::repeat_n(nibble, 64).collect::<String>()).unwrap()
+}
+
 #[cfg(feature = "rsmpeg")]
 #[test]
 fn deterministic_render_smoke_is_byte_stable() {
@@ -135,15 +141,16 @@ fn deterministic_render_smoke_is_byte_stable() {
 
     let (w, h) = (64u32, 64u32);
     let frame_count = 8usize;
+    let src = asset('a');
 
-    // One layer per frame, no source asset (composited as opaque black) plus a
-    // single decoded "source" feeding the layer. Build the spec twice and run
-    // both through a fresh registry; the encoded MP4 bytes must hash equal.
+    // One layer per frame, reading a single decoded source by its asset hash.
+    // Build the spec twice and run both through a fresh registry; the encoded
+    // MP4 bytes must hash equal.
     let make_spec = || {
         let plans: Vec<RenderPlan> = (0..frame_count)
             .map(|_| RenderPlan {
                 layers: vec![verbreel_render::RenderLayer {
-                    source_asset: None,
+                    source_asset: Some(src.clone()),
                     alpha_q16: u16::MAX,
                     cache_hash: [0u8; 32],
                 }],
@@ -159,7 +166,7 @@ fn deterministic_render_smoke_is_byte_stable() {
             })
             .collect();
         let mut decoded = HashMap::new();
-        decoded.insert(verbreel_ir::IrNodeId::now(), DecodedSource { frames });
+        decoded.insert(src.clone(), DecodedSource { frames });
         RenderJobSpec {
             preset: RenderPreset::Deterministic,
             width: w,
@@ -197,7 +204,100 @@ fn deterministic_render_smoke_is_byte_stable() {
         "deterministic render must produce byte-identical MP4 across runs"
     );
     eprintln!(
-        "deterministic render SHA-256: {} ({} frames, {} bytes)",
+        "deterministic render SHA-256 (single source): {} ({} frames, {} bytes)",
+        hex(&h1),
+        n1,
+        out1.len()
+    );
+}
+
+/// Two non-empty decoded sources, two layers: layer A must read source 1 and
+/// layer B source 2. Asserts the per-layer source resolution is correct (not
+/// "first via `.values()`") AND that two renders are byte-identical — the
+/// regression test for the HashMap-order determinism hole.
+#[cfg(feature = "rsmpeg")]
+#[test]
+fn two_source_render_resolves_per_layer_and_is_byte_stable() {
+    use std::collections::HashMap;
+    use verbreel_render::{DecodedSource, JobRegistry, RenderJobSpec, RenderPlan, RenderStatus};
+
+    let Some(_) = compositor_or_skip("two_source_render_resolves_per_layer_and_is_byte_stable")
+    else {
+        return;
+    };
+
+    let (w, h) = (64u32, 64u32);
+    let frame_count = 4usize;
+    let src_a = asset('a');
+    let src_b = asset('b');
+
+    // Source A: bright (Y=200). Source B: dark (Y=40). Distinct enough that a
+    // layer reading the wrong source produces visibly different pixels.
+    let make_spec = || {
+        let plans: Vec<RenderPlan> = (0..frame_count)
+            .map(|_| RenderPlan {
+                layers: vec![
+                    verbreel_render::RenderLayer {
+                        source_asset: Some(src_a.clone()),
+                        alpha_q16: u16::MAX,
+                        cache_hash: [0u8; 32],
+                    },
+                    verbreel_render::RenderLayer {
+                        source_asset: Some(src_b.clone()),
+                        alpha_q16: 32_768, // 50% over layer A
+                        cache_hash: [0u8; 32],
+                    },
+                ],
+                tick: 0,
+            })
+            .collect();
+        let frames_a: Vec<verbreel_codec_native::Frame> = (0..frame_count)
+            .map(|_| verbreel_codec_native::Frame::new(w, h, solid_yuv(w, h, 200, 128, 128)))
+            .collect();
+        let frames_b: Vec<verbreel_codec_native::Frame> = (0..frame_count)
+            .map(|_| verbreel_codec_native::Frame::new(w, h, solid_yuv(w, h, 40, 128, 128)))
+            .collect();
+        let mut decoded = HashMap::new();
+        decoded.insert(src_a.clone(), DecodedSource { frames: frames_a });
+        decoded.insert(src_b.clone(), DecodedSource { frames: frames_b });
+        RenderJobSpec {
+            preset: RenderPreset::Deterministic,
+            width: w,
+            height: h,
+            fps_num: 30,
+            fps_den: 1,
+            frames: plans,
+            decoded,
+        }
+    };
+
+    let run = || {
+        let reg = JobRegistry::new();
+        let id = reg.start_render(&make_spec()).unwrap();
+        match reg.status(id).unwrap() {
+            RenderStatus::Done {
+                frame_count: n,
+                output,
+            } => (n, output),
+            other => panic!("expected Done, got {other:?}"),
+        }
+    };
+
+    let (n1, out1) = run();
+    let (n2, out2) = run();
+
+    assert_eq!(n1, frame_count, "all frames must be encoded");
+    assert_eq!(n2, frame_count);
+    assert!(!out1.is_empty());
+
+    let h1 = Sha256::digest(&out1);
+    let h2 = Sha256::digest(&out2);
+    assert_eq!(
+        h1, h2,
+        "two-source render must produce byte-identical MP4 across runs"
+    );
+    eprintln!(
+        "deterministic render SHA-256 (two sources): {} ({} frames, {} bytes)",
         hex(&h1),
         n1,
         out1.len()

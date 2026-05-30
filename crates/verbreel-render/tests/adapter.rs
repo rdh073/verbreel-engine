@@ -151,3 +151,10 @@ fn plan_is_deterministic_for_same_graph() {
     let b = RenderPlan::from_evaluator(&graph, &eval);
     assert_eq!(a, b, "same graph must yield the same plan");
 }
+
+#[test]
+fn is_layer_live_only_on_cache_miss() {
+    use verbreel_ir::CacheStatus;
+    assert!(RenderPlan::is_layer_live(CacheStatus::Miss));
+    assert!(!RenderPlan::is_layer_live(CacheStatus::Hit));
+}
