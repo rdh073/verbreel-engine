@@ -2,12 +2,13 @@
 //!
 //! Variants:
 //!
-//! - [`CodecError::NotYetImplemented`] — historical placeholder kept for
-//!   callers that still grep for it; no live call site emits it now that
-//!   the rsmpeg path is wired.
+//! - [`CodecError::NotYetImplemented`] — historical placeholder, retained
+//!   only for enum API stability; no live call site emits it.
 //! - [`CodecError::FeatureDisabled`] — the entry point needs the
 //!   `rsmpeg` cargo feature (system `FFmpeg`) and it was compiled off.
-//!   This is the feature-off return for every decode/encode/probe call.
+//!   This is the feature-off return for `encode`; `decode`/`probe` are
+//!   gated out as a whole module feature-off, so they never reach a
+//!   runtime return.
 //! - [`CodecError::InvalidParams`] — param-shape failures caught
 //!   before any encoder work runs.
 //! - [`CodecError::InputExhausted`] — caller-driven decode loop
@@ -21,9 +22,9 @@ use thiserror::Error;
 /// codec entry points.
 #[derive(Debug, Error)]
 pub enum CodecError {
-    /// The codec backend body has not been implemented yet. Retained
-    /// for callers that still grep the v0 string; the rsmpeg+libx264
-    /// path is now wired, so no live call site emits this variant.
+    /// The codec backend body has not been implemented yet. No live call
+    /// site emits this variant now that the rsmpeg+libx264 path is wired;
+    /// it is retained only for enum API stability.
     #[error("codec backend not yet implemented: {detail}")]
     NotYetImplemented {
         /// Free-form context — typically the Spike S1 citation.
@@ -33,9 +34,11 @@ pub enum CodecError {
     /// The requested entry point needs the `rsmpeg` cargo feature
     /// (which links system `FFmpeg` 6.x) and the crate was compiled
     /// without it. This is the deterministic feature-off return for
-    /// every decode / encode / probe call — CI builds the crate
-    /// feature-off and never links `FFmpeg`, so these calls fail closed
-    /// with a clear signal rather than a link error.
+    /// [`encode`](crate::encode()); `decode`/`probe` live in a module
+    /// gated out feature-off, so they fail at compile time rather than
+    /// returning this. CI builds the crate feature-off and never links
+    /// `FFmpeg`, so `encode` fails closed with a clear signal rather
+    /// than a link error.
     #[error("codec backend requires the `rsmpeg` feature: {detail}")]
     FeatureDisabled {
         /// Free-form context — typically the entry-point name.

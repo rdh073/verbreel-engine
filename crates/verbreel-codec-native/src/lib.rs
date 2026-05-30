@@ -5,8 +5,11 @@
 //! pinned per Research 01 §11. The rsmpeg path links system `FFmpeg` 6.x and
 //! lives behind the `rsmpeg` cargo feature so the default workspace
 //! `cargo check` stays toolchain-free (CI has no `FFmpeg`). Feature-off, the
-//! full type surface still compiles and every decode/encode/probe entry
-//! point returns [`CodecError::FeatureDisabled`].
+//! full type surface still compiles: [`encode`](self::encode::encode) fails
+//! closed at runtime with [`CodecError::FeatureDisabled`], while `decode` and
+//! `probe` are gated out as a whole module (the `decode` module is
+//! `#[cfg(feature = "rsmpeg")]`), so referencing them feature-off is a
+//! compile error rather than a runtime return.
 //!
 //! Modules ([`SoC`](https://en.wikipedia.org/wiki/Separation_of_concerns)
 //! — one concern per file):

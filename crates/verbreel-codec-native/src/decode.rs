@@ -105,8 +105,8 @@ pub fn probe(path: &Path) -> Result<ProbeMetadata, CodecError> {
 
     let duration_us = {
         let d = stream.duration;
-        if d > 0 {
-            let tb = stream.time_base;
+        let tb = stream.time_base;
+        if d > 0 && tb.den > 0 {
             let us = i128::from(d) * i128::from(tb.num) * 1_000_000 / i128::from(tb.den);
             u64::try_from(us).ok()
         } else {
@@ -237,8 +237,13 @@ fn to_yuv420p_frame(src: &AVFrame, sws: &mut Option<SwsContext>) -> Result<Frame
     dst.alloc_buffer()
         .map_err(|e| map_rsmpeg("alloc yuv420p frame", &e))?;
 
-    let ctx = sws.get_or_insert_with(|| {
-        SwsContext::get_context(
+    // `sws_getContext` returns null for an unsupported SOURCE pixel format,
+    // which is reachable from an untrusted container — map null to an error
+    // and propagate rather than panicking inside `get_or_insert_with`.
+    let ctx = if let Some(ctx) = sws {
+        ctx
+    } else {
+        let built = SwsContext::get_context(
             width,
             height,
             src.format,
@@ -247,8 +252,14 @@ fn to_yuv420p_frame(src: &AVFrame, sws: &mut Option<SwsContext>) -> Result<Frame
             ffi::AVPixelFormat_AV_PIX_FMT_YUV420P,
             ffi::SWS_BILINEAR,
         )
-        .expect("sws_getContext returned null for a valid yuv420p target")
-    });
+        .ok_or_else(|| CodecError::EncoderInternal {
+            detail: format!(
+                "sws_getContext returned null for source pixel format {}",
+                src.format
+            ),
+        })?;
+        sws.insert(built)
+    };
     ctx.scale_frame(src, 0, height, &mut dst)
         .map_err(|e| map_rsmpeg("scale to yuv420p", &e))?;
 

@@ -178,18 +178,31 @@ mod imp {
             }
         })?;
 
+        let fps_num = i32::try_from(params.fps_num).map_err(|_| CodecError::InvalidParams {
+            detail: format!("fps_num {} exceeds i32 range", params.fps_num),
+        })?;
+        let fps_den = i32::try_from(params.fps_den).map_err(|_| CodecError::InvalidParams {
+            detail: format!("fps_den {} exceeds i32 range", params.fps_den),
+        })?;
+        let width = i32::try_from(params.width).map_err(|_| CodecError::InvalidParams {
+            detail: format!("width {} exceeds i32 range", params.width),
+        })?;
+        let height = i32::try_from(params.height).map_err(|_| CodecError::InvalidParams {
+            detail: format!("height {} exceeds i32 range", params.height),
+        })?;
+
         let time_base = AVRational {
-            num: i32::try_from(params.fps_den).unwrap_or(1),
-            den: i32::try_from(params.fps_num).unwrap_or(1),
+            num: fps_den,
+            den: fps_num,
         };
         let frame_rate = AVRational {
-            num: i32::try_from(params.fps_num).unwrap_or(1),
-            den: i32::try_from(params.fps_den).unwrap_or(1),
+            num: fps_num,
+            den: fps_den,
         };
 
         let mut enc_ctx = AVCodecContext::new(&encoder);
-        enc_ctx.set_width(i32::try_from(params.width).unwrap_or(0));
-        enc_ctx.set_height(i32::try_from(params.height).unwrap_or(0));
+        enc_ctx.set_width(width);
+        enc_ctx.set_height(height);
         enc_ctx.set_pix_fmt(ffi::AVPixelFormat_AV_PIX_FMT_YUV420P);
         enc_ctx.set_time_base(time_base);
         enc_ctx.set_framerate(frame_rate);
@@ -277,8 +290,12 @@ mod imp {
         frame: &Frame,
         pts: i64,
     ) -> Result<AVFrame, CodecError> {
-        let width = i32::try_from(params.width).unwrap_or(0);
-        let height = i32::try_from(params.height).unwrap_or(0);
+        let width = i32::try_from(params.width).map_err(|_| CodecError::InvalidParams {
+            detail: format!("width {} exceeds i32 range", params.width),
+        })?;
+        let height = i32::try_from(params.height).map_err(|_| CodecError::InvalidParams {
+            detail: format!("height {} exceeds i32 range", params.height),
+        })?;
 
         let mut av_frame = AVFrame::new();
         av_frame.set_width(width);
