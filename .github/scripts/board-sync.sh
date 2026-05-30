@@ -16,10 +16,15 @@ META=".github/project-meta.json"
 [ -f "$META" ] || { echo "no $META — board-sync is a no-op"; exit 0; }
 
 PROJECT_ID=$(jq -r '.project_id' "$META")
-PROJECT_NUMBER=$(jq -r '.project_number' "$META")
 STATUS_FIELD_ID=$(jq -r '.fields[]|select(.name=="Status").id' "$META")
-OWNER=$(jq -r '.owner' "$META")
-REPO=$(jq -r '.repo' "$META")
+# Repo identity is hardcoded (project-meta.json holds only project_id + fields).
+# REPO is the BARE name: the GraphQL repository(owner:,name:) calls below split
+# owner and name, so name must be "verbreel-engine", NOT "rdh073/verbreel-engine".
+# (board-move.sh's REPO is the owner/repo form because it builds an issue URL —
+# a different consumer, intentionally a different value.)
+OWNER="rdh073"
+REPO="verbreel-engine"
+PROJECT_NUMBER=3
 
 EVENT="${GITHUB_EVENT_NAME:?GITHUB_EVENT_NAME required}"
 PAYLOAD="${GITHUB_EVENT_PATH:?GITHUB_EVENT_PATH required}"
@@ -34,6 +39,7 @@ case "$EVENT" in
     case "$ACTION" in
       opened | reopened) [ "$draft" = "true" ] && status="In progress" || status="In review" ;;
       ready_for_review) status="In review" ;;
+      converted_to_draft) status="In progress" ;;
       closed) [ "$merged" = "true" ] && status="Done" || status="In progress" ;;
     esac
     ;;
@@ -80,8 +86,7 @@ for n in "${issues[@]}"; do
         issue(number:$number){
           projectItems(first:20){ nodes{ id project{ number } } } } } }' \
     -f owner="$OWNER" -f repo="$REPO" -F number="$n" \
-    --jq ".data.repository.issue.projectItems.nodes[]|select(.project.number==$PROJECT_NUMBER)|.id" |
-    head -n1)
+    --jq "[.data.repository.issue.projectItems.nodes[]|select(.project.number==$PROJECT_NUMBER)|.id][0] // empty")
 
   if [ -z "$item_id" ]; then
     echo "issue #$n not on project #$PROJECT_NUMBER — skip"

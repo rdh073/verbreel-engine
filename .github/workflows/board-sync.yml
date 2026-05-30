@@ -15,7 +15,7 @@ name: board-sync
 
 on:
   pull_request_target:
-    types: [opened, reopened, ready_for_review, closed]
+    types: [opened, reopened, ready_for_review, converted_to_draft, closed]
   issues:
     types: [assigned]
 
