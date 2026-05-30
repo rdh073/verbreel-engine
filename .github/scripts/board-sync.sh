@@ -86,7 +86,11 @@ for n in "${issues[@]}"; do
         issue(number:$number){
           projectItems(first:20){ nodes{ id project{ number } } } } } }' \
     -f owner="$OWNER" -f repo="$REPO" -F number="$n" \
-    --jq "[.data.repository.issue.projectItems.nodes[]|select(.project.number==$PROJECT_NUMBER)|.id][0] // empty")
+    --jq "[.data.repository.issue.projectItems.nodes[]|select(.project.number==$PROJECT_NUMBER)|.id][0] // empty" || true)
+  # `|| true`: a transient ProjectV2 query failure degrades to an empty id (→
+  # skip below), matching the mapfile lookup's fail-open behaviour. Without it,
+  # set -e would propagate the command-substitution failure and turn the run
+  # red, contradicting the self-heals-on-next-event invariant.
 
   if [ -z "$item_id" ]; then
     echo "issue #$n not on project #$PROJECT_NUMBER — skip"
