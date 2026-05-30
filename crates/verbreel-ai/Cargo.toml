@@ -10,6 +10,16 @@ authors.workspace = true
 [lib]
 name = "verbreel_ai"
 
+[features]
+# `ort` pulls the ONNX Runtime wrapper in `load-dynamic` mode: the runtime
+# shared library is resolved at runtime, so the crate still COMPILES with
+# the feature on even when `libonnxruntime` is absent on the host — the
+# missing library only surfaces at session-create time. Default features
+# exclude `ort` so a feature-off `cargo check --workspace` is toolchain-free.
+# `onnx` is an alias so callers can name the capability rather than the crate.
+ort = ["dep:ort"]
+onnx = ["ort"]
+
 [dependencies]
 verbreel-types = { path = "../verbreel-types" }
 verbreel-state = { path = "../verbreel-state" }
@@ -18,3 +28,25 @@ tracing.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+# ort 2.x is still prerelease on crates.io, so the rc tag must be pinned
+# explicitly — a bare `2` requirement matches no published version.
+#
+# `default-features = false` drops `download-binaries`: with `load-dynamic`
+# the runtime is resolved at run time via `ORT_DYLIB_PATH` / the system
+# loader, and we must NOT let a missing `libonnxruntime` silently trigger a
+# network fetch of the binary — that turns "runtime unavailable" into a hang
+# instead of a fast, loud `ModelLoadFailed`. `std` is re-added because
+# disabling defaults also drops it.
+# `api-20` is re-added because disabling defaults also drops the API-version
+# pin; without it `ort` lowers the requested API and a VitisAI EP path fails
+# to compile against the older `OrtApi` struct. rc.12 exposes `api-20` as its
+# highest API-version feature.
+ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, features = [
+    "std",
+    "api-20",
+    "load-dynamic",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true

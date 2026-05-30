@@ -29,15 +29,27 @@
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]
 
+pub mod adapters;
 pub mod capability;
 pub mod error;
 pub mod execution_provider;
+pub mod model;
 pub mod provider;
+pub mod registry;
+pub mod session;
+pub mod sidecar;
 
+pub use adapters::{Backend, run_audio_analysis, run_stt, run_tracker};
 pub use capability::Capability;
 pub use error::AiError;
 pub use execution_provider::{
     ExecutionProvider, ORT_AUTO_PROMOTE_ORDER_V1, ORT_AUTO_PROMOTE_ORDER_V1_IDS,
     ort_auto_promote_order_v1,
 };
+pub use model::{ModelCacheKey, ModelId, ModelVersion};
 pub use provider::{Provider, run};
+pub use registry::{ProviderEntry, ProviderRegistry};
+pub use sidecar::{SidecarRequest, SidecarResponse, run_sidecar};
+
+#[cfg(feature = "ort")]
+pub use session::OrtSession;
