@@ -44,4 +44,51 @@ pub enum AiError {
         /// Exit code + stderr tail if available.
         detail: String,
     },
+
+    /// The sidecar request could not be serialized, or its stdout was not a
+    /// single valid response document (bad UTF-8, malformed JSON, or a
+    /// result payload that does not match the expected canonical struct).
+    /// Distinct from [`Self::ProcessExited`]: the process ran to a clean
+    /// exit but spoke the protocol wrong.
+    #[error("ai sidecar protocol violation: {detail}")]
+    SidecarProtocol {
+        /// Where the protocol broke (serialize / decode / shape).
+        detail: String,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_variant_renders_a_distinct_message() {
+        let variants = [
+            AiError::NotYetImplemented {
+                detail: "x".to_string(),
+            },
+            AiError::SidecarLaunchFailed {
+                detail: "x".to_string(),
+            },
+            AiError::ModelLoadFailed {
+                detail: "x".to_string(),
+            },
+            AiError::ProcessExited {
+                detail: "x".to_string(),
+            },
+            AiError::SidecarProtocol {
+                detail: "x".to_string(),
+            },
+        ];
+        let rendered: Vec<String> = variants.iter().map(ToString::to_string).collect();
+        // Every Display string is non-empty and carries the detail.
+        for msg in &rendered {
+            assert!(msg.contains('x'), "missing detail in `{msg}`");
+        }
+        // No two variants share a prefix-identical message.
+        let mut sorted = rendered.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), rendered.len(), "variant messages collide");
+    }
 }
