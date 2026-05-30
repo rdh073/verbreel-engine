@@ -1,0 +1,41 @@
+# board-sync — projects the PR/issue lifecycle onto the project board Status.
+#
+# This is NOT a gate. It never blocks a PR. It keeps the board's Status field
+# in sync as a side effect of GitHub events, so no human or agent has to
+# remember to update it — and a PR with no linked issue is simply a no-op
+# (small/trivial changes flow freely).
+#
+# Trigger safety: uses `pull_request_target` so secrets (GH_PROJECT_TOKEN) are
+# available even for fork PRs, and checks out the BASE branch (the default for
+# pull_request_target — NOT the PR head), so only trusted code runs. Do not add
+# `ref: ...head...` here. Runs only on lifecycle transitions (not `synchronize`),
+# keeping ProjectV2 GraphQL calls minimal.
+
+name: board-sync
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, converted_to_draft, closed]
+  issues:
+    types: [assigned]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: board-sync-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base (trusted — never the PR head)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Sync project board Status
+        env:
+          GH_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }} # PAT with `project` scope; GITHUB_TOKEN cannot touch ProjectV2
+        run: bash .github/scripts/board-sync.sh

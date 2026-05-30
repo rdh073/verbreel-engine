@@ -125,7 +125,7 @@ When you write a finding body:
 
 ## Project board protocol
 
-- Before any code change for issue #N: `.github/scripts/board-move.sh N "In Progress"`.
-- On PR open: `.github/scripts/board-move.sh N "In Review"`.
-- Never close-via-commit-message without a PR; `board-gate.yml` rejects PRs whose linked issue is not in review.
+- Board Status is auto-projected from PR/issue lifecycle by `board-sync.yml` — do NOT manually move the board. Mapping: issue assigned / draft PR open → In progress; PR ready-for-review → In review; PR merged → Done; PR closed unmerged → In progress.
+- `.github/scripts/board-move.sh N "<Status>"` is a manual override for exceptions only. board-sync is not a gate and never blocks a PR.
+- Always land changes via PR, not close-via-commit-message.
 - Estimate must be set on the Backlog entry; no Estimate = 0 is allowed except for sub-issues that explicitly link to a parent estimate.
