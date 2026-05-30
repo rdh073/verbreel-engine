@@ -63,6 +63,7 @@ pub mod capability;
 pub mod decode;
 pub mod decoder;
 pub mod error;
+pub(crate) mod error_surface;
 pub mod fallback;
 pub mod frame;
 pub mod handshake;

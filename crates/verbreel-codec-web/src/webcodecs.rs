@@ -55,6 +55,7 @@ use web_sys::{
 
 use crate::decoder::WebDecoder;
 use crate::error::DecodeError;
+use crate::error_surface::{ErrorSlot, take_pending_error};
 use crate::frame::DecodedFrame;
 
 /// Default `WebCodecs` codec string for an H.264 preview pass.
@@ -91,11 +92,6 @@ impl WebDecoder {
 ///
 /// [`drain`]: WebCodecsSession::drain
 type FrameQueue = Rc<RefCell<Vec<VideoFrame>>>;
-
-/// Shared last-error slot. The `error` callback writes the browser's
-/// `DOMException` message here so a later [`WebCodecsSession::drain`]
-/// can surface it as [`DecodeError::DecoderInternal`].
-type ErrorSlot = Rc<RefCell<Option<String>>>;
 
 /// A live `WebCodecs` decode session.
 ///
@@ -269,8 +265,13 @@ impl WebCodecsSession {
     /// recorded a browser decode error, or if a frame's `allocation
     /// size` / `copyTo` fails.
     pub async fn drain(&self) -> Result<Vec<DecodedFrame>, DecodeError> {
-        if let Some(detail) = self.last_error.borrow_mut().take() {
-            return Err(DecodeError::DecoderInternal { detail });
+        // Surface a recorded browser error before touching the queue, so
+        // the queued frames stay intact for `Drop` to release rather
+        // than being half-consumed under a fatal decode. The decision is
+        // a pure, natively-tested helper (`error_surface`); only the
+        // `web_sys` frame copy below cannot be faulted without a browser.
+        if let Some(err) = take_pending_error(&self.last_error) {
+            return Err(err);
         }
         let queued: Vec<VideoFrame> = std::mem::take(&mut self.frames.borrow_mut());
         let mut decoded = Vec::with_capacity(queued.len());
