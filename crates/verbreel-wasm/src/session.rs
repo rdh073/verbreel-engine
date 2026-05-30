@@ -332,12 +332,24 @@ mod tests {
     }
 
     #[test]
-    fn large_tick_does_not_overflow_i64_intermediate() {
-        // tick * 1_000_000 overflows i64 before the divide; the i128
-        // intermediate must keep it intact. i64::MAX ticks → a value
-        // that still fits i64 after the /240_000.
-        let got = tick_to_micros(i64::MAX);
-        assert!(got > 0, "huge positive tick must stay positive, got {got}");
+    fn large_tick_saturates_and_non_saturating_tick_is_exact() {
+        // Both arms of the i128 conversion are pinned to exact values.
+        //
+        // Saturation arm: i64::MAX * 25 / 6 ≈ 3.8e19 exceeds i64::MAX
+        // (≈ 9.2e18), so the i128 intermediate (which holds it without
+        // overflow) is clamped back to i64::MAX. No value larger than
+        // i64::MAX can be represented in the i64 microsecond timestamp,
+        // so saturation here is the documented behavior, not a bug.
+        assert_eq!(tick_to_micros(i64::MAX), i64::MAX);
+
+        // Non-saturating arm: a large tick whose * 25 / 6 still fits i64.
+        // 1.2e18 is a multiple of 6, so the divide is exact: the i128
+        // intermediate (3.0e25, far beyond i64) must survive intact, then
+        // 1.2e18 * 25 / 6 = 5.0e18 < i64::MAX casts back without loss.
+        assert_eq!(
+            tick_to_micros(1_200_000_000_000_000_000),
+            5_000_000_000_000_000_000
+        );
     }
 
     // --- PreviewSession::open / transport plan --------------------------
