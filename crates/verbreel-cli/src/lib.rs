@@ -52,6 +52,7 @@ pub mod project;
     name = "verbreel",
     version,
     about = "Verbreel engine CLI",
+    long_about = None,
     propagate_version = true,
     arg_required_else_help = true
 )]
@@ -70,7 +71,7 @@ pub enum Command {
 
 /// `verbreel project ...` argument group.
 #[derive(Debug, clap::Args)]
-#[command(arg_required_else_help = true)]
+#[command(arg_required_else_help = true, long_about = None)]
 pub struct ProjectCmd {
     /// Which project-scoped action was invoked.
     #[command(subcommand)]

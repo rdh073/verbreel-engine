@@ -12,7 +12,7 @@ name = "verbreel_http"
 path = "src/lib.rs"
 
 [[bin]]
-name = "verbreel_http"
+name = "verbreel-http"
 path = "src/main.rs"
 
 [dependencies]

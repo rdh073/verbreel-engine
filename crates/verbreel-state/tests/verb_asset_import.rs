@@ -419,6 +419,112 @@ fn mutate_via_verb_non_empty_import_writes_cas_and_records_canonical_hash_path()
 
 #[cfg(feature = "native")]
 #[test]
+fn mutate_via_verb_ppm_import_records_image_asset() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    let source = dir.path().join("frame.PPM");
+    std::fs::write(
+        &source,
+        b"P6\n# generated fixture\n2 1\n255\n\x00\x00\x00\xff\xff\xff",
+    )
+    .expect("write source file");
+
+    let mut store = ProjectStore::create_with_registry(
+        dir.path(),
+        empty_project(),
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .expect("create_with_registry succeeds");
+
+    let outcome = store
+        .mutate_via_verb(
+            "asset.import",
+            json!({"project_id": FIXTURE_PROJECT_ID, "paths": [source.to_string_lossy()]}),
+            None,
+        )
+        .expect("asset.import non-empty should succeed on native route");
+
+    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
+        panic!("expected Applied outcome for non-empty asset.import");
+    };
+    assert!(warnings.is_empty());
+
+    let data: AssetImportData =
+        serde_json::from_value(data).expect("asset.import data deserializes");
+    let imported = data.assets[0]
+        .as_object()
+        .expect("data.assets[0] is an object");
+    assert_eq!(imported.get("kind").and_then(Value::as_str), Some("image"));
+    assert_eq!(
+        imported
+            .get("metadata")
+            .and_then(|v| v.get("width"))
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        imported
+            .get("metadata")
+            .and_then(|v| v.get("height"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    let hash = imported
+        .get("hash")
+        .and_then(Value::as_str)
+        .expect("imported asset has hash");
+    let path = imported
+        .get("path")
+        .and_then(Value::as_str)
+        .expect("imported asset has path");
+    assert_eq!(path, format!("assets/{}/{}.ppm", &hash[..2], hash));
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_truncated_ppm_does_not_record_image_asset() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    let source = dir.path().join("truncated.ppm");
+    std::fs::write(&source, b"P6\n2 1\n255\n\x00\x00\x00").expect("write source file");
+
+    let mut store = ProjectStore::create_with_registry(
+        dir.path(),
+        empty_project(),
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .expect("create_with_registry succeeds");
+
+    let outcome = store
+        .mutate_via_verb(
+            "asset.import",
+            json!({"project_id": FIXTURE_PROJECT_ID, "paths": [source.to_string_lossy()]}),
+            None,
+        )
+        .expect("asset.import non-empty should succeed on native route");
+
+    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
+        panic!("expected Applied outcome for non-empty asset.import");
+    };
+    assert!(warnings.is_empty());
+
+    let data: AssetImportData =
+        serde_json::from_value(data).expect("asset.import data deserializes");
+    let imported = data.assets[0]
+        .as_object()
+        .expect("data.assets[0] is an object");
+    assert_eq!(
+        imported.get("kind").and_then(Value::as_str),
+        Some("subtitle")
+    );
+}
+
+#[cfg(feature = "native")]
+#[test]
 fn mutate_via_verb_rejects_corrupt_existing_cas_object() {
     use tempfile::TempDir;
 

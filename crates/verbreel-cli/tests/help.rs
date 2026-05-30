@@ -31,6 +31,15 @@ fn help_text_advertises_binary_name() {
 }
 
 #[test]
+fn help_text_omits_internal_rustdoc_details() {
+    let help = Cli::command().render_long_help().to_string();
+    assert!(
+        !help.contains("arg_required_else_help"),
+        "help should show user-facing command text, not parser implementation details:\n{help}"
+    );
+}
+
+#[test]
 fn version_flag_returns_displayed_version_error() {
     let err = Cli::try_parse_from(["verbreel", "--version"]).unwrap_err();
     assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
