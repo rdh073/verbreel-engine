@@ -10,8 +10,23 @@ authors.workspace = true
 [lib]
 name = "verbreel_render"
 
+[features]
+# `rsmpeg` forwards to verbreel-codec-native's feature of the same name, which
+# links system FFmpeg 6.x at build time. OFF by default so feature-off
+# `cargo check --workspace` stays toolchain-free (CI has no FFmpeg). Feature-off
+# the encode/decode entry points fail closed with a clear `RenderError` rather
+# than a link error. `tempfile` is only needed by the feature-on smoke harness.
+rsmpeg = ["verbreel-codec-native/rsmpeg", "dep:tempfile"]
+
 [dependencies]
 verbreel-ir = { path = "../verbreel-ir" }
+verbreel-codec-native = { path = "../verbreel-codec-native" }
 wgpu.workspace = true
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
 tracing.workspace = true
 thiserror.workspace = true
+tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+sha2.workspace = true
