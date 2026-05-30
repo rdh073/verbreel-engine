@@ -430,7 +430,7 @@ mod tests {
     }
 
     /// Resolution is deterministic: repeated calls over a multi-source map
-    /// return identical bytes (no dependence on HashMap iteration order).
+    /// return identical bytes (no dependence on `HashMap` iteration order).
     #[test]
     fn source_resolution_is_order_independent() {
         let spec = spec_with_two_sources();
