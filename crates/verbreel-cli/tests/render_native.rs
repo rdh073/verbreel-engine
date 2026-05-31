@@ -136,6 +136,42 @@ fn render_start_parses_codec_flags() {
     );
 }
 
+/// A bad codec value (`--video_codec not-a-codec`) coerces to a plain
+/// string through the generic flag walk, then **fails to deserialize**
+/// into the typed `RenderStartArgs` (the `RenderVideoCodec` enum rejects
+/// the unknown rename). `render::dispatch` must surface that pre-runtime
+/// deserialize failure as `E_SCHEMA_VIOLATION` — the value never reaches
+/// the runtime. This is the §0.7/AGENTS.md "one test per `E_*` code" floor
+/// for the schema-violation branch of the native dispatch.
+#[test]
+fn render_start_bad_codec_is_schema_violation() {
+    let fixture = ProjectFixture::new();
+    let runtime = RenderRuntimeConfig::new().with_project_root(&fixture.root);
+    let (code, env) = dispatch_with(
+        &runtime,
+        &[
+            "verbreel",
+            "render",
+            "start",
+            "--project",
+            &fixture.project_id.to_string(),
+            "--preset",
+            "deterministic",
+            "--out_path",
+            "exports/out.mp4",
+            "--video_codec",
+            "not-a-codec",
+        ],
+    );
+    assert_eq!(code, 1, "bad codec must fail before the runtime: {env}");
+    assert_eq!(env.get("ok").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        env.get("code").and_then(Value::as_str),
+        Some("E_SCHEMA_VIOLATION"),
+        "a deserialize failure on the typed args must surface E_SCHEMA_VIOLATION (not a runtime E_* code), got: {env}"
+    );
+}
+
 struct ProjectFixture {
     _tmp: TempDir,
     root: std::path::PathBuf,

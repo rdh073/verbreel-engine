@@ -101,6 +101,11 @@ pub fn ensure_project_context(
     active_project: Option<String>,
     args: &mut Map<String, Value>,
 ) -> Result<(), Box<Envelope>> {
+    // NOTE (review P3): only `--project` and the active-project file are
+    // resolution sources; a `project_id` placed directly in the args blob
+    // (`--args '{"project_id":…}'`) is ignored here and overwritten at the
+    // tail of this fn. §0.12 names the flag/active-file as the context
+    // sources, so this is correct — but it is silent, not an error.
     let project_id = explicit_project
         .map(str::to_string)
         .or(active_project)

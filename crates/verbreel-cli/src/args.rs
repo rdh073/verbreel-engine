@@ -51,13 +51,30 @@ impl CliArgError {
 /// duration grammar deliberately does not match a bare integer).
 ///
 /// NOTE (§0.2 deliberate footgun, review [P2-4]): under a permissive
-/// `additionalProperties:true` schema a non-temporal value like
-/// `--label 30s` would also coerce to ticks. This is the documented §0.2
-/// "grammar match, not flag name" choice — accepted because the spec
-/// pins duration syntax as load-bearing and the blast radius is narrow
-/// (values ending `s`/`ms`/`tk` or matching `HH:MM:SS`). Not changed
-/// here: a per-flag time-type schema is out of scope for the generic
-/// dispatcher.
+/// `additionalProperties:true` schema the type-by-grammar coercion is
+/// "grammar match, not flag name", so it can over-coerce two distinct
+/// classes of value, neither of which is changed here:
+///
+/// 1. **Temporal over-coerce** — a non-temporal value matching the
+///    duration grammar (`--label 30s`) becomes a tick `i64`. Blast
+///    radius is narrow: values ending `s`/`ms`/`tk` or matching
+///    `HH:MM:SS[.mmm]`.
+/// 2. **All-digit id over-coerce** — the `i64` branch below fires for
+///    *any* all-decimal string before the `String` fallback, so an
+///    id-like or label-like flag whose value happens to be all digits
+///    (`--clip_id 123456`, `--name 2024`) silently becomes a JSON
+///    *number*, not the string a caller likely intended. Under
+///    `deny_unknown_fields` verbs this surfaces as `E_SCHEMA_VIOLATION`
+///    on a typed-string field; under `additionalProperties:true` it
+///    passes through as a number with no error.
+///
+/// Both are the documented §0.2 "grammar match, not flag name" choice —
+/// accepted because the spec pins duration/numeric syntax as load-bearing
+/// and the generic dispatcher has no per-flag schema to tell a temporal
+/// or string-typed flag apart from a numeric one. A per-flag type schema
+/// is out of scope for the generic dispatcher; callers that need a
+/// literal all-digit string must use the `--args <JSON>` escape hatch
+/// (`--args '{"clip_id":"123456"}'`), which preserves the JSON type.
 #[must_use]
 pub fn coerce_scalar(raw: &str) -> Value {
     if let Some(ticks) = duration_str_to_ticks(raw) {
@@ -147,6 +164,11 @@ pub fn parse_flags(tail: &[String]) -> Result<ParsedFlags, CliArgError> {
                 }
                 i += 2;
             }
+            // NOTE (review P3): these two missing-value branches and the
+            // non-JSON `--args` branch above are untested (only the
+            // not-an-object `--args` case has a regression test today).
+            // Each is a one-line `E_BAD_ARGS` return; a parse-error test
+            // table over the three would close the gap.
             ("args", None) => {
                 return Err(CliArgError::new(
                     "E_BAD_ARGS",

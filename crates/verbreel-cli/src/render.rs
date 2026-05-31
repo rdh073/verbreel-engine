@@ -19,7 +19,7 @@
 //! through `Engine::dispatch` to the `E_RENDER_FAIL` floor.
 
 use serde_json::{Map, Value};
-use verbreel_runtime::{RenderRuntimeConfig, RuntimeError};
+use verbreel_runtime::RenderRuntimeConfig;
 use verbreel_state::{Envelope, RenderStartArgs};
 
 /// Run the native `render.start` through the injected runtime and wrap
@@ -30,7 +30,7 @@ use verbreel_state::{Envelope, RenderStartArgs};
 /// that map into the typed [`RenderStartArgs`] the runtime expects. A
 /// deserialize failure (e.g. an unknown codec string, a non-integer tick)
 /// surfaces as `E_SCHEMA_VIOLATION`; a runtime failure surfaces with its
-/// own `E_*` code ([`runtime_error_code`]). Success carries the runtime's
+/// own `E_*` code (via [`verbreel_runtime::RuntimeError::code`]). Success carries the runtime's
 /// `data` object with an empty patch / `event_id` — the native path
 /// records its own event inside `verbreel-runtime`, so no engine patch is
 /// produced here.
@@ -66,34 +66,15 @@ pub fn dispatch(args: &Map<String, Value>, runtime: &RenderRuntimeConfig) -> Env
             },
         },
         // The runtime error's `Display` embeds its `E_*` code in the
-        // message; surface the structured code in the envelope so clients
-        // read a stable code, not just the human string.
+        // message; surface the structured code via the shared
+        // `RuntimeError::code()` mapper (the single tested source of truth
+        // in `verbreel-runtime`) so the wire `code` is uniform across
+        // CLI/MCP/HTTP by construction.
         Err(err) => Envelope::Err {
-            code: runtime_error_code(&err).to_string(),
+            code: err.code().to_string(),
             message: err.to_string(),
             hint: None,
             details: None,
         },
-    }
-}
-
-/// Map a [`RuntimeError`] to its §0.7 `E_*` code. The runtime's `Display`
-/// already embeds the code in the message; this surfaces it as the
-/// structured envelope `code` field — identical to the HTTP surface's
-/// `runtime_error_code`.
-#[must_use]
-fn runtime_error_code(err: &RuntimeError) -> &'static str {
-    use RuntimeError as E;
-    match err {
-        E::ProjectNotFound { .. } => "E_PROJECT_NOT_FOUND",
-        E::RenderPresetUnknown { .. } => "E_RENDER_PRESET_UNKNOWN",
-        E::BadRange { .. } => "E_BAD_RANGE",
-        E::BadTime { .. } => "E_BAD_TIME",
-        E::ArgsIncompatible { .. } => "E_ARGS_INCOMPATIBLE",
-        E::OutPathExists { .. } => "E_OUT_PATH_EXISTS",
-        E::PathEscape { .. } => "E_PATH_ESCAPE",
-        E::RenderEmptyRange => "E_RENDER_EMPTY_RANGE",
-        E::Io { .. } => "E_IO",
-        E::RenderFail { .. } => "E_RENDER_FAIL",
     }
 }
