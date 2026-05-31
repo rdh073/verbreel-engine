@@ -362,7 +362,18 @@ impl Engine {
         // a flag whose whole purpose is "preview, no side effects". So reject
         // it explicitly instead of strip-and-proceed: a safe error, not a
         // silent destructive action.
-        if bool_arg(args, "dry_run") {
+        //
+        // Reject any PRESENT `dry_run` that is not the boolean `false` — i.e.
+        // `true` AND any non-boolean (`"true"`, `1`, `null`, `{}`). The latter
+        // matters because `dry_run` is stripped before any `deny_unknown_fields`
+        // struct deserializes and dispatch runs no JSON-schema typecheck, so a
+        // wrong-typed `dry_run` is otherwise unvalidated: silently coercing it
+        // to `false` (the trap in `bool_arg`) would let `{"dry_run":"true"}`
+        // fall through to a real `project.forget`. Only absent-or-explicit-false
+        // is a safe non-dry-run signal.
+        if let Some(value) = args.get("dry_run")
+            && value != &Value::Bool(false)
+        {
             return Envelope::Err {
                 code: "E_SCHEMA_VIOLATION".to_string(),
                 message: format!(

@@ -1137,6 +1137,51 @@ fn create_with_dry_run_is_rejected_and_writes_nothing() {
 }
 
 #[test]
+fn forget_with_non_boolean_dry_run_is_rejected_and_does_not_remove_root() {
+    // A present-but-not-bool `dry_run` (e.g. the string "true" or 1) must NOT
+    // coerce to false and fall through to a real, destructive forget. The
+    // boundary rejects any present dry_run that is not the boolean `false`.
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "badtype-forget");
+    engine.dispatch("project.close", json!({ "project_id": id }));
+    let root = dir.path().join("badtype-forget");
+    assert!(
+        root.exists(),
+        "root exists before the malformed dry-run forget"
+    );
+
+    for bad in [json!("true"), json!(1), json!(null), json!({})] {
+        let env = engine.dispatch("project.forget", json!({ "path": &root, "dry_run": bad }));
+        let Envelope::Err { code, .. } = &env else {
+            panic!("non-boolean dry_run on project.forget must be rejected, got {env:?}");
+        };
+        assert_eq!(code, "E_SCHEMA_VIOLATION");
+        assert!(
+            root.exists(),
+            "malformed dry_run must NOT trigger a real forget that removes the root"
+        );
+    }
+}
+
+#[test]
+fn forget_with_explicit_dry_run_false_is_accepted() {
+    // The escape valve: an explicit `dry_run: false` is the documented
+    // non-dry-run signal and must still perform the real forget.
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "falsedry-forget");
+    engine.dispatch("project.close", json!({ "project_id": id }));
+    let root = dir.path().join("falsedry-forget");
+
+    let env = engine.dispatch("project.forget", json!({ "path": &root, "dry_run": false }));
+    assert!(
+        env.is_ok(),
+        "explicit dry_run:false must be accepted as a real call: {env:?}"
+    );
+}
+
+#[test]
 fn save_with_dry_run_is_rejected() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::new(dir.path());
