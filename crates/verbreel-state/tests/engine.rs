@@ -1069,3 +1069,83 @@ fn forget_with_universal_args_is_not_schema_violation() {
         "project.forget with universal args must succeed, not E_SCHEMA_VIOLATION: {env:?}"
     );
 }
+
+// ---- dry_run on lifecycle verbs is rejected, never silently performed ----
+//
+// §0.5.1: `dry_run: true` guarantees no persistent side effect. The lifecycle
+// free functions have no compute-only path — they always persist. So the
+// engine must REJECT `dry_run: true` on a lifecycle verb rather than strip it
+// and proceed (which would perform the real, unconditional mutation). The
+// canonical hazard is `project.forget --dry_run` deleting the on-disk root
+// under a preview flag; the first test pins that the root survives.
+
+#[test]
+fn forget_with_dry_run_is_rejected_and_does_not_remove_root() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "dryrun-forget");
+    engine.dispatch("project.close", json!({ "project_id": id }));
+    let root = dir.path().join("dryrun-forget");
+    assert!(
+        root.exists(),
+        "project root exists before the dry-run forget"
+    );
+
+    let env = engine.dispatch("project.forget", json!({ "path": &root, "dry_run": true }));
+
+    let Envelope::Err { code, .. } = &env else {
+        panic!("project.forget with dry_run must be rejected, got {env:?}");
+    };
+    assert_eq!(
+        code, "E_SCHEMA_VIOLATION",
+        "dry_run on a lifecycle verb is rejected at the dispatch boundary"
+    );
+    assert!(
+        root.exists(),
+        "project.forget --dry_run must NOT remove the on-disk root (§0.5.1: no persistent side effect)"
+    );
+}
+
+#[test]
+fn create_with_dry_run_is_rejected_and_writes_nothing() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+
+    let env = engine.dispatch(
+        "project.create",
+        json!({
+            "name": "dryrun-create",
+            "canvas": "1080x1920",
+            "at": dir.path(),
+            "dry_run": true,
+        }),
+    );
+
+    let Envelope::Err { code, .. } = &env else {
+        panic!("project.create with dry_run must be rejected, got {env:?}");
+    };
+    assert_eq!(code, "E_SCHEMA_VIOLATION");
+    assert!(
+        !dir.path().join("dryrun-create").exists(),
+        "project.create --dry_run must NOT write a project to disk (§0.5.1)"
+    );
+    assert_eq!(
+        engine.open_count(),
+        0,
+        "a rejected dry-run create must not enter a project into the open-map"
+    );
+}
+
+#[test]
+fn save_with_dry_run_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "dryrun-save");
+
+    let env = engine.dispatch("project.save", json!({ "project_id": id, "dry_run": true }));
+
+    let Envelope::Err { code, .. } = &env else {
+        panic!("project.save with dry_run must be rejected, got {env:?}");
+    };
+    assert_eq!(code, "E_SCHEMA_VIOLATION");
+}

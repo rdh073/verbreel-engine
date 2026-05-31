@@ -27,11 +27,15 @@
 //! ## §0.5 universal args
 //!
 //! `dry_run`, `idempotency_key`, and `exact_time` are read from the
-//! top-level of the args object. `dry_run` computes the patch but skips
-//! persistence and returns `event_id: ""` (§0.5.1). `idempotency_key`
-//! threads to `mutate_via_verb` (and is ignored under `dry_run` per
-//! §0.5.1). `exact_time` is passed through to the verb in `args`
-//! untouched — the verb owns its snap semantics.
+//! top-level of the args object. On **project-scoped** verbs `dry_run`
+//! computes the patch but skips persistence and returns `event_id: ""`
+//! (§0.5.1) and `idempotency_key` threads to `mutate_via_verb` (ignored
+//! under `dry_run` per §0.5.1). On **lifecycle** verbs `dry_run` is
+//! rejected (the free functions have no compute-only path — they always
+//! persist — so honoring §0.5.1's "no persistent side effect" means not
+//! running them; see `dispatch_lifecycle`). `exact_time` is passed
+//! through to the verb in `args` untouched — the verb owns its snap
+//! semantics.
 
 #![cfg(feature = "native")]
 
@@ -348,10 +352,40 @@ impl Engine {
     // ---------------------------------------------------------------
 
     fn dispatch_lifecycle(&mut self, verb_id: &str, args: &Value) -> Envelope {
+        // §0.5.1: under `dry_run` the engine guarantees NO persistent side
+        // effect. The six lifecycle free functions only ever persist
+        // (create/duplicate write a project to disk, save rewrites the
+        // snapshot, forget removes the on-disk root, open/close mutate the
+        // flock + open-map) — none has a compute-only path. Stripping
+        // `dry_run` and proceeding would silently perform the real mutation,
+        // turning `project.forget --dry_run` into an irreversible delete under
+        // a flag whose whole purpose is "preview, no side effects". So reject
+        // it explicitly instead of strip-and-proceed: a safe error, not a
+        // silent destructive action.
+        if bool_arg(args, "dry_run") {
+            return Envelope::Err {
+                code: "E_SCHEMA_VIOLATION".to_string(),
+                message: format!(
+                    "{verb_id}: dry_run is not supported on lifecycle verbs \
+                     (they have no compute-only path; §0.5.1)"
+                ),
+                hint: Some("drop dry_run; lifecycle verbs always persist their effect".to_string()),
+                details: Some(json!({ "verb_id": verb_id, "arg": "dry_run" })),
+            };
+        }
         // Strip the engine-consumed universal args once before any handler
         // deserializes into its `deny_unknown_fields` arg struct: §0.8
         // designates project.create/.duplicate as legitimate idempotency_key
-        // surfaces, so a keyed (or dry_run) lifecycle call must not 400.
+        // surfaces, so a keyed lifecycle call must not 400.
+        //
+        // `idempotency_key` is stripped (so the keyed call doesn't 400) but
+        // NOT yet threaded into the lifecycle free functions — unlike
+        // dispatch_project_scoped, which passes it to mutate_via_verb for §0.8
+        // dedup. So a keyed project.create/.duplicate is accepted but the key
+        // is not honored for dedup: a second keyed call re-executes (and a
+        // second create hits E_PROJECT_EXISTS) rather than replaying. Wiring
+        // §0.8 dedup through the lifecycle path is tracked in #461; until then
+        // the key is accepted-but-not-yet-honored, not silently dedup-effective.
         let args = &strip_universal_args(args);
         match verb_id {
             "project.create" => self.handle_create(args),
