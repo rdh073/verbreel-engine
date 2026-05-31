@@ -196,50 +196,39 @@ fn call_render_start(args: &Value, state: &AppState) -> (StatusCode, Json<Value>
     };
     match state.render_runtime().render_start(&typed) {
         Ok(data) => {
-            let env = json!({
-                "ok": true,
-                "data": data,
-                "patch": [],
-                "warnings": [],
-                "event_id": "",
-            });
-            (StatusCode::OK, Json(env))
+            let envelope = Envelope::Ok {
+                data: json!(data),
+                patch: json!([]),
+                warnings: vec![],
+                // TODO(#455): thread the truthful event_id recorded by the
+                // native render path in verbreel-runtime through here; `""`
+                // is the §0.1 read-only/dry-run placeholder until then.
+                event_id: String::new(),
+            };
+            (StatusCode::OK, Json(envelope.to_json()))
         }
         // The runtime error Display embeds its `E_*` code; surface it as
         // the envelope `code` so clients read a stable code, not just the
         // human message.
-        Err(err) => error_envelope(runtime_error_code(&err), &err.to_string()),
-    }
-}
-
-/// Map a [`verbreel_runtime::RuntimeError`] to its §0.7 `E_*` code. The
-/// runtime's `Display` already embeds the code in the message; this
-/// surfaces it as the structured envelope `code` field.
-#[cfg(feature = "native-render")]
-fn runtime_error_code(err: &verbreel_runtime::RuntimeError) -> &'static str {
-    use verbreel_runtime::RuntimeError as E;
-    match err {
-        E::ProjectNotFound { .. } => "E_PROJECT_NOT_FOUND",
-        E::RenderPresetUnknown { .. } => "E_RENDER_PRESET_UNKNOWN",
-        E::BadRange { .. } => "E_BAD_RANGE",
-        E::BadTime { .. } => "E_BAD_TIME",
-        E::ArgsIncompatible { .. } => "E_ARGS_INCOMPATIBLE",
-        E::OutPathExists { .. } => "E_OUT_PATH_EXISTS",
-        E::PathEscape { .. } => "E_PATH_ESCAPE",
-        E::RenderEmptyRange => "E_RENDER_EMPTY_RANGE",
-        E::Io { .. } => "E_IO",
-        E::RenderFail { .. } => "E_RENDER_FAIL",
+        Err(err) => error_envelope(err.code(), &err.to_string()),
     }
 }
 
 /// Build an `ok:false` §0.1 envelope response with a 200 status (status
 /// mapping is uniform — see [`http_status_for`]).
+///
+/// Synthesizes the wire shape through [`Envelope::Err`] + [`Envelope::to_json`]
+/// (rather than a hand-rolled `json!`) so it stays mechanically in lockstep
+/// with the engine's §0.1 serialization.
 #[cfg(feature = "native-render")]
 fn error_envelope(code: &str, message: &str) -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::OK,
-        Json(json!({ "ok": false, "code": code, "message": message })),
-    )
+    let envelope = Envelope::Err {
+        code: code.to_string(),
+        message: message.to_string(),
+        hint: None,
+        details: None,
+    };
+    (StatusCode::OK, Json(envelope.to_json()))
 }
 
 /// Map an [`Envelope`] to an HTTP status. **Uniform `200`** — the §0.1
@@ -274,84 +263,4 @@ fn bad_args(detail: impl Into<String>) -> (StatusCode, Json<Value>) {
         StatusCode::BAD_REQUEST,
         Json(json!({ "error": "bad args", "detail": detail.into() })),
     )
-}
-
-#[cfg(all(test, feature = "native-render"))]
-mod runtime_error_code_tests {
-    use super::runtime_error_code;
-    use verbreel_runtime::RuntimeError as E;
-
-    /// Every [`RuntimeError`] variant maps to its §0.7 `E_*` code. This
-    /// pins the whole `runtime_error_code` table — a typo in any arm
-    /// (e.g. `E_BAD_RANGE` → `E_BADRANGE`) is a silent contract break
-    /// that only one variant being exercised end-to-end would never
-    /// catch. Constructed directly: no ffmpeg, no render run needed.
-    #[test]
-    fn each_variant_maps_to_its_code() {
-        let cases: [(E, &str); 10] = [
-            (
-                E::ProjectNotFound {
-                    project_id: "p".to_string(),
-                },
-                "E_PROJECT_NOT_FOUND",
-            ),
-            (
-                E::RenderPresetUnknown {
-                    preset: "p".to_string(),
-                },
-                "E_RENDER_PRESET_UNKNOWN",
-            ),
-            (
-                E::BadRange {
-                    detail: "d".to_string(),
-                },
-                "E_BAD_RANGE",
-            ),
-            (
-                E::BadTime {
-                    detail: "d".to_string(),
-                },
-                "E_BAD_TIME",
-            ),
-            (
-                E::ArgsIncompatible {
-                    detail: "d".to_string(),
-                },
-                "E_ARGS_INCOMPATIBLE",
-            ),
-            (
-                E::OutPathExists {
-                    path: "p".to_string(),
-                },
-                "E_OUT_PATH_EXISTS",
-            ),
-            (
-                E::PathEscape {
-                    path: "p".to_string(),
-                },
-                "E_PATH_ESCAPE",
-            ),
-            (E::RenderEmptyRange, "E_RENDER_EMPTY_RANGE"),
-            (
-                E::Io {
-                    detail: "d".to_string(),
-                },
-                "E_IO",
-            ),
-            (
-                E::RenderFail {
-                    detail: "d".to_string(),
-                },
-                "E_RENDER_FAIL",
-            ),
-        ];
-
-        for (variant, expected) in &cases {
-            assert_eq!(
-                runtime_error_code(variant),
-                *expected,
-                "RuntimeError {variant:?} must map to {expected}"
-            );
-        }
-    }
 }

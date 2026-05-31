@@ -101,19 +101,6 @@ impl AppState {
         }
     }
 
-    /// Build application state from an already-constructed [`Engine`].
-    ///
-    /// Lets tests inject a pre-seeded engine (e.g. one with a project
-    /// already open) without going through the on-disk index.
-    #[must_use]
-    pub fn from_engine(engine: Engine) -> Self {
-        Self {
-            engine: Arc::new(Mutex::new(engine)),
-            #[cfg(feature = "native-render")]
-            render_runtime: verbreel_runtime::RenderRuntimeConfig::from_env(),
-        }
-    }
-
     /// Build application state with an injected render runtime.
     ///
     /// The engine is rooted at `home`; the render runtime is the one the
