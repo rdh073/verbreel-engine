@@ -3064,6 +3064,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "verbreel-runtime",
  "verbreel-state",
  "verbreel-storage",
 ]

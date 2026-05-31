@@ -5,6 +5,7 @@
 //!
 //! ```text
 //! verbreel-cli → verbreel-state, verbreel-storage
+//! verbreel-cli/native-render → verbreel-runtime
 //! ```
 //!
 //! ## Composition root
@@ -19,6 +20,12 @@
 //!   file (read fallback + the `--activate` writer).
 //! - [`context`] — verb-id reconstruction + §0.12 project context +
 //!   the one-shot pre-open step.
+//!
+//! Under `native-render` a fifth module, [`render`], owns the one verb
+//! the shared Engine cannot execute — `render.start`, whose ffmpeg
+//! runtime lives in `verbreel-runtime`, injected at this composition
+//! root (mirroring the HTTP surface). Every *other* verb, including the
+//! v1 `render.start` floor, flows through `Engine::dispatch`.
 //!
 //! ## One generic path
 //!
@@ -51,6 +58,8 @@ pub mod args;
 pub mod context;
 pub mod duration;
 pub mod home;
+#[cfg(feature = "native-render")]
+pub mod render;
 
 /// Top-level `clap` parser for the `verbreel` binary.
 ///
@@ -96,13 +105,55 @@ pub struct Cli {
 // transport boundary, mirroring `Engine::dispatch`). The body only needs
 // to borrow `raw`, so the lint fires, but changing the signature to
 // `&Cli` would break the brief-pinned contract.
+#[cfg(not(feature = "native-render"))]
 #[allow(clippy::needless_pass_by_value)]
 pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<i32> {
     run_inner(&cli.raw, out)
 }
 
+/// Dispatch a parsed [`Cli`] with the default process render runtime.
+///
+/// Under `native-render` the only verb the shared Engine cannot execute
+/// is `render.start`; this wires up the default runtime from the
+/// environment and hands it to [`run_with_runtime`].
+///
+/// # Errors
+///
+/// As [`run_with_runtime`] — only a write failure on `out`.
+#[cfg(feature = "native-render")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<i32> {
+    run_with_runtime(cli, out, &verbreel_runtime::RenderRuntimeConfig::from_env())
+}
+
+/// Dispatch a parsed [`Cli`] with an injected render runtime
+/// (`native-render` only).
+///
+/// Tests use this to point `render.start` at a temp project root instead
+/// of the user-wide index — the same injection seam the HTTP surface
+/// exposes via `AppState::with_render_runtime`.
+///
+/// # Errors
+///
+/// This function does not bubble dispatch errors — every failure is a
+/// §0.1 `ok:false` envelope on `out`. The `Result` only carries a write
+/// failure on `out`.
+#[cfg(feature = "native-render")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn run_with_runtime(
+    cli: Cli,
+    out: &mut dyn Write,
+    runtime: &verbreel_runtime::RenderRuntimeConfig,
+) -> anyhow::Result<i32> {
+    run_inner(&cli.raw, out, runtime)
+}
+
 /// Core dispatch: reconstruct id, build args, resolve context, dispatch.
-fn run_inner(raw: &[String], out: &mut dyn Write) -> anyhow::Result<i32> {
+fn run_inner(
+    raw: &[String],
+    out: &mut dyn Write,
+    #[cfg(feature = "native-render")] runtime: &verbreel_runtime::RenderRuntimeConfig,
+) -> anyhow::Result<i32> {
     let home = home::resolve_home();
     let mut engine = Engine::new(
         home.clone()
@@ -138,6 +189,24 @@ fn run_inner(raw: &[String], out: &mut dyn Write) -> anyhow::Result<i32> {
     };
 
     let mut args_map = parsed.args;
+
+    // Native `render.start` — the one verb the shared Engine cannot run.
+    // Its ffmpeg runtime resolves the project root itself (its own
+    // index-scanning resolver), so it does NOT go through the engine
+    // pre-open path below: instead `project_id` (from --project or the
+    // active-project file) is injected and the injected runtime executes
+    // it. Without `native-render` this block is absent and `render.start`
+    // falls through to `Engine::dispatch`'s `E_RENDER_FAIL` v1 floor.
+    #[cfg(feature = "native-render")]
+    if verb_id == "render.start" {
+        let active = home.as_deref().and_then(home::read_active_project);
+        if let Some(project_id) = parsed.project.clone().or(active) {
+            args_map.insert("project_id".to_string(), Value::String(project_id));
+        }
+        let env = render::dispatch(&args_map, runtime);
+        let code = i32::from(!env.is_ok());
+        return print_envelope(out, &env, code);
+    }
 
     // §0.12 project context — only for *known* project-scoped verbs.
     // An unknown id skips context resolution and goes straight to the
