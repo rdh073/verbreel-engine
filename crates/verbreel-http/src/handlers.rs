@@ -110,6 +110,9 @@ pub async fn create_project(
         return resp;
     }
     let canvas = body.canvas.as_deref().unwrap_or("1920x1080");
+    if let Err(detail) = validate_canvas_shape(canvas) {
+        return bad_request(&detail);
+    }
     let fps = match parse_fps_opt(body.fps.as_deref()) {
         Ok(f) => f,
         Err(detail) => return bad_request(&detail),
@@ -386,6 +389,23 @@ fn reject_unsafe_name(name: &str) -> Option<Response> {
     bad.then(|| {
         bad_request("project name must be a single path component (no '/', '\\', '..', or NUL)")
     })
+}
+
+/// Validate the `<W>x<H>` canvas shape up front so a malformed canvas is
+/// a 400 (bad input) rather than flowing into `Session::create` and
+/// surfacing as a 409 (which reads as "already exists"). The kernel still
+/// range-checks the dimensions; this only guards the wire shape.
+fn validate_canvas_shape(canvas: &str) -> Result<(), String> {
+    let (w, h) = canvas
+        .split_once('x')
+        .ok_or_else(|| format!("canvas must be <W>x<H>, got {canvas:?}"))?;
+    w.trim()
+        .parse::<u32>()
+        .map_err(|_| format!("canvas width is not a number in {canvas:?}"))?;
+    h.trim()
+        .parse::<u32>()
+        .map_err(|_| format!("canvas height is not a number in {canvas:?}"))?;
+    Ok(())
 }
 
 /// Parse an optional `<num>/<den>` fps literal.
