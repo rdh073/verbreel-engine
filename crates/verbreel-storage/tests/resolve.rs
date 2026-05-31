@@ -316,5 +316,9 @@ fn deregister_by_path_unindexed_returns_false() {
     assert!(!removed, "an unindexed path must report removed=false");
 
     let index = read_index(home.path()).unwrap();
-    assert_eq!(index.len(), 1, "a non-matching path must leave the index intact");
+    assert_eq!(
+        index.len(),
+        1,
+        "a non-matching path must leave the index intact"
+    );
 }
