@@ -1415,3 +1415,113 @@ fn project_list_corrupt_index_warns_unreadable_not_silent_empty() {
         "unreadable index lists no projects"
     );
 }
+
+// ---- project.forget removes the projects-index entry (#452, §2.8) ----
+
+#[test]
+fn forget_by_id_removes_entry_then_id_no_longer_resolves() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+
+    // create registers the project in the durable index (§2.6).
+    let id = create_project(&mut engine, &dir, "forget-by-id");
+    assert!(
+        verbreel_storage::layout::read_index(dir.path())
+            .unwrap()
+            .contains_key(&id),
+        "create must register the project in the index"
+    );
+
+    let env = engine.dispatch("project.forget", json!({ "project_id": id }));
+    let (data, _, _, _) = ok_parts(env);
+    assert_eq!(
+        data["was_in_index"],
+        json!(true),
+        "forgetting an indexed id reports was_in_index: true"
+    );
+    assert!(
+        data["removed_path"].is_string(),
+        "forget echoes the resolved removed_path"
+    );
+
+    // The id is gone from the index: resolving it now fails NotFound.
+    assert!(
+        !verbreel_storage::layout::read_index(dir.path())
+            .unwrap()
+            .contains_key(&id),
+        "forget-by-id must remove the index entry"
+    );
+    let resolved = verbreel_storage::layout::resolve_root_for_project_id(dir.path(), &id);
+    assert!(
+        matches!(
+            resolved,
+            Err(verbreel_storage::layout::ResolveError::NotFound(_))
+        ),
+        "the forgotten id must no longer resolve, got {resolved:?}"
+    );
+}
+
+#[test]
+fn forget_by_path_indexed_reports_was_in_index_true() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+
+    let id = create_project(&mut engine, &dir, "forget-by-path");
+    // The path the create registered (absolutised root) is what the path
+    // form must match.
+    let path = verbreel_storage::layout::read_index(dir.path()).unwrap()[&id]
+        .path
+        .clone();
+
+    let env = engine.dispatch("project.forget", json!({ "path": path }));
+    let (data, _, _, _) = ok_parts(env);
+    assert_eq!(
+        data["was_in_index"],
+        json!(true),
+        "forgetting an indexed path reports was_in_index: true"
+    );
+    assert!(
+        !verbreel_storage::layout::read_index(dir.path())
+            .unwrap()
+            .contains_key(&id),
+        "forget-by-path must remove the matching index entry"
+    );
+}
+
+#[test]
+fn forget_by_path_unindexed_reports_was_in_index_false() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+
+    // A well-formed path never registered in this engine's index.
+    let env = engine.dispatch(
+        "project.forget",
+        json!({ "path": "/tmp/never-registered-by-this-engine" }),
+    );
+    let (data, _, _, _) = ok_parts(env);
+    assert_eq!(
+        data["was_in_index"],
+        json!(false),
+        "an unindexed path reports was_in_index: false"
+    );
+    assert_eq!(
+        data["removed_path"],
+        json!("/tmp/never-registered-by-this-engine"),
+        "removed_path echoes the input path verbatim"
+    );
+}
+
+#[test]
+fn forget_by_unknown_id_returns_project_not_found() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+
+    let env = engine.dispatch(
+        "project.forget",
+        json!({ "project_id": "0190b8d3-15e3-7000-bd00-0000000000ff" }),
+    );
+    let Envelope::Err { code, .. } = &env else {
+        panic!("forget of an unknown id must be Err, got {env:?}");
+    };
+    assert_eq!(code, "E_PROJECT_NOT_FOUND");
+}

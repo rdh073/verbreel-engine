@@ -341,6 +341,7 @@ pub use verbs::project_duplicate::{
     ProjectDuplicateArgs, ProjectDuplicateData, ProjectDuplicateError,
     duplicate as project_duplicate,
 };
+#[cfg(feature = "native")]
 pub use verbs::project_forget::{
     ProjectForgetArgs, ProjectForgetData, ProjectForgetError, forget as project_forget,
 };

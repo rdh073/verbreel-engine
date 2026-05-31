@@ -146,6 +146,7 @@ pub mod project_close;
 pub mod project_create;
 #[cfg(feature = "native")]
 pub mod project_duplicate;
+#[cfg(feature = "native")]
 pub mod project_forget;
 pub mod project_info;
 pub mod project_list;

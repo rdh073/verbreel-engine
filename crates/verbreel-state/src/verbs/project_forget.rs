@@ -33,25 +33,25 @@
 //! presupposes a single open project. Mirror the established free-
 //! function precedent (`project.save` §2.3, `project.duplicate` §2.7).
 //!
-//! ## v1 floor — index file deferred
+//! ## Index removal (§2.6 keyed-object map)
 //!
-//! `~/.verbreel/projects-index` is not implemented yet. Same gap that
-//! defers `project.list` (§2.6) to an empty list. A future slice
-//! introduces the index file format + `flock`'d read-modify-write
-//! semantics and wires the actual removal here. For v1, the verb
-//! implements the **arg-shape validation layer** exactly per spec
-//! (both/neither rejection, path validation, id-form always-not-found)
-//! and the index lookup degenerates to "empty index, nothing
-//! resolves".
+//! [`forget`] takes the engine's `home` and removes the matching entry
+//! from `<home>/.verbreel/projects-index` under the shared RMW `flock`
+//! (the same lock `register_project` / `project.list` use). The two
+//! lookup forms are not symmetric:
 //!
-//! ## Variant set is stable for the follow-up slice
-//!
-//! [`ProjectForgetError::Io`] is declared but not constructed in v1
-//! (tagged `#[allow(dead_code)]`). The variant is in the published
-//! surface so the slice that wires real index I/O can populate it
-//! without an enum bump on downstream callers.
+//! - **Id form** resolves through the index: a hit yields the recorded
+//!   `path` (echoed as `removed_path`) and removes the entry; a miss is
+//!   [`ProjectForgetError::ProjectNotFound`] (`E_PROJECT_NOT_FOUND`).
+//! - **Path form** removes by recorded path and reports the truthful
+//!   `was_in_index` — `false` when no entry matched (never an error,
+//!   per §2.8: a path never opened in this engine is simply not indexed).
+
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+
+use verbreel_storage::layout;
 
 /// Arguments for [`forget`].
 ///
@@ -94,7 +94,9 @@ pub struct ProjectForgetData {
     pub removed_path: String,
 
     /// Whether the entry was actually present in the index before
-    /// the call. Always `false` in v1 (vacuous empty index).
+    /// the call. The id form only returns `data` when it removed an
+    /// entry, so it is always `true`; the path form reports the truth
+    /// of the match.
     pub was_in_index: bool,
 }
 
@@ -123,38 +125,48 @@ pub enum ProjectForgetError {
     },
 
     /// Id-form lookup did not resolve to any index entry. Maps to
-    /// `E_PROJECT_NOT_FOUND`. In v1 this is the only outcome of the
-    /// id form (the index is empty).
+    /// `E_PROJECT_NOT_FOUND`.
     #[error("project.forget: no index entry for {lookup}")]
     ProjectNotFound {
         /// The id the caller passed.
         lookup: String,
     },
 
-    /// Filesystem failure during the (deferred) index read or write.
-    /// Maps to `E_IO`. Not constructed in v1; declared so the
-    /// follow-up slice that wires real index I/O has stable surface.
-    #[allow(dead_code)]
+    /// Filesystem failure during the index read or write (a corrupt
+    /// index, lock contention, or an underlying IO error). Maps to
+    /// `E_IO`.
     #[error("project.forget: I/O failure: {0}")]
     Io(#[from] std::io::Error),
 }
 
-/// Remove a project entry from `~/.verbreel/projects-index` per §2.8.
+/// Remove a project entry from `<home>/.verbreel/projects-index` per §2.8.
 ///
 /// Validation order:
 /// 1. Mutual exclusion: `(None, None)` and `(Some, Some)` both
 ///    surface as [`ProjectForgetError::ArgsIncompatible`].
 /// 2. Path form: validate (non-empty, no NUL) → [`ProjectForgetError::
-///    BadRange`] on malformed input; else return
-///    `{removed_path: <input>, was_in_index: false}` (v1 floor —
-///    empty index, every well-formed path is "not in index").
-/// 3. Id form: always return [`ProjectForgetError::ProjectNotFound`]
-///    in v1 (empty index resolves nothing).
+///    BadRange`] on malformed input; else remove every entry whose
+///    recorded path matches and return `{removed_path: <input>,
+///    was_in_index: <matched>}` — a path that was never indexed is not
+///    an error (`was_in_index: false`).
+/// 3. Id form: resolve the entry from the index; a hit removes it and
+///    returns `{removed_path: <recorded path>, was_in_index: true}`, a
+///    miss is [`ProjectForgetError::ProjectNotFound`].
+///
+/// `home` is the engine's user-wide root (the same path
+/// `register_project` / `project.list` operate on); the verb is a free
+/// function so it takes it as an argument rather than reaching for any
+/// process state.
 ///
 /// # Errors
 ///
-/// See variants of [`ProjectForgetError`].
-pub fn forget(args: &ProjectForgetArgs) -> Result<ProjectForgetData, ProjectForgetError> {
+/// See variants of [`ProjectForgetError`]. A corrupt index, lock
+/// contention, or any other IO failure during the index read-modify-write
+/// surfaces as [`ProjectForgetError::Io`].
+pub fn forget(
+    home: &Path,
+    args: &ProjectForgetArgs,
+) -> Result<ProjectForgetData, ProjectForgetError> {
     match (args.path.as_deref(), args.project_id.as_deref()) {
         (None, None) => Err(ProjectForgetError::ArgsIncompatible {
             detail: "exactly one of `path` or `project_id` is required",
@@ -164,14 +176,21 @@ pub fn forget(args: &ProjectForgetArgs) -> Result<ProjectForgetData, ProjectForg
         }),
         (Some(path), None) => {
             validate_path(path)?;
+            let was_in_index = layout::deregister_project_by_path(home, path)?;
             Ok(ProjectForgetData {
                 removed_path: path.to_string(),
-                was_in_index: false,
+                was_in_index,
             })
         }
-        (None, Some(id)) => Err(ProjectForgetError::ProjectNotFound {
-            lookup: id.to_string(),
-        }),
+        (None, Some(id)) => match layout::deregister_project_by_id(home, id)? {
+            Some(removed_path) => Ok(ProjectForgetData {
+                removed_path,
+                was_in_index: true,
+            }),
+            None => Err(ProjectForgetError::ProjectNotFound {
+                lookup: id.to_string(),
+            }),
+        },
     }
 }
 

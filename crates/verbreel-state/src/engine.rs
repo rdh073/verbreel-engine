@@ -424,11 +424,13 @@ impl Engine {
             "project.open" => self.handle_open(args),
             "project.save" => self.handle_save(args),
             "project.close" => self.handle_close(args),
-            // duplicate / forget do not touch the open-project map — the
-            // free functions write to disk / the index only — so they are
-            // associated functions, not `&mut self` methods.
+            // duplicate does not touch the open-project map nor the index —
+            // its free function writes only to disk — so it is an associated
+            // function. forget reads/writes the engine's projects-index, so
+            // it borrows `&self` to reach `self.home` (but never the
+            // open-project map).
             "project.duplicate" => Self::handle_duplicate(args),
-            "project.forget" => Self::handle_forget(args),
+            "project.forget" => self.handle_forget(args),
             // Unreachable: LIFECYCLE_VERBS gates entry here.
             other => Envelope::err("E_UNKNOWN_VERB", format!("unknown verb: {other}")),
         }
@@ -567,12 +569,12 @@ impl Engine {
         }
     }
 
-    fn handle_forget(args: &Value) -> Envelope {
+    fn handle_forget(&self, args: &Value) -> Envelope {
         let typed: project_forget::ProjectForgetArgs = match serde_json::from_value(args.clone()) {
             Ok(a) => a,
             Err(e) => return Envelope::err("E_SCHEMA_VIOLATION", format!("project.forget: {e}")),
         };
-        match project_forget::forget(&typed) {
+        match project_forget::forget(&self.home, &typed) {
             Ok(data) => match serialize_or_internal("project.forget", "data", &data) {
                 Ok(data_value) => Envelope::ok(data_value, json!([]), Vec::new(), String::new()),
                 Err(env) => *env,
