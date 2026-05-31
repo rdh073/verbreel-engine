@@ -7,18 +7,26 @@
 //!    (`<root>/.verbreel/`, an empty `events.jsonl`, and the
 //!    `<root>/assets/` content-addressed storage tree).
 //!
-//! 2. [`projects_index_path`] + [`register_project`] — the
-//!    `<home>/.verbreel/projects-index` file that records every
-//!    project root the user has ever opened. Each line is a single
-//!    JSON object (`{"id":"...","path":"..."}`) so it can be
-//!    `grep`-read or replayed line-by-line.
+//! 2. [`projects_index_path`] + [`register_project`] /
+//!    [`list_and_prune`] / [`resolve_root_for_project_id`]
+//!    — the `<home>/.verbreel/projects-index` file (§2.6). It is a
+//!    **single JSON object keyed by `project_id`** (the same shape as
+//!    `~/.verbreel/idempotency.json`), maintained via `flock`'d
+//!    read-modify-write so concurrent engine instances cannot corrupt
+//!    it. Keying by id makes a lookup O(1), makes re-registration a
+//!    free in-place upsert (no append + compaction), and makes the
+//!    "one corrupt line bricks earlier registrations" failure mode
+//!    structurally impossible (#445): the file is one document, parsed
+//!    once — it either loads or fails atomically.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read};
+use std::io::{self};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::flock::{self, FlockError};
 use crate::fs::atomic_write_bytes;
 
 /// Subdirectory inside a project root that holds engine state files
@@ -33,6 +41,13 @@ const ASSETS_DIR: &str = "assets";
 
 /// File name of the user-wide projects registry inside `<home>/.verbreel/`.
 const PROJECTS_INDEX: &str = "projects-index";
+
+/// Lock file guarding read-modify-write of [`PROJECTS_INDEX`]. A stable
+/// dedicated file is used (not the index itself) because the index is
+/// replaced via `rename(2)` — a `flock` bound to the index's inode would
+/// not serialize across the rename. The lock file is never renamed, so
+/// it serializes the whole RMW critical section across processes.
+const PROJECTS_INDEX_LOCK: &str = "projects-index.lock";
 
 /// Initialise an empty project root directory.
 ///
@@ -88,25 +103,98 @@ pub fn projects_index_path(home: &Path) -> PathBuf {
     home.join(VERBREEL_DIR).join(PROJECTS_INDEX)
 }
 
-/// One row in the projects index. Single-line JSON keeps the file
-/// grep-friendly. Field order is fixed by struct field order so the
-/// on-disk shape is stable across `serde_json` versions.
-#[derive(Debug, Serialize)]
-struct IndexEntry<'a> {
-    id: &'a str,
-    path: &'a str,
+/// One entry in the §2.6 projects index, keyed by `project_id` in the
+/// enclosing object. `project_id` is stored redundantly inside the value
+/// (matching the spec's object shape) so a single entry round-trips
+/// without its map key. Field order is fixed by struct field order so
+/// the on-disk shape is stable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexEntry {
+    /// `UUIDv7` project id (also the map key).
+    pub project_id: String,
+    /// Project display name.
+    pub name: String,
+    /// Absolute path to the project folder.
+    pub path: String,
+    /// RFC 3339 timestamp the project was last opened.
+    pub last_opened_at: String,
 }
 
-/// Atomically append a `{"id":"…","path":"…"}` line to the projects
-/// index at `<home>/.verbreel/projects-index`.
+/// The whole projects index: a JSON object keyed by `project_id`. A
+/// [`BTreeMap`] gives a deterministic (sorted-by-key) on-disk order
+/// without depending on `serde_json`'s `preserve_order` feature.
+pub type ProjectsIndex = BTreeMap<String, IndexEntry>;
+
+/// Acquire the RMW lock and read the current index, returning the
+/// parsed map plus the held lock guard. A missing index file reads as
+/// an empty map; a present-but-unparseable file is a hard error.
+fn lock_and_read(home: &Path) -> io::Result<(flock::ExclusiveFlock, PathBuf, ProjectsIndex)> {
+    let dir = home.join(VERBREEL_DIR);
+    fs::create_dir_all(&dir)?;
+
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join(PROJECTS_INDEX_LOCK))?;
+    let guard = flock::acquire_exclusive(lock_file).map_err(flock_to_io)?;
+
+    let index_path = dir.join(PROJECTS_INDEX);
+    let index = match fs::read_to_string(&index_path) {
+        Ok(contents) if contents.trim().is_empty() => ProjectsIndex::new(),
+        Ok(contents) => serde_json::from_str(&contents)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => ProjectsIndex::new(),
+        Err(e) => return Err(e),
+    };
+
+    Ok((guard, index_path, index))
+}
+
+/// Serialize and atomically replace the index file.
+fn write_index(index_path: &Path, index: &ProjectsIndex) -> io::Result<()> {
+    let bytes =
+        serde_json::to_vec(index).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    atomic_write_bytes(index_path, &bytes)
+}
+
+/// Map an [`FlockError`] onto an [`io::Error`] so the index helpers keep a
+/// single `io::Result` surface. Contention becomes `WouldBlock`.
+fn flock_to_io(err: FlockError) -> io::Error {
+    match err {
+        FlockError::Contended => io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "projects-index is locked by another process",
+        ),
+        FlockError::Io(e) => e,
+    }
+}
+
+/// Read the §2.6 projects index as a parsed map.
 ///
-/// The implementation reads the full current contents, appends one
-/// JSON line + `\n`, and writes the result back via
-/// [`atomic_write_bytes`]. This trades O(n) per-write for crash safety
-/// — the file is never observed half-updated, even if the process is
-/// killed mid-write. The expected n for a single user is small enough
-/// (hundreds of projects, not millions) that the trade-off is correct
-/// at this layer.
+/// A missing or empty index reads as an empty map. The read takes the
+/// RMW lock so it observes a consistent snapshot, never a half-written
+/// file mid-`register_project`.
+///
+/// # Errors
+///
+/// - [`io::Error`] of kind `InvalidData` if the index is present but not
+///   a valid keyed JSON object.
+/// - [`io::Error`] of kind `WouldBlock` if another process holds the
+///   RMW lock, or any other IO failure creating/reading the files.
+pub fn read_index(home: &Path) -> io::Result<ProjectsIndex> {
+    let (_guard, _path, index) = lock_and_read(home)?;
+    Ok(index)
+}
+
+/// Upsert a project entry into `<home>/.verbreel/projects-index` (§2.6).
+///
+/// The full read-modify-write runs under an exclusive `flock` on a
+/// dedicated lock file, so concurrent engine instances serialize. The
+/// entry is keyed by `project_id`: a re-registration (e.g. re-opening a
+/// moved project) overwrites the existing value in place, setting a
+/// fresh `last_opened_at` — no append, no compaction, no duplicate keys.
 ///
 /// `project_path` is rendered through [`Path::display`], which lossily
 /// replaces non-UTF-8 bytes with U+FFFD. Project roots on
@@ -114,66 +202,102 @@ struct IndexEntry<'a> {
 ///
 /// # Errors
 ///
-/// - [`io::Error`] if creating `<home>/.verbreel/`, reading the
-///   existing index, serialising the entry, or writing the new
-///   contents fails.
-pub fn register_project(home: &Path, project_id: &str, project_path: &Path) -> io::Result<()> {
-    let dir = home.join(VERBREEL_DIR);
-    fs::create_dir_all(&dir)?;
-
-    let index_path = dir.join(PROJECTS_INDEX);
-
-    // Read existing contents (empty if the file does not exist yet).
-    // The whole-file read is intentional — see the function-level
-    // doc comment for the trade-off.
-    let mut existing = Vec::new();
-    match fs::File::open(&index_path) {
-        Ok(mut f) => {
-            f.read_to_end(&mut existing)?;
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
-    }
-
-    let entry = IndexEntry {
-        id: project_id,
-        path: &project_path.display().to_string(),
-    };
-    let mut line =
-        serde_json::to_vec(&entry).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    line.push(b'\n');
-
-    // Guarantee the new line starts on a fresh line even if the
-    // previous append crashed before its trailing newline. This costs
-    // one byte in the worst case and never produces a torn line.
-    if !existing.is_empty() && !existing.ends_with(b"\n") {
-        existing.push(b'\n');
-    }
-    existing.extend_from_slice(&line);
-
-    atomic_write_bytes(&index_path, &existing)
+/// - [`io::Error`] of kind `InvalidData` if the existing index is
+///   corrupt (so a bad index is not silently overwritten).
+/// - [`io::Error`] of kind `WouldBlock` on lock contention, or any other
+///   IO failure creating `<home>/.verbreel/`, reading the existing
+///   index, serialising, or writing.
+pub fn register_project(
+    home: &Path,
+    project_id: &str,
+    name: &str,
+    project_path: &Path,
+    last_opened_at: &str,
+) -> io::Result<()> {
+    let (_guard, index_path, mut index) = lock_and_read(home)?;
+    index.insert(
+        project_id.to_string(),
+        IndexEntry {
+            project_id: project_id.to_string(),
+            name: name.to_string(),
+            path: project_path.display().to_string(),
+            last_opened_at: last_opened_at.to_string(),
+        },
+    );
+    write_index(&index_path, &index)
 }
 
-/// One row read back from the projects index. Deserialize counterpart of
-/// the [`IndexEntry`] write shape — only `id` and `path` are stored, so a
-/// borrow-free owned struct is the natural read target.
-#[derive(Debug, Deserialize)]
-struct IndexRow {
-    id: String,
-    path: String,
+/// Read the index, prune stale entries, and return the surviving map
+/// plus the ids removed — all under one RMW lock acquisition (§2.6).
+///
+/// "Stale" is deliberately narrow: an entry is removed only when its
+/// `path` is confirmed gone via [`symlink_metadata`], i.e. the lookup
+/// returned `ENOENT`. A `Path::exists()`-style test would also report
+/// `false` for a transient `EACCES` or an unmounted network/external
+/// volume, which would permanently drop a still-valid registration on
+/// a momentary stat failure; those non-`NotFound` errors leave the
+/// entry in place. Entries whose id is in `exempt` are never pruned —
+/// the engine passes its open-project ids so a project it currently
+/// holds open is never removed from its own listing even if the path
+/// is transiently unreachable.
+///
+/// Returning the post-prune index (not just the removed ids) lets the
+/// caller list under the same lock that pruned, closing the
+/// read-after-prune race a separate `read_index` would open and
+/// halving the lock/IO. When nothing is stale the file is left
+/// untouched (no rewrite). A missing index reads as empty.
+///
+/// Removed ids are returned in sorted order (BTreeMap iteration).
+///
+/// # Errors
+///
+/// - [`io::Error`] of kind `InvalidData` if the existing index is
+///   corrupt (so a damaged index surfaces, never silently empties).
+/// - [`io::Error`] of kind `WouldBlock` on lock contention, or any
+///   other IO failure reading/writing the index.
+pub fn list_and_prune(
+    home: &Path,
+    exempt: &BTreeSet<String>,
+) -> io::Result<(ProjectsIndex, Vec<String>)> {
+    let (_guard, index_path, mut index) = lock_and_read(home)?;
+    let removed: Vec<String> = index
+        .iter()
+        .filter(|(id, entry)| !exempt.contains(*id) && path_confirmed_gone(&entry.path))
+        .map(|(id, _)| id.clone())
+        .collect();
+    if removed.is_empty() {
+        return Ok((index, removed));
+    }
+    for id in &removed {
+        index.remove(id);
+    }
+    write_index(&index_path, &index)?;
+    Ok((index, removed))
+}
+
+/// `true` only when `path` is confirmed absent (`stat` → `ENOENT`).
+/// Any other `stat` error (`EACCES`, unmounted volume, `EIO`) returns
+/// `false` so a transiently-unreachable path is treated as present and
+/// its registration is preserved. Uses `symlink_metadata` to avoid
+/// following a dangling symlink into a misleading second error.
+fn path_confirmed_gone(path: &str) -> bool {
+    match fs::symlink_metadata(Path::new(path)) {
+        Ok(_) => false,
+        Err(e) => e.kind() == io::ErrorKind::NotFound,
+    }
 }
 
 /// Failure modes of [`resolve_root_for_project_id`].
 ///
 /// `NotFound` is the spec-load-bearing case: the surfaces map it to
 /// `E_PROJECT_NOT_FOUND` (§0.12). `Io` and `InvalidIndex` distinguish a
-/// missing/unreadable index from one whose lines are not valid index
-/// JSON — a hand-corrupted index is a hard error, not a silent miss,
-/// because skipping the bad line could resolve a *stale* registration
-/// for the same id and hand back the wrong root.
+/// missing/unreadable index from one that is not a valid keyed object —
+/// a corrupt index is a hard error, not a silent miss, so the caller can
+/// tell "no such project" (`NotFound`) from "index damaged"
+/// (`InvalidIndex`).
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
-    /// No index entry maps `project_id` to a root. Surfaces map this to
+    /// No index entry is keyed by `project_id`. Surfaces map this to
     /// `E_PROJECT_NOT_FOUND` (§0.12). Carries the unresolved id.
     #[error("project not found: {0}")]
     NotFound(String),
@@ -184,7 +308,9 @@ pub enum ResolveError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
-    /// A line in the index is not valid `{"id":...,"path":...}` JSON.
+    /// The index file is not a valid keyed JSON object (§2.6). The whole
+    /// document failed to parse — keying by id means there is no
+    /// per-line scan that could half-succeed and resolve a stale entry.
     #[error("projects index `{path}` has invalid JSON: {detail}")]
     InvalidIndex {
         /// The index path that failed to parse.
@@ -194,15 +320,13 @@ pub enum ResolveError {
     },
 }
 
-/// Resolve a project root via `<home>/.verbreel/projects-index`.
+/// Resolve a project root via `<home>/.verbreel/projects-index` (§2.6).
 ///
-/// Lines are scanned **newest-first** (`.rev()`); the most recent
-/// registration for an id wins, so re-registering a moved project (a
-/// fresh `register_project` append) shadows the older path without a
-/// rewrite of the whole file. Mirrors the index-lookup half of
-/// `verbreel-runtime`'s render resolver (its `lib.rs:95-116`) minus the
-/// explicit candidate-roots scan — that scan is render-delivery-specific
-/// and stays in `verbreel-runtime`.
+/// The index is a single JSON object keyed by `project_id`, so this is
+/// an O(1) map lookup, not a newest-first line scan. A corrupt index
+/// fails atomically (`InvalidIndex`) — it can never brick the resolution
+/// of entries registered before the corruption, because there are no
+/// "earlier lines" to be bricked (#445 vanishes structurally).
 ///
 /// A missing index file (the user has never registered a project) is
 /// treated as an empty index and yields [`ResolveError::NotFound`], not
@@ -211,12 +335,11 @@ pub enum ResolveError {
 ///
 /// # Errors
 ///
-/// - [`ResolveError::NotFound`] — no entry maps `project_id` to a root
+/// - [`ResolveError::NotFound`] — no entry is keyed by `project_id`
 ///   (including the "index file absent" case).
 /// - [`ResolveError::Io`] — the index exists but could not be read.
-/// - [`ResolveError::InvalidIndex`] — a non-empty line is not valid
-///   index JSON (a hand-corrupted index aborts rather than silently
-///   skipping the line, which could resolve a stale registration).
+/// - [`ResolveError::InvalidIndex`] — the index is not a valid keyed
+///   JSON object.
 pub fn resolve_root_for_project_id(home: &Path, project_id: &str) -> Result<PathBuf, ResolveError> {
     let index_path = projects_index_path(home);
 
@@ -230,20 +353,18 @@ pub fn resolve_root_for_project_id(home: &Path, project_id: &str) -> Result<Path
         Err(err) => return Err(ResolveError::Io(err)),
     };
 
-    for line in contents
-        .lines()
-        .rev()
-        .filter(|line| !line.trim().is_empty())
-    {
-        let row: IndexRow =
-            serde_json::from_str(line).map_err(|err| ResolveError::InvalidIndex {
-                path: index_path.display().to_string(),
-                detail: err.to_string(),
-            })?;
-        if row.id == project_id {
-            return Ok(PathBuf::from(row.path));
-        }
+    if contents.trim().is_empty() {
+        return Err(ResolveError::NotFound(project_id.to_string()));
     }
 
-    Err(ResolveError::NotFound(project_id.to_string()))
+    let index: ProjectsIndex =
+        serde_json::from_str(&contents).map_err(|err| ResolveError::InvalidIndex {
+            path: index_path.display().to_string(),
+            detail: err.to_string(),
+        })?;
+
+    match index.get(project_id) {
+        Some(entry) => Ok(PathBuf::from(&entry.path)),
+        None => Err(ResolveError::NotFound(project_id.to_string())),
+    }
 }

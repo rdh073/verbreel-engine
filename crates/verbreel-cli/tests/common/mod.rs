@@ -71,7 +71,13 @@ pub fn create_registered_project(home: &Path) -> String {
     })
     .expect("project create");
     let id = create_data.project_id.to_string();
-    verbreel_storage::layout::register_project(home, &id, &create_data.path)
-        .expect("register project in index");
+    verbreel_storage::layout::register_project(
+        home,
+        &id,
+        "cli-test-project",
+        &create_data.path,
+        "2025-01-01T00:00:00Z",
+    )
+    .expect("register project in index");
     id
 }

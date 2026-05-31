@@ -18,7 +18,6 @@ use std::fmt::Display;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
 use verbreel_ir::{AssetHash, CompositionInput, IrNodeId};
@@ -94,24 +93,25 @@ impl RenderRuntimeConfig {
         }
 
         for home in &self.homes {
-            let index_path = verbreel_storage::layout::projects_index_path(home);
-            let Ok(contents) = fs::read_to_string(&index_path) else {
-                continue;
-            };
-            for line in contents
-                .lines()
-                .rev()
-                .filter(|line| !line.trim().is_empty())
-            {
-                let entry: ProjectIndexEntry =
-                    serde_json::from_str(line).map_err(|err| RuntimeError::RenderFail {
+            // Delegate to the storage resolver instead of reparsing the
+            // index format here: §2.6 made the index a keyed JSON object,
+            // and a second parser would silently break on the new shape.
+            // `NotFound` means "try the next home"; a damaged index is a
+            // hard `RenderFail` (so a corrupt index is not masked as
+            // "project not registered").
+            match verbreel_storage::layout::resolve_root_for_project_id(
+                home,
+                &project_id.to_string(),
+            ) {
+                Ok(root) => return Ok(root),
+                Err(verbreel_storage::layout::ResolveError::NotFound(_)) => {}
+                Err(err) => {
+                    return Err(RuntimeError::RenderFail {
                         detail: format!(
-                            "projects index `{}` contains invalid JSON: {err}",
-                            index_path.display()
+                            "projects index under `{}` could not be read: {err}",
+                            home.display()
                         ),
-                    })?;
-                if entry.id == project_id.to_string() {
-                    return Ok(PathBuf::from(entry.path));
+                    });
                 }
             }
         }
@@ -222,12 +222,6 @@ impl RuntimeError {
             Self::RenderFail { .. } => "E_RENDER_FAIL",
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct ProjectIndexEntry {
-    id: String,
-    path: String,
 }
 
 fn render_start_at_root(
