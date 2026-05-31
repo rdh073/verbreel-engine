@@ -15,9 +15,7 @@
 
 use rmcp::{
     ServiceExt,
-    model::{
-        CallToolRequestParams, ClientJsonRpcMessage, ServerJsonRpcMessage, ServerResult,
-    },
+    model::{CallToolRequestParams, ClientJsonRpcMessage, ServerJsonRpcMessage, ServerResult},
     transport::{IntoTransport, Transport},
 };
 use serde_json::{Value, json};
@@ -29,10 +27,7 @@ use verbreel_mcp::VerbreelServer;
 /// (`()` is the minimal `ClientHandler`). The `TempDir` is returned so the
 /// caller keeps it alive — dropping it would unlink the isolated
 /// `.verbreel/projects-index` mid-test.
-async fn connect() -> (
-    TempDir,
-    rmcp::service::RunningService<rmcp::RoleClient, ()>,
-) {
+async fn connect() -> (TempDir, rmcp::service::RunningService<rmcp::RoleClient, ()>) {
     let home = TempDir::new().expect("tempdir");
     let (server_transport, client_transport) = tokio::io::duplex(4096);
 
@@ -89,10 +84,10 @@ async fn list_tools_over_duplex_advertises_full_surface() {
 async fn call_tool_project_list_over_duplex_is_structured_ok() {
     let (_home, client) = connect().await;
     let result = client
-        .call_tool(CallToolRequestParams::new("project.list").with_arguments(json!({})
-            .as_object()
-            .expect("empty object")
-            .clone()))
+        .call_tool(
+            CallToolRequestParams::new("project.list")
+                .with_arguments(json!({}).as_object().expect("empty object").clone()),
+        )
         .await
         .expect("project.list round-trips through ServerHandler::call_tool");
 
@@ -125,9 +120,10 @@ async fn call_tool_project_list_over_duplex_is_structured_ok() {
 async fn call_tool_unknown_verb_over_duplex_is_structured_e_unknown_verb() {
     let (_home, client) = connect().await;
     let result = client
-        .call_tool(CallToolRequestParams::new("totally.fake.verb").with_arguments(
-            json!({}).as_object().expect("empty object").clone(),
-        ))
+        .call_tool(
+            CallToolRequestParams::new("totally.fake.verb")
+                .with_arguments(json!({}).as_object().expect("empty object").clone()),
+        )
         .await
         .expect("unknown verb still round-trips; the failure is in the envelope");
 
@@ -177,8 +173,7 @@ async fn call_tool_non_object_args_over_duplex_is_refused() {
         }
     });
 
-    let mut client =
-        IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
+    let mut client = IntoTransport::<rmcp::RoleClient, _, _>::into_transport(client_transport);
 
     let init: ClientJsonRpcMessage = serde_json::from_str(
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{
@@ -205,7 +200,10 @@ async fn call_tool_non_object_args_over_duplex_is_refused() {
             "name":"project.list","arguments":[1,2,3]}}"#,
     )
     .expect("malformed tools/call frame parses as a client message");
-    client.send(bad_call).await.expect("send malformed tools/call");
+    client
+        .send(bad_call)
+        .await
+        .expect("send malformed tools/call");
 
     let response = loop {
         let msg = client.receive().await.expect("server responds");
