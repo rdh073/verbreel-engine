@@ -94,7 +94,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libavcodec-dev libavformat-dev libavutil-dev \
-            libavdevice-dev libswscale-dev pkg-config libclang-dev
+            libavdevice-dev libavfilter-dev libswscale-dev \
+            libswresample-dev libpostproc-dev pkg-config libclang-dev
       - name: drop Libs.private from FFmpeg .pc files
         # rusty_ffmpeg's build script (link_system_ffmpeg) probes its
         # hardcoded 7-lib set — including libavdevice — with pkg-config in
