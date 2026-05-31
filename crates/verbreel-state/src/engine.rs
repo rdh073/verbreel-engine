@@ -48,6 +48,7 @@ use verbreel_types::ProjectId;
 
 use crate::lifecycle::{LifecycleError, MutateOutcome, ProjectStore};
 use crate::reconstructor::VerbRegistry;
+use crate::verbs::project_list::{ProjectEntry, ProjectListData, ProjectListState};
 use crate::verbs::{
     project_close, project_create, project_duplicate, project_forget, project_open, project_save,
 };
@@ -63,17 +64,23 @@ const LIFECYCLE_VERBS: [&str; 6] = [
     "project.forget",
 ];
 
+/// Warning code emitted when the §2.6 projects-index write fails but the
+/// project itself is created/opened (`register_in_index`). Non-fatal:
+/// the project is usable in-session; only cross-process resolution by id
+/// is affected until a successful re-register.
+const W_INDEX_WRITE_FAILED: &str = "W_INDEX_WRITE_FAILED";
+
 /// Read verbs that span all open projects and take no `project_id`
 /// (§0.12). They are registry verbs whose `compute_patch` ignores the
 /// project graph, so the engine runs them against a synthetic empty
 /// project and returns `event_id: ""`.
-const PROJECTLESS_READ_VERBS: [&str; 5] = [
-    "list_capabilities",
-    "help",
-    "schema",
-    "validate_command",
-    "project.list",
-];
+///
+/// `project.list` is NOT in this set: per §2.6 it reports live engine
+/// state (open vs index-discovered projects) and prunes stale index
+/// entries — both of which need `home` + the open-map, which the pure
+/// registry `compute_patch` cannot see. It gets its own engine handler.
+const PROJECTLESS_READ_VERBS: [&str; 4] =
+    ["list_capabilities", "help", "schema", "validate_command"];
 
 /// §0.1 result envelope. Wraps every verb's `data` (the per-verb payload)
 /// on success, or a `{code, message, ...}` failure shape.
@@ -237,6 +244,9 @@ impl Engine {
         };
         if LIFECYCLE_VERBS.contains(&verb_id) {
             return self.dispatch_lifecycle(verb_id, &args, dry_run);
+        }
+        if verb_id == "project.list" {
+            return self.handle_project_list();
         }
         if PROJECTLESS_READ_VERBS.contains(&verb_id) {
             return self.dispatch_projectless_read(verb_id, &args);
@@ -453,7 +463,7 @@ impl Engine {
         // Long-running surfaces (MCP/HTTP) hold the open-map in-session, so
         // this only ever bit the CLI — but the index is the documented
         // durable id→root source of truth, so the engine writes it here.
-        let warnings = self.register_in_index(&data.project_id, &data.path);
+        let warnings = self.register_in_index(&data.project_id, &typed.name, &data.path);
         match serialize_or_internal("project.create", "data", &data) {
             Ok(data_value) => Envelope::ok(data_value, json!([]), warnings, String::new()),
             Err(env) => *env,
@@ -476,12 +486,13 @@ impl Engine {
                 // cross-process resolution this registration exists for.
                 // `store.root()` is the absolute path the verb validated.
                 let root = store.root().to_path_buf();
+                let name = store.project().name.clone();
                 self.open.insert(id, store);
-                // §2.6: opening (re-)appends the id→root entry. The resolver
-                // scans newest-first, so an already-indexed project is
-                // shadowed by this fresh append (newest wins) — re-registering
-                // never corrupts the index, it just records the most recent open.
-                let warnings = self.register_in_index(&id, &root);
+                // §2.6: opening upserts the id→entry, refreshing
+                // `last_opened_at`. Keying by id means re-registering an
+                // already-indexed project overwrites its entry in place —
+                // no duplicate, no compaction.
+                let warnings = self.register_in_index(&id, &name, &root);
                 match serialize_or_internal("project.open", "data", &data) {
                     Ok(data_value) => Envelope::ok(data_value, json!([]), warnings, String::new()),
                     Err(env) => *env,
@@ -570,6 +581,78 @@ impl Engine {
         }
     }
 
+    /// `project.list` (§2.6) — live engine read over the projects-index.
+    ///
+    /// Unlike the pure registry verb (which always returns an empty list
+    /// because its `compute_patch` cannot do file IO), this handler reads
+    /// the real `<home>/.verbreel/projects-index`, prunes entries whose
+    /// path no longer exists (emitting one `W_INDEX_STALE` per removed
+    /// entry), and marks each surviving entry `open` if it is held in
+    /// this engine's open-map, else `closed`.
+    ///
+    /// `patch` is `[]` and `event_id` is `""`: per §2.6 the prune rewrite
+    /// is engine-state housekeeping, not a project-graph mutation, so it
+    /// is not represented in any patch — `W_INDEX_STALE` is the only
+    /// observable signal that the index file was rewritten.
+    ///
+    /// The index read/prune is best-effort: an IO or parse failure does
+    /// not fail the verb (a damaged index should not make "list my
+    /// projects" return an error). It logs via `tracing::warn!` and
+    /// returns an empty list, mirroring the `register_in_index`
+    /// non-fatal-index-write convention.
+    fn handle_project_list(&self) -> Envelope {
+        let mut warnings: Vec<Value> = Vec::new();
+
+        let removed = match verbreel_storage::layout::prune_stale(&self.home) {
+            Ok(removed) => removed,
+            Err(e) => {
+                tracing::warn!(error = %e, "project.list: pruning the projects-index failed");
+                Vec::new()
+            }
+        };
+        for id in &removed {
+            warnings.push(json!({
+                "code": "W_INDEX_STALE",
+                "message": format!(
+                    "removed stale projects-index entry for `{id}` (path no longer exists)"
+                ),
+                "details": { "project_id": id },
+            }));
+        }
+
+        let index = match verbreel_storage::layout::read_index(&self.home) {
+            Ok(index) => index,
+            Err(e) => {
+                tracing::warn!(error = %e, "project.list: reading the projects-index failed");
+                verbreel_storage::layout::ProjectsIndex::new()
+            }
+        };
+
+        let mut projects: Vec<ProjectEntry> = index
+            .into_values()
+            .map(|entry| {
+                let state = match ProjectId::from_str(&entry.project_id) {
+                    Ok(id) if self.open.contains_key(&id) => ProjectListState::Open,
+                    _ => ProjectListState::Closed,
+                };
+                ProjectEntry {
+                    id: entry.project_id,
+                    name: entry.name,
+                    path: entry.path,
+                    state,
+                    last_opened_at: entry.last_opened_at,
+                }
+            })
+            .collect();
+        projects.sort_by(|a, b| a.id.cmp(&b.id));
+
+        let data = ProjectListData { projects };
+        match serialize_or_internal("project.list", "data", &data) {
+            Ok(data_value) => Envelope::ok(data_value, json!([]), warnings, String::new()),
+            Err(env) => *env,
+        }
+    }
+
     /// Register a `(project_id, root)` pair in the user-wide
     /// projects-index at `<home>/.verbreel/projects-index` (§2.6).
     ///
@@ -593,9 +676,19 @@ impl Engine {
     ///
     /// Returns the envelope `warnings` vector: empty on success, one
     /// `W_INDEX_WRITE_FAILED` entry on an index-write IO error.
-    fn register_in_index(&self, project_id: &ProjectId, root: &Path) -> Vec<Value> {
-        match verbreel_storage::layout::register_project(&self.home, &project_id.to_string(), root)
-        {
+    ///
+    /// `name` and `last_opened_at` populate the §2.6 index entry fields:
+    /// `create`/`open`/`duplicate` set `last_opened_at` to now (RFC 3339)
+    /// so `project.list` can report a meaningful "last opened" ordering.
+    fn register_in_index(&self, project_id: &ProjectId, name: &str, root: &Path) -> Vec<Value> {
+        let last_opened_at = verbreel_events::Timestamp::now();
+        match verbreel_storage::layout::register_project(
+            &self.home,
+            &project_id.to_string(),
+            name,
+            root,
+            last_opened_at.as_str(),
+        ) {
             Ok(()) => Vec::new(),
             Err(e) => {
                 tracing::warn!(
@@ -606,7 +699,7 @@ impl Engine {
                      but will not resolve by id in a fresh process until re-registered"
                 );
                 vec![json!({
-                    "code": "W_INDEX_WRITE_FAILED",
+                    "code": W_INDEX_WRITE_FAILED,
                     "message": format!(
                         "project created/opened, but writing the projects-index entry failed: {e}"
                     ),

@@ -866,7 +866,7 @@ fn resolve_root_through_index() {
 
     let id = "0190b8d3-15e3-7000-bd00-0000000000cc";
     let root = home.path().join("projects/resolved");
-    register_project(home.path(), id, &root).unwrap();
+    register_project(home.path(), id, "resolved", &root, "2025-01-01T00:00:00Z").unwrap();
 
     assert_eq!(engine.resolve_root(id).unwrap(), root);
 

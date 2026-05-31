@@ -9,21 +9,22 @@
 //! >   path: string; state: "open"|"closed";
 //! >   last_opened_at: string }[] }`
 //!
-//! ## v1 floor — empty list.
+//! ## Pure verb path vs live engine read.
 //!
 //! Per §2.6, the source of truth is `~/.verbreel/projects-index` — a
-//! user-scoped JSON file with `flock`'d read-modify-write semantics
-//! shared across every Verbreel engine instance on the host. The
-//! `Verb` trait's purity contract forbids file I/O in `compute_patch`,
-//! so v1 always reports an empty list. This is the same architectural
-//! gap that `project.info` defers `event_count` for,
-//! `stock.list_providers` defers config providers for,
-//! `list_capabilities` defers v1.1+ fields for, `font.list` defers
-//! system fonts for, `render.queue.list` defers queue persistence for,
-//! `tracker.list` defers `cache_status` for, `tracker.remove` defers
-//! cache unlink for, and `tracker.create` defers `cache_hash`
-//! population for. A future slice introduces `VerbContext` and wires
-//! several deferred features at once.
+//! user-scoped JSON object keyed by `project_id`, with `flock`'d
+//! read-modify-write semantics shared across every Verbreel engine
+//! instance on the host. The `Verb` trait's purity contract forbids
+//! file I/O in `compute_patch`, so the registry verb here always
+//! reports an **empty** list — that empty result is the deterministic
+//! replay/reconstruct contract the conformance fixtures pin.
+//!
+//! The **live** `project.list` data is produced by the engine's
+//! `Engine::handle_project_list`, which has the `home` + open-map this
+//! pure path cannot see: it reads the index, prunes stale entries
+//! (emitting `W_INDEX_STALE`), and marks each project `open`/`closed`.
+//! Keeping the index read in the engine (not the verb) honors the
+//! purity contract without a full `VerbContext` refactor.
 //!
 //! ## Bundle metadata, not project state.
 //!

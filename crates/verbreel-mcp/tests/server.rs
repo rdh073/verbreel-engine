@@ -325,8 +325,14 @@ async fn with_home_injects_home_into_render_runtime() {
     })
     .expect("project create");
     let project_id = create.project_id.to_string();
-    verbreel_storage::layout::register_project(home.path(), &project_id, &create.path)
-        .expect("register project in temp home index");
+    verbreel_storage::layout::register_project(
+        home.path(),
+        &project_id,
+        "mcp-render-home",
+        &create.path,
+        "2025-01-01T00:00:00Z",
+    )
+    .expect("register project in temp home index");
 
     let server = VerbreelServer::with_home(home.path());
     let env = server
