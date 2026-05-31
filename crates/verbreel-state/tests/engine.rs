@@ -710,8 +710,15 @@ fn open_with_relative_path_registers_absolute_root() {
         resolved.is_absolute(),
         "registered root must be absolute, got {resolved:?}"
     );
+    // Canonicalize both sides: on macOS the temp dir lives under a symlinked
+    // `/var` → `/private/var`, and `current_dir()` (used by `to_absolute`)
+    // resolves it, so the registered root is the canonical form while
+    // `abs_root` (built from `dir.path()`) is not. The point under test —
+    // that an ABSOLUTE root was registered, not the raw relative path — is
+    // the `is_absolute` assert above; this confirms it's the same directory.
     assert_eq!(
-        resolved, abs_root,
+        resolved.canonicalize().expect("resolved root exists"),
+        abs_root.canonicalize().expect("project root exists"),
         "project.open(relative) must register the absolutized root, not the raw relative path"
     );
 }
