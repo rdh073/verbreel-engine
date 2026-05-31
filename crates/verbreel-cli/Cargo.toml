@@ -20,7 +20,6 @@ path = "src/main.rs"
 verbreel-state = { path = "../verbreel-state" }
 verbreel-storage = { path = "../verbreel-storage" }
 verbreel-runtime = { path = "../verbreel-runtime", optional = true }
-tokio.workspace = true
 clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -29,6 +28,10 @@ serde_json.workspace = true
 
 [features]
 default = []
+# Routes `render.start` through the native `verbreel-runtime` (ffmpeg
+# decode → GPU composite → encode) instead of the Engine's v1
+# `E_RENDER_FAIL` floor. The dep rule allows this single crate behind the
+# feature gate; the default v1 floor stays pure state + storage.
 native-render = [
     "dep:verbreel-runtime",
     "verbreel-runtime/native-render",

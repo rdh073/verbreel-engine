@@ -3062,7 +3062,6 @@ dependencies = [
  "clap",
  "serde_json",
  "tempfile",
- "tokio",
  "tracing",
  "tracing-subscriber",
  "verbreel-runtime",

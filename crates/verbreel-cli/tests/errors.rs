@@ -1,128 +1,163 @@
-//! Parse-error paths — pin clap's `ErrorKind` for each bad argv shape
-//! so future surface additions don't silently regress the user-facing
-//! exit codes.
+//! Failure-path coverage for the generic dispatcher.
+//!
+//! The generic `trailing_var_arg` parser accepts any `<noun> <verb>
+//! [--flags]` tail, so unknown nouns/verbs are no longer clap
+//! `InvalidSubcommand` parse errors (exit 2). They become dispatch-time
+//! §0.1 `ok:false` envelopes on **stdout** (exit 1). The only surviving
+//! clap exit-2 paths are `--help` / `--version` and a genuinely
+//! malformed argv.
+
+mod common;
 
 use clap::Parser;
-use verbreel_cli::Cli;
+use serde_json::Value;
+use verbreel_cli::{Cli, dispatch};
 
-#[test]
-fn unknown_top_level_subcommand_is_a_parse_error() {
-    let err = Cli::try_parse_from(["verbreel", "bogus"]).unwrap_err();
-    assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
+/// `dispatch` under a temp home, returning `(exit, stdout, stderr)`.
+fn run_argv(argv: &[&str]) -> (i32, String, String) {
+    common::with_home(|_home| {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = dispatch(argv, &mut out, &mut err);
+        (
+            code,
+            String::from_utf8(out).expect("stdout utf-8"),
+            String::from_utf8(err).expect("stderr utf-8"),
+        )
+    })
 }
 
 #[test]
-fn unknown_top_level_subcommand_uses_exit_code_two() {
-    // clap defaults parse-error exits to code 2; this is the contract
-    // shell scripts depend on.
-    let err = Cli::try_parse_from(["verbreel", "bogus"]).unwrap_err();
-    assert_eq!(err.exit_code(), 2);
-}
-
-#[test]
-fn unknown_project_action_is_a_parse_error() {
-    let err = Cli::try_parse_from(["verbreel", "project", "frobnicate"]).unwrap_err();
-    assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
-}
-
-#[test]
-fn project_with_no_action_reports_help_on_missing_subcommand() {
-    // clap distinguishes "bare top-level with no sub" (MissingSubcommand)
-    // from "intermediate noun with no sub"
-    // (DisplayHelpOnMissingArgumentOrSubcommand). Pin the latter so the
-    // user-facing behaviour (`verbreel project` prints help, doesn't
-    // silently exit 0) is locked in.
-    let err = Cli::try_parse_from(["verbreel", "project"]).unwrap_err();
+fn unknown_top_level_subcommand_dispatches_to_unknown_verb() {
+    // clap accepts `bogus frob` now; it dispatches to id `bogus.frob`,
+    // the engine returns `E_UNKNOWN_VERB`, exit 1 (was clap exit 2).
+    let (code, out, _) = run_argv(&["verbreel", "bogus", "frob"]);
+    assert_eq!(code, 1, "unknown verb is ok:false → exit 1");
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v.get("ok").and_then(Value::as_bool), Some(false));
     assert_eq!(
-        err.kind(),
-        clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        v.get("code").and_then(Value::as_str),
+        Some("E_UNKNOWN_VERB"),
+        "got: {out}"
     );
 }
 
 #[test]
-fn unknown_flag_on_list_is_a_parse_error() {
-    let err = Cli::try_parse_from(["verbreel", "project", "list", "--nope"]).unwrap_err();
-    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+fn unknown_verb_uses_exit_code_one_not_two() {
+    let (code, _, _) = run_argv(&["verbreel", "bogus", "frob"]);
+    assert_eq!(code, 1, "unknown verb is now exit 1 (ok:false), not 2");
 }
 
 #[test]
-fn unknown_top_level_subcommand_mentions_offending_token() {
-    let err = Cli::try_parse_from(["verbreel", "bogus"]).unwrap_err();
-    let rendered = err.to_string();
+fn unknown_project_action_is_unknown_verb() {
+    // `project frobnicate` → id `project.frobnicate`, engine ok:false.
+    let (code, out, _) = run_argv(&["verbreel", "project", "frobnicate"]);
+    assert_eq!(code, 1);
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        v.get("code").and_then(Value::as_str),
+        Some("E_UNKNOWN_VERB")
+    );
+}
+
+#[test]
+fn bare_noun_is_unknown_verb() {
+    // `verbreel project` (noun, no verb) reconstructs to id `project.`
+    // (a dotted id with an empty verb), which the engine rejects with
+    // `E_UNKNOWN_VERB`, exit 1 — pinned over the old clap help path.
+    let (code, out, _) = run_argv(&["verbreel", "project"]);
+    assert_eq!(code, 1);
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        v.get("code").and_then(Value::as_str),
+        Some("E_UNKNOWN_VERB")
+    );
+}
+
+#[test]
+fn unknown_flag_folds_into_args_and_is_dispatched() {
+    // The generic parser folds arbitrary `--flags` into the args map;
+    // `--nope value` is no longer a clap parse error. It lands in the
+    // args and the engine response is asserted (here: `project.list`
+    // ignores the extra flag and still returns ok:true).
+    let (code, out, _) = run_argv(&["verbreel", "project", "list", "--nope", "x"]);
+    assert_eq!(code, 0, "extra flag must not break a read, got: {out}");
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v.get("ok").and_then(Value::as_bool), Some(true));
+}
+
+#[test]
+fn unknown_verb_message_names_offending_token_on_stdout() {
+    // The offending token now appears in the §0.1 envelope's `message`
+    // on stdout, not in a clap stderr error.
+    let (_, out, err) = run_argv(&["verbreel", "totally_fake", "frob"]);
     assert!(
-        rendered.contains("bogus"),
-        "error text should mention the offending subcommand, got:\n{rendered}"
+        out.contains("totally_fake.frob"),
+        "stdout envelope message must name the verb, got:\n{out}"
     );
+    assert!(err.is_empty(), "stderr must stay empty, got:\n{err}");
 }
-
-// --- dispatch() — full parse + run + error-formatting loop ----------------
-
-use verbreel_cli::dispatch;
 
 #[test]
 fn dispatch_bare_verbreel_prints_help_to_stderr_via_arg_required_else_help() {
-    // `arg_required_else_help = true` on the top-level Cli must turn a
-    // bare `verbreel` invocation into a help print (exit code 2 per
-    // clap's DisplayHelpOnMissingArgumentOrSubcommand convention).
-    // Pinning this via dispatch() exercises the REAL stderr emission
-    // path, not just `clap::Error::render`.
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let code = dispatch(["verbreel"], &mut out, &mut err);
+    // Bare `verbreel` still exits non-zero with help via
+    // arg_required_else_help (clap renders to stderr).
+    let (code, _out, err) = run_argv(&["verbreel"]);
     assert_ne!(code, 0, "bare invocation must not exit 0");
-    let err_text = String::from_utf8(err).expect("stderr must be utf-8");
     assert!(
-        err_text.to_lowercase().contains("usage") || err_text.contains("verbreel"),
-        "stderr must render the help/usage block, got:\n{err_text}"
+        err.to_lowercase().contains("usage") || err.contains("verbreel"),
+        "stderr must render the help/usage block, got:\n{err}"
     );
 }
 
 #[test]
-fn dispatch_bare_project_prints_help_to_stderr_via_arg_required_else_help() {
-    // Same contract for the noun-level: `verbreel project` without a
-    // verb must show help, not crash with an unknown-subcommand-like
-    // error.
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let code = dispatch(["verbreel", "project"], &mut out, &mut err);
-    assert_ne!(code, 0, "bare 'project' must not exit 0");
-    let err_text = String::from_utf8(err).expect("stderr must be utf-8");
-    assert!(
-        err_text.to_lowercase().contains("usage") || err_text.contains("project"),
-        "stderr must render the project-help/usage block, got:\n{err_text}"
-    );
-}
-
-#[test]
-fn dispatch_unknown_subcommand_writes_clap_error_to_stderr() {
-    // Unknown subcommand at the top level routes to clap's error
-    // formatter, which dispatch() must render into `err` — never to
-    // stdout, never silently.
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let code = dispatch(["verbreel", "totally-fake-noun"], &mut out, &mut err);
-    assert_ne!(code, 0, "unknown subcommand must not exit 0");
-    assert!(out.is_empty(), "stdout must remain empty on error path");
-    let err_text = String::from_utf8(err).expect("stderr must be utf-8");
-    assert!(
-        err_text.contains("totally-fake-noun"),
-        "stderr must echo the offending subcommand, got:\n{err_text}"
-    );
+fn dispatch_unknown_subcommand_writes_envelope_to_stdout() {
+    // Inverted from the old contract: an unknown subcommand no longer
+    // writes a clap error to stderr. It writes a §0.1 ok:false envelope
+    // to stdout; stderr stays empty.
+    let (code, out, err) = run_argv(&["verbreel", "totally-fake-noun", "frob"]);
+    assert_eq!(code, 1, "unknown subcommand is ok:false → exit 1");
+    assert!(err.is_empty(), "stderr must stay empty, got:\n{err}");
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v.get("ok").and_then(Value::as_bool), Some(false));
 }
 
 #[test]
 fn dispatch_happy_path_writes_to_stdout_only() {
-    // The success path must NOT touch stderr — that would surprise
-    // operators piping `verbreel project list | jq` and seeing
-    // unexpected diagnostic noise on terminal 2.
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let code = dispatch(["verbreel", "project", "list"], &mut out, &mut err);
+    let (code, out, err) = run_argv(&["verbreel", "project", "list"]);
     assert_eq!(code, 0);
     assert!(!out.is_empty(), "stdout must carry the verb output");
     assert!(
         err.is_empty(),
-        "stderr must remain empty on the happy path, got: {}",
-        String::from_utf8_lossy(&err)
+        "stderr must stay empty on the happy path, got: {err}"
+    );
+}
+
+// --- exit-code contract (new) ---------------------------------------------
+
+#[test]
+fn parse_failure_exits_two() {
+    // Bare `verbreel` (empty required tail) is the live clap-level parse
+    // failure: arg_required_else_help turns it into a non-success parse
+    // outcome with exit code 2, proving the §0.1 "exit 2 = parse-level,
+    // before the engine" contract still has a live path. `--help` does
+    // NOT qualify — it is an intentional help display with exit 0.
+    let err = Cli::try_parse_from(["verbreel"]).unwrap_err();
+    assert_eq!(err.exit_code(), 2);
+    let (code, _, _) = run_argv(&["verbreel"]);
+    assert_eq!(code, 2, "dispatch must surface the clap exit-2 path");
+}
+
+#[test]
+fn ok_false_exits_one() {
+    // A project-scoped verb with no open project → `E_PROJECT_NOT_FOUND`,
+    // ok:false on stdout, exit 1.
+    let (code, out, _) = run_argv(&["verbreel", "clip", "add"]);
+    assert_eq!(code, 1);
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v.get("ok").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        v.get("code").and_then(Value::as_str),
+        Some("E_PROJECT_NOT_FOUND")
     );
 }

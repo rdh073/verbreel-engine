@@ -1,7 +1,10 @@
-//! `--help` / `--version` / `-h` parser surface — pure clap, no
-//! `run` invocation. These tests pin the documented surface so that
-//! adding a new subcommand later doesn't accidentally remove or rename
-//! an existing one.
+//! `--help` / `--version` parser surface — pure clap, no `run`.
+//!
+//! The generic dispatcher has no enumerated subcommands, so help no
+//! longer auto-advertises `project` / `list`. It advertises the
+//! `<noun> <verb>` usage shape instead. These tests pin that surface so
+//! a future change does not silently drop the usage line or rename the
+//! binary.
 
 use clap::{CommandFactory, Parser};
 use verbreel_cli::Cli;
@@ -13,11 +16,13 @@ fn help_flag_returns_displayed_help_error() {
 }
 
 #[test]
-fn help_text_advertises_project_subcommand() {
+fn help_text_advertises_noun_verb_usage() {
+    // The generic surface documents `<noun> <verb>` in its about line
+    // (clap has no enum to derive subcommand names from).
     let help = Cli::command().render_long_help().to_string();
     assert!(
-        help.contains("project"),
-        "expected `project` noun in --help, got:\n{help}"
+        help.contains("<noun> <verb>"),
+        "expected the `<noun> <verb>` usage shape in --help, got:\n{help}"
     );
 }
 
@@ -35,7 +40,7 @@ fn help_text_omits_internal_rustdoc_details() {
     let help = Cli::command().render_long_help().to_string();
     assert!(
         !help.contains("arg_required_else_help"),
-        "help should show user-facing command text, not parser implementation details:\n{help}"
+        "help should show user-facing text, not parser internals:\n{help}"
     );
 }
 
@@ -46,26 +51,16 @@ fn version_flag_returns_displayed_version_error() {
 }
 
 #[test]
-fn project_help_advertises_list_action() {
-    let err = Cli::try_parse_from(["verbreel", "project", "--help"]).unwrap_err();
-    assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
-    let rendered = err.to_string();
-    assert!(
-        rendered.contains("list"),
-        "expected `list` action in `project --help`, got:\n{rendered}"
-    );
-}
-
-#[test]
 fn missing_subcommand_prints_help() {
-    // Bare `verbreel` (no sub) should print help, not silently succeed.
-    // clap conflates this with the "show help" path under
-    // DisplayHelpOnMissingArgumentOrSubcommand at the derive-API
-    // default settings used by this crate.
+    // Bare `verbreel` (empty tail) must still print help via
+    // arg_required_else_help, not dispatch an empty command. Under the
+    // generic `trailing_var_arg` parser this surfaces as the
+    // MissingRequiredArgument / DisplayHelpOnMissingArgumentOrSubcommand
+    // family — either way it is a non-success parse outcome with exit 2.
     let err = Cli::try_parse_from(["verbreel"]).unwrap_err();
     assert_eq!(
-        err.kind(),
-        clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand,
-        "bare `verbreel` invocation should display help, got: {err}"
+        err.exit_code(),
+        2,
+        "bare `verbreel` must exit 2, got: {err}"
     );
 }
