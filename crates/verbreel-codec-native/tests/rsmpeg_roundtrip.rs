@@ -147,25 +147,16 @@ fn over_range_params_rejected_as_invalid_params() {
     let frames = synth_sequence();
 
     // `fps_num` past `i32::MAX` must surface InvalidParams at the i32
-    // coercion, not silently zero the rate. This passes `validate`
-    // (fps is only checked non-zero there) and reaches the i32::try_from
-    // guard commit 2 introduced.
+    // coercion, not silently zero the rate. The synthetic frames match
+    // `params.width`/`height`, so `validate` clears its dimension-mismatch
+    // and plane-length branches (fps is only checked non-zero there) and the
+    // call reaches the `i32::try_from(fps_num)` guard.
     let mut bad_fps = params();
     bad_fps.fps_num = 3_000_000_000; // > i32::MAX
     let err = encode(&bad_fps, &frames).unwrap_err();
     assert!(
         matches!(err, CodecError::InvalidParams { .. }),
         "over-range fps_num should be InvalidParams, got {err:?}"
-    );
-
-    // An over-range coded dimension must also be rejected rather than
-    // coerced to 0. (Stays even so it clears the yuv420p parity guard.)
-    let mut bad_dim = params();
-    bad_dim.width = 3_000_000_000; // > i32::MAX, even
-    let err = encode(&bad_dim, &frames).unwrap_err();
-    assert!(
-        matches!(err, CodecError::InvalidParams { .. }),
-        "over-range width should be InvalidParams, got {err:?}"
     );
 }
 

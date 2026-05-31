@@ -253,6 +253,11 @@ fn to_yuv420p_frame(src: &AVFrame, sws: &mut Option<SwsContext>) -> Result<Frame
             });
         }
     };
+    if !uw.is_multiple_of(2) || !uh.is_multiple_of(2) {
+        return Err(CodecError::BackendInternal {
+            detail: format!("decoded frame has odd dimensions {uw}x{uh} (yuv420p requires even)"),
+        });
+    }
 
     let mut dst = AVFrame::new();
     dst.set_width(width);
@@ -334,5 +339,36 @@ unsafe fn copy_plane(
         let row_ptr = unsafe { base.add(row * stride) };
         let slice = unsafe { std::slice::from_raw_parts(row_ptr, row_bytes) };
         out.extend_from_slice(slice);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An odd-dimension decoded picture is unreachable through a real libav
+    /// container (coded dims are macroblock-aligned, hence even), so the
+    /// even-dim guard is exercised by feeding the conversion an
+    /// odd-dimension `AVFrame` directly.
+    fn odd_dim_frame() -> AVFrame {
+        let mut frame = AVFrame::new();
+        frame.set_width(63);
+        frame.set_height(48);
+        frame.set_format(ffi::AVPixelFormat_AV_PIX_FMT_YUV420P);
+        frame
+            .alloc_buffer()
+            .expect("alloc odd-dim yuv420p test frame");
+        frame
+    }
+
+    #[test]
+    fn odd_dimension_frame_rejected_as_backend_internal() {
+        let src = odd_dim_frame();
+        let mut sws = None;
+        let err = to_yuv420p_frame(&src, &mut sws).unwrap_err();
+        assert!(
+            matches!(err, CodecError::BackendInternal { .. }),
+            "odd-dimension decoded frame should be BackendInternal, got {err:?}"
+        );
     }
 }

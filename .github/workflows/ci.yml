@@ -80,6 +80,32 @@ jobs:
       # 121-verb / 121-fixture set); no caching of the report itself.
       - run: cargo run -p verbreel-conformance --release
 
+  ffmpeg:
+    name: cargo test/clippy codec-native (rsmpeg feature-on)
+    # ubuntu-24.04, NOT 22.04: rsmpeg is pinned to the `ffmpeg6` ABI, and
+    # 22.04's apt libav* is FFmpeg 4.4 (libavcodec 58) — an ABI mismatch
+    # that fails rsmpeg's bindgen. 24.04 ships FFmpeg 6.1.1 (libavcodec 60)
+    # via plain apt, satisfying `ffmpeg6` with no PPA or source build.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: install system FFmpeg 6.x dev libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libavcodec-dev libavformat-dev libavutil-dev \
+            libavdevice-dev libswscale-dev pkg-config libclang-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ffmpeg
+      - name: cargo test (rsmpeg feature-on)
+        run: cargo test -p verbreel-codec-native --features rsmpeg
+      - name: cargo clippy (rsmpeg feature-on)
+        run: cargo clippy -p verbreel-codec-native --features rsmpeg -- -D warnings
+
   wasm-check:
     name: cargo check wasm32
     runs-on: ubuntu-22.04
