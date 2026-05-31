@@ -120,6 +120,13 @@ pub struct RenderStartData {
     pub output_path: String,
     /// Render range duration in ticks.
     pub duration_tk: i64,
+    /// §0.1 envelope event id of the `render.start` event this call recorded.
+    ///
+    /// Filled by the native runtime on the returned copy *after* the event is
+    /// written — never inside the recorded event payload, which would be a
+    /// self-reference (the event referencing its own not-yet-minted id).
+    #[serde(default)]
+    pub event_id: String,
 }
 
 /// Build the event warning used by native runtime surfaces to record result data.

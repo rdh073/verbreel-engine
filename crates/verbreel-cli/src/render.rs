@@ -31,9 +31,9 @@ use verbreel_state::{Envelope, RenderStartArgs};
 /// deserialize failure (e.g. an unknown codec string, a non-integer tick)
 /// surfaces as `E_SCHEMA_VIOLATION`; a runtime failure surfaces with its
 /// own `E_*` code (via [`verbreel_runtime::RuntimeError::code`]). Success carries the runtime's
-/// `data` object with an empty patch / `event_id` — the native path
-/// records its own event inside `verbreel-runtime`, so no engine patch is
-/// produced here.
+/// `data` object with an empty engine patch but the truthful `event_id` the
+/// native path recorded inside `verbreel-runtime` (no engine patch is produced
+/// here — the runtime owns the event).
 #[must_use]
 pub fn dispatch(args: &Map<String, Value>, runtime: &RenderRuntimeConfig) -> Envelope {
     let typed: RenderStartArgs = match serde_json::from_value(Value::Object(args.clone())) {
@@ -53,7 +53,7 @@ pub fn dispatch(args: &Map<String, Value>, runtime: &RenderRuntimeConfig) -> Env
                 data: data_value,
                 patch: Value::Array(Vec::new()),
                 warnings: Vec::new(),
-                event_id: String::new(),
+                event_id: data.event_id.clone(),
             },
             // A serialization fault on our own DTO is internal, not a
             // client error — surface it rather than fabricating a hollow

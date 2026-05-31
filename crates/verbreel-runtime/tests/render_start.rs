@@ -108,7 +108,26 @@ fn render_start_writes_mp4_from_project_asset() -> anyhow::Result<()> {
     assert_eq!(data.output_path, out_path.display().to_string());
     assert_eq!(data.duration_tk, DURATION_TK);
     assert!(!data.job_id.is_empty());
-    assert_render_event_recorded(&fixture.root, &data)?;
+    let event = assert_render_event_recorded(&fixture.root, &data)?;
+    // §0.1: a verb that recorded an event must surface its truthful id, not
+    // the read-only/dry-run `""` placeholder. §0.3: it is a strict UUIDv7 —
+    // canonical 36-char form whose version nibble (index 14) is `7`. And it
+    // equals the recorded events.jsonl line's `id`.
+    assert!(
+        !data.event_id.is_empty(),
+        "render.start recorded an event but returned event_id=\"\""
+    );
+    assert_eq!(data.event_id.len(), 36, "event_id must be a canonical UUID");
+    assert_eq!(
+        data.event_id.as_bytes()[14],
+        b'7',
+        "event_id must be a UUIDv7 (§0.3), got {}",
+        data.event_id
+    );
+    assert_eq!(
+        event["id"], data.event_id,
+        "returned event_id must match the recorded events.jsonl line id",
+    );
     Ok(())
 }
 
@@ -271,5 +290,19 @@ fn assert_render_event_recorded(
     assert_eq!(recorded["details"]["job_id"], data.job_id);
     assert_eq!(recorded["details"]["output_path"], data.output_path);
     assert_eq!(recorded["details"]["duration_tk"], data.duration_tk);
+    // §0.1 self-reference guard: the recorded payload MUST NOT embed its own
+    // not-yet-minted id. `event_id` is set on the returned copy only *after*
+    // record_render_start_event mints it, so the persisted warning carries the
+    // empty default. This locks the ordering against a refactor that moves the
+    // `data.event_id = event_id` assignment above the record call — which would
+    // still pass the `event["id"] == data.event_id` check but reintroduce the
+    // self-reference this PR guards against.
+    assert!(
+        recorded["details"]["event_id"]
+            .as_str()
+            .unwrap_or("")
+            .is_empty(),
+        "recorded render.start payload must not embed its own event_id (self-reference): {recorded}"
+    );
     Ok(event)
 }
