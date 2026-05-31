@@ -329,10 +329,18 @@ fn malformed_dry_run_on_project_scoped_verb_is_rejected_and_persists_nothing() {
                 "dry_run": bad,
             }),
         );
-        let Envelope::Err { code, .. } = &env else {
+        let Envelope::Err { code, details, .. } = &env else {
             panic!("non-boolean dry_run on marker.add must be rejected, got {env:?}");
         };
         assert_eq!(code, "E_SCHEMA_VIOLATION");
+        assert_eq!(
+            details
+                .as_ref()
+                .and_then(|d| d.get("arg"))
+                .and_then(Value::as_str),
+            Some("dry_run"),
+            "rejection must name dry_run as the offending arg (dispatch-boundary type gate)"
+        );
     }
 
     assert_eq!(
@@ -1200,10 +1208,19 @@ fn forget_with_non_boolean_dry_run_is_rejected_and_does_not_remove_root() {
 
     for bad in [json!("true"), json!(1), json!(null), json!({})] {
         let env = engine.dispatch("project.forget", json!({ "path": &root, "dry_run": bad }));
-        let Envelope::Err { code, .. } = &env else {
+        let Envelope::Err { code, details, .. } = &env else {
             panic!("non-boolean dry_run on project.forget must be rejected, got {env:?}");
         };
         assert_eq!(code, "E_SCHEMA_VIOLATION");
+        // Pin that the dry_run type-gate fired, not some unrelated schema error.
+        assert_eq!(
+            details
+                .as_ref()
+                .and_then(|d| d.get("arg"))
+                .and_then(Value::as_str),
+            Some("dry_run"),
+            "rejection must name dry_run as the offending arg"
+        );
         assert!(
             root.exists(),
             "malformed dry_run must NOT trigger a real forget that removes the root"
