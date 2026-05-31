@@ -34,6 +34,23 @@ use verbreel_storage::fs::atomic_write_bytes;
 #[cfg(feature = "native")]
 use verbreel_types::AssetId;
 
+/// Whether a verb's compute path may fire persistent side effects.
+///
+/// The §0.8 mutate path uses [`SideEffects::Persist`] (the CAS write
+/// happens). The §0.5.1 `dry_run` compute-only path uses
+/// [`SideEffects::ComputeOnly`] — the same patch + hash is computed but
+/// no bytes are written to `assets/`, so a dry run leaves no orphaned
+/// CAS object on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SideEffects {
+    /// Real mutate path: write source bytes to the content-addressed
+    /// store.
+    Persist,
+    /// `dry_run` path (§0.5.1): compute the hash + patch but skip every
+    /// persistent write.
+    ComputeOnly,
+}
+
 /// Per-verb upper bound on the `paths` array.
 pub const PATHS_MAX_BATCH: usize = 1000;
 
@@ -390,6 +407,20 @@ fn mode_used_for(_args: &AssetImportArgs) -> &'static str {
 /// `verbreel_storage::cas::key_for_bytes`, and patch-add a
 /// corresponding `Asset` record carrying canonical hash/path fields.
 ///
+/// ## §0.5.1 compute-only (`dry_run`) mode
+///
+/// `persist` selects whether the CAS write actually fires. The persist
+/// path (`SideEffects::Persist`) writes the source bytes to
+/// `assets/<aa>/<sha256>.<ext>` exactly as before. The compute-only path
+/// (`SideEffects::ComputeOnly`, used by the `dry_run` route) still reads
+/// the source, computes the real sha256 + CAS key, and builds the
+/// identical would-be patch — but **skips** `atomic_write_bytes` so no
+/// orphaned CAS object is left on disk. This is the §0.5.1 guarantee:
+/// "the patch reflects real probed values" (so `Asset.hash` is the true
+/// content hash) while "no asset bytes are copied into `assets/`". The
+/// content-match read against a pre-existing CAS object is a read, not a
+/// write, so it runs in both modes.
+///
 /// # Errors
 ///
 /// Returns schema violations, missing-path errors, and I/O errors.
@@ -398,6 +429,7 @@ pub fn compute_patch_with_root(
     _prior: &Project,
     args: &AssetImportArgs,
     project_root: &Path,
+    persist: SideEffects,
 ) -> Result<(Value, Vec<Value>, AssetImportData), AssetImportError> {
     if args.paths.len() > PATHS_MAX_BATCH {
         return Err(AssetImportError::SchemaViolation {
@@ -436,6 +468,9 @@ pub fn compute_patch_with_root(
         })?;
         let dst = project_root.join(&key.relative_path);
         if dst.exists() {
+            // Reading an already-present CAS object to verify it matches
+            // is a read, not a write — runs in both Persist and
+            // ComputeOnly mode (§0.5.1 permits source reads under dry_run).
             let existing = fs::read(&dst).map_err(|e| AssetImportError::Io {
                 path: dst.display().to_string(),
                 detail: e.to_string(),
@@ -446,7 +481,11 @@ pub fn compute_patch_with_root(
                     detail: "existing CAS object contents do not match expected hash".to_string(),
                 });
             }
-        } else {
+        } else if persist == SideEffects::Persist {
+            // §0.5.1: only the real mutate path writes to assets/. The
+            // dry_run / compute-only path skips this so it leaves no
+            // orphaned CAS object — the patch above already carries the
+            // real content hash, which is the dry-run guarantee.
             if let Some(parent) = dst.parent() {
                 fs::create_dir_all(parent).map_err(|e| AssetImportError::Io {
                     path: parent.display().to_string(),

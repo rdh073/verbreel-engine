@@ -210,6 +210,11 @@ impl Engine {
 
     /// THE single surface entry point. Route `verb_id` + `args` to the
     /// right handler and return the §0.1 [`Envelope`].
+    // `args` is taken by value: this is the owned command hand-off from the
+    // transport layer (CLI/MCP/HTTP), so the public boundary owns the parsed
+    // command while the private routers only borrow it. needless_pass_by_value
+    // is a known false-positive for this public ownership-handoff shape.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn dispatch(&mut self, verb_id: &str, args: Value) -> Envelope {
         if LIFECYCLE_VERBS.contains(&verb_id) {
             return self.dispatch_lifecycle(verb_id, &args);
@@ -217,7 +222,7 @@ impl Engine {
         if PROJECTLESS_READ_VERBS.contains(&verb_id) {
             return self.dispatch_projectless_read(verb_id, &args);
         }
-        self.dispatch_project_scoped(verb_id, args)
+        self.dispatch_project_scoped(verb_id, &args)
     }
 
     /// All dispatchable verb ids: the registry verbs (sorted) plus the
@@ -259,13 +264,13 @@ impl Engine {
     // Routing — project-scoped registry verbs
     // ---------------------------------------------------------------
 
-    fn dispatch_project_scoped(&mut self, verb_id: &str, args: Value) -> Envelope {
+    fn dispatch_project_scoped(&mut self, verb_id: &str, args: &Value) -> Envelope {
         // Unknown verb (not a registry verb and not a lifecycle verb).
         if self.registry.get(verb_id).is_none() {
             return Envelope::err("E_UNKNOWN_VERB", format!("unknown verb: {verb_id}"));
         }
 
-        let project_id = match project_id_from_args(&args) {
+        let project_id = match project_id_from_args(args) {
             Ok(id) => id,
             Err(env) => return *env,
         };
@@ -274,17 +279,24 @@ impl Engine {
             return project_not_found(&project_id);
         }
 
-        let dry_run = bool_arg(&args, "dry_run");
-        let idempotency_key = string_arg(&args, "idempotency_key");
+        let dry_run = bool_arg(args, "dry_run");
+        let idempotency_key = string_arg(args, "idempotency_key");
+
+        // Strip the engine-consumed universal args before the verb sees
+        // them: they are routing controls, not verb args (§0.5), and a
+        // verb with `deny_unknown_fields` would otherwise reject them.
+        let verb_args = strip_universal_args(args);
 
         if dry_run {
             // §0.5.1: compute the patch, skip persistence, `event_id: ""`,
             // ignore `idempotency_key`.
             let store = &self.open[&project_id];
-            return match store.compute_via_verb(verb_id, &args) {
+            return match store.compute_via_verb(verb_id, &verb_args) {
                 Ok((patch, data, warnings)) => {
-                    let patch_value = serde_json::to_value(&patch).unwrap_or_else(|_| json!([]));
-                    Envelope::ok(data, patch_value, warnings, String::new())
+                    match serialize_or_internal(verb_id, "patch", &patch) {
+                        Ok(patch_value) => Envelope::ok(data, patch_value, warnings, String::new()),
+                        Err(env) => *env,
+                    }
                 }
                 Err(err) => lifecycle_error_to_envelope(verb_id, &err),
             };
@@ -294,8 +306,8 @@ impl Engine {
             .open
             .get_mut(&project_id)
             .expect("contains_key checked above");
-        match store.mutate_via_verb(verb_id, args, idempotency_key) {
-            Ok(outcome) => mutate_outcome_to_envelope(outcome),
+        match store.mutate_via_verb(verb_id, verb_args, idempotency_key) {
+            Ok(outcome) => mutate_outcome_to_envelope(verb_id, outcome),
             Err(err) => lifecycle_error_to_envelope(verb_id, &err),
         }
     }
@@ -319,10 +331,10 @@ impl Engine {
         let args = inject_project_id(args, synthetic_id);
         let synthetic = crate::synthetic_empty_project(synthetic_id);
         match verb.compute_patch(&synthetic, &args) {
-            Ok((patch, data, warnings)) => {
-                let patch_value = serde_json::to_value(&patch).unwrap_or_else(|_| json!([]));
-                Envelope::ok(data, patch_value, warnings, String::new())
-            }
+            Ok((patch, data, warnings)) => match serialize_or_internal(verb_id, "patch", &patch) {
+                Ok(patch_value) => Envelope::ok(data, patch_value, warnings, String::new()),
+                Err(env) => *env,
+            },
             Err(err) => Envelope::err(verb_error_code(&err), format!("{verb_id}: {err}")),
         }
     }
@@ -368,8 +380,10 @@ impl Engine {
             }
             Err(e) => return open_error_to_envelope(&e),
         }
-        let data_value = serde_json::to_value(&data).unwrap_or(Value::Null);
-        Envelope::ok(data_value, json!([]), Vec::new(), String::new())
+        match serialize_or_internal("project.create", "data", &data) {
+            Ok(data_value) => Envelope::ok(data_value, json!([]), Vec::new(), String::new()),
+            Err(env) => *env,
+        }
     }
 
     fn handle_open(&mut self, args: &Value) -> Envelope {
@@ -381,8 +395,12 @@ impl Engine {
             Ok((store, data)) => {
                 let id = store.project().id;
                 self.open.insert(id, store);
-                let data_value = serde_json::to_value(&data).unwrap_or(Value::Null);
-                Envelope::ok(data_value, json!([]), Vec::new(), String::new())
+                match serialize_or_internal("project.open", "data", &data) {
+                    Ok(data_value) => {
+                        Envelope::ok(data_value, json!([]), Vec::new(), String::new())
+                    }
+                    Err(env) => *env,
+                }
             }
             Err(e) => open_error_to_envelope(&e),
         }
@@ -397,10 +415,10 @@ impl Engine {
             return project_not_found(&typed.project_id);
         };
         match project_save::save(store, &typed) {
-            Ok(data) => {
-                let data_value = serde_json::to_value(&data).unwrap_or(Value::Null);
-                Envelope::ok(data_value, json!([]), Vec::new(), String::new())
-            }
+            Ok(data) => match serialize_or_internal("project.save", "data", &data) {
+                Ok(data_value) => Envelope::ok(data_value, json!([]), Vec::new(), String::new()),
+                Err(env) => *env,
+            },
             Err(e) => save_error_to_envelope(&e),
         }
     }
@@ -417,10 +435,10 @@ impl Engine {
             return project_not_found(&typed.project_id);
         };
         match project_close::close(store, &typed) {
-            Ok(data) => {
-                let data_value = serde_json::to_value(&data).unwrap_or(Value::Null);
-                Envelope::ok(data_value, json!([]), Vec::new(), String::new())
-            }
+            Ok(data) => match serialize_or_internal("project.close", "data", &data) {
+                Ok(data_value) => Envelope::ok(data_value, json!([]), Vec::new(), String::new()),
+                Err(env) => *env,
+            },
             Err((store, e)) => {
                 self.open.insert(store.project().id, store);
                 close_error_to_envelope(&e)
@@ -442,8 +460,12 @@ impl Engine {
                 // open it (no flock). Leave it closed — the caller chains
                 // `project.open` if they want a live handle, matching the
                 // free function's contract.
-                let data_value = serde_json::to_value(&data).unwrap_or(Value::Null);
-                Envelope::ok(data_value, json!([]), Vec::new(), String::new())
+                match serialize_or_internal("project.duplicate", "data", &data) {
+                    Ok(data_value) => {
+                        Envelope::ok(data_value, json!([]), Vec::new(), String::new())
+                    }
+                    Err(env) => *env,
+                }
             }
             Err(e) => duplicate_error_to_envelope(&e),
         }
@@ -455,10 +477,10 @@ impl Engine {
             Err(e) => return Envelope::err("E_SCHEMA_VIOLATION", format!("project.forget: {e}")),
         };
         match project_forget::forget(&typed) {
-            Ok(data) => {
-                let data_value = serde_json::to_value(&data).unwrap_or(Value::Null);
-                Envelope::ok(data_value, json!([]), Vec::new(), String::new())
-            }
+            Ok(data) => match serialize_or_internal("project.forget", "data", &data) {
+                Ok(data_value) => Envelope::ok(data_value, json!([]), Vec::new(), String::new()),
+                Err(env) => *env,
+            },
             Err(e) => forget_error_to_envelope(&e),
         }
     }
@@ -521,6 +543,30 @@ fn project_id_from_args(args: &Value) -> Result<ProjectId, Box<Envelope>> {
     })
 }
 
+/// Serialize a verb's typed payload to JSON, mapping a serialize failure
+/// to an `E_INTERNAL` error envelope instead of silently fabricating an
+/// `ok:true` envelope with `data:null` / `patch:[]`.
+///
+/// `what` names the field for the error message (`"data"` or `"patch"`).
+/// Practically unreachable for the typed structs the handlers feed it —
+/// `serde_json::to_value` only fails on a non-string map key or a custom
+/// `Serialize` that errors, neither of which these types produce — but
+/// the §0.7 contract is that a fault on the engine's side surfaces as
+/// `E_INTERNAL`, not as a success with a hollowed-out body (consistent
+/// with how `verb_error_code` maps `VerbError::Custom`).
+fn serialize_or_internal<T: serde::Serialize>(
+    verb_id: &str,
+    what: &str,
+    value: &T,
+) -> Result<Value, Box<Envelope>> {
+    serde_json::to_value(value).map_err(|e| {
+        Box::new(Envelope::err(
+            "E_INTERNAL",
+            format!("{verb_id}: {what} serialization failed: {e}"),
+        ))
+    })
+}
+
 /// §0.12 `E_PROJECT_NOT_FOUND` envelope with `details.project_id`.
 fn project_not_found(project_id: &ProjectId) -> Envelope {
     Envelope::Err {
@@ -554,8 +600,38 @@ fn string_arg(args: &Value, key: &str) -> Option<String> {
     args.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
-/// Map a successful [`MutateOutcome`] to an §0.1 [`Envelope`].
-fn mutate_outcome_to_envelope(outcome: MutateOutcome) -> Envelope {
+/// Strip the §0.5 universal args the **engine** itself consumes
+/// (`dry_run`, `idempotency_key`) from the args object before handing it
+/// to a verb. These are transport-level routing controls, not verb args:
+/// the engine reads `dry_run` to pick the compute-vs-persist branch and
+/// `idempotency_key` to drive the §0.8 dedup index, then must not leak
+/// them into the verb's typed args struct.
+///
+/// Two reasons this matters:
+/// 1. Verbs with `#[serde(deny_unknown_fields)]` (e.g. `asset.import`)
+///    reject an unknown `dry_run` / `idempotency_key` field with
+///    `E_SCHEMA_VIOLATION` — so without stripping, a dry-run or keyed
+///    call against such a verb fails before it ever computes a patch.
+/// 2. §0.8 specifies the idempotency fingerprint excludes `dry_run` and
+///    `idempotency_key`; stripping here makes the fingerprint computed in
+///    the mutate path (over the same args object) match that contract.
+///
+/// `exact_time` is deliberately NOT stripped — per §0.5 it is passed
+/// through to the verb, which owns its snap semantics.
+fn strip_universal_args(args: &Value) -> Value {
+    let Value::Object(map) = args else {
+        return args.clone();
+    };
+    let mut out = map.clone();
+    out.remove("dry_run");
+    out.remove("idempotency_key");
+    Value::Object(out)
+}
+
+/// Map a successful [`MutateOutcome`] to an §0.1 [`Envelope`]. A patch
+/// serialization fault surfaces as `E_INTERNAL` rather than a hollow
+/// `ok:true` with `patch:[]`.
+fn mutate_outcome_to_envelope(verb_id: &str, outcome: MutateOutcome) -> Envelope {
     match outcome {
         MutateOutcome::Applied {
             event_id,
@@ -568,19 +644,19 @@ fn mutate_outcome_to_envelope(outcome: MutateOutcome) -> Envelope {
             data,
             warnings,
             patch,
-        } => {
-            let patch_value = serde_json::to_value(&patch).unwrap_or_else(|_| json!([]));
-            Envelope::ok(data, patch_value, warnings, event_id.to_string())
-        }
+        } => match serialize_or_internal(verb_id, "patch", &patch) {
+            Ok(patch_value) => Envelope::ok(data, patch_value, warnings, event_id.to_string()),
+            Err(env) => *env,
+        },
         MutateOutcome::NoOp {
             data,
             warnings,
             patch,
-        } => {
-            let patch_value = serde_json::to_value(&patch).unwrap_or_else(|_| json!([]));
+        } => match serialize_or_internal(verb_id, "patch", &patch) {
             // §0.1: read-only / no-op verbs return `event_id: ""`.
-            Envelope::ok(data, patch_value, warnings, String::new())
-        }
+            Ok(patch_value) => Envelope::ok(data, patch_value, warnings, String::new()),
+            Err(env) => *env,
+        },
     }
 }
 
@@ -594,6 +670,12 @@ fn lifecycle_error_to_envelope(verb_id: &str, err: &LifecycleError) -> Envelope 
         LifecycleError::VerbExecutionFailed { source, .. } => {
             Envelope::err(verb_error_code(source), format!("{verb_id}: {source}"))
         }
+        // not unit-testable here: E_BUSY needs an `in_progress` idempotency
+        // slot, which only exists while a concurrent first-call holds the
+        // key between `start` and `complete`. The single-threaded dispatch
+        // path completes/aborts the slot before returning, so a follow-up
+        // call never observes `InProgress`. Covered by the idempotency
+        // index's own concurrency tests, not the engine surface.
         LifecycleError::IdempotencyBusy { .. } => Envelope::Err {
             code: "E_BUSY".to_string(),
             message: err.to_string(),
@@ -603,8 +685,11 @@ fn lifecycle_error_to_envelope(verb_id: &str, err: &LifecycleError) -> Envelope 
         LifecycleError::IdempotencyConflict { .. } => {
             Envelope::err("E_IDEMPOTENCY_CONFLICT", err.to_string())
         }
-        // Every other lifecycle failure (IO, backend, apply, replay,
-        // canonicalize) is an engine-side I/O-class fault.
+        // not unit-testable here: every remaining variant (IO, backend,
+        // apply, replay, canonicalize) is an engine-side I/O-class fault
+        // that requires sabotaging the filesystem / event log mid-call;
+        // no deterministic trigger exists through the public dispatch
+        // surface. Maps to E_IO.
         other => Envelope::err("E_IO", format!("{verb_id}: {other}")),
     }
 }
@@ -620,6 +705,10 @@ fn verb_error_code(err: &crate::reconstructor::VerbError) -> &'static str {
     use crate::reconstructor::VerbError;
     match err {
         VerbError::BadArgs { .. } | VerbError::InvariantViolation { .. } => "E_SCHEMA_VIOLATION",
+        // not unit-testable here: VerbError::Custom is the engine-internal
+        // escape hatch (patch-construction / data-envelope serialization
+        // faults). For the typed verb structs no input drives it, so there
+        // is no deterministic E_INTERNAL trigger via the dispatch surface.
         VerbError::Custom(_) => "E_INTERNAL",
     }
 }
@@ -657,6 +746,11 @@ fn open_error_to_envelope(err: &project_open::ProjectOpenError) -> Envelope {
     let code = match err {
         E::ProjectNotFound { .. } => "E_PROJECT_NOT_FOUND",
         E::SchemaViolation { .. } => "E_SCHEMA_VIOLATION",
+        // not unit-testable here: E_SCHEMA_VERSION_UNSUPPORTED needs a
+        // project.json whose schema_version this build does not support;
+        // the engine never writes one, so triggering it would require
+        // hand-forging an out-of-band file (out of scope for an engine
+        // dispatch test). E_PROJECT_LOCKED is covered above.
         E::SchemaVersionUnsupported { .. } => "E_SCHEMA_VERSION_UNSUPPORTED",
         E::ProjectLocked { .. } => "E_PROJECT_LOCKED",
         E::Io(_) | E::LifecycleFailed(_) => "E_IO",

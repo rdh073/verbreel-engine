@@ -56,6 +56,7 @@ use crate::reconstructor::{
 };
 #[cfg(feature = "native")]
 use crate::verbs::asset_import;
+use crate::verbs::asset_import::SideEffects;
 
 // ---------------------------------------------------------------------
 // Errors
@@ -451,6 +452,7 @@ impl ProjectStore {
         &self,
         verb_id: &str,
         args: &Value,
+        persist: SideEffects,
     ) -> Result<(json_patch::Patch, Value, Vec<Value>), LifecycleError> {
         let typed: asset_import::AssetImportArgs =
             serde_json::from_value(args.clone()).map_err(|err| {
@@ -462,12 +464,11 @@ impl ProjectStore {
                 }
             })?;
         let (patch_value, warnings, data) =
-            asset_import::compute_patch_with_root(&self.project, &typed, &self.root).map_err(
-                |source| LifecycleError::VerbExecutionFailed {
+            asset_import::compute_patch_with_root(&self.project, &typed, &self.root, persist)
+                .map_err(|source| LifecycleError::VerbExecutionFailed {
                     verb_id: verb_id.to_string(),
                     source: source.into(),
-                },
-            )?;
+                })?;
         let patch: json_patch::Patch = serde_json::from_value(patch_value).map_err(|err| {
             LifecycleError::VerbExecutionFailed {
                 verb_id: verb_id.to_string(),
@@ -484,18 +485,26 @@ impl ProjectStore {
         Ok((patch, data, warnings))
     }
 
+    /// Compute a verb's `(patch, data, warnings)`. `persist` selects
+    /// whether verbs with filesystem side effects (currently only
+    /// `asset.import`'s CAS write) actually persist: the §0.8 mutate path
+    /// passes [`SideEffects::Persist`]; the §0.5.1 `dry_run` compute-only
+    /// path passes [`SideEffects::ComputeOnly`]. Pure verbs ignore the
+    /// flag — they never touch the filesystem.
     fn compute_verb_patch(
         &self,
         verb_id: &str,
         args: &Value,
         verb: &dyn Verb,
+        persist: SideEffects,
     ) -> Result<(json_patch::Patch, Value, Vec<Value>), LifecycleError> {
         #[cfg(feature = "native")]
         {
             if verb_id == "asset.import" {
-                return self.compute_asset_import_patch(verb_id, args);
+                return self.compute_asset_import_patch(verb_id, args, persist);
             }
         }
+        let _ = persist;
         self.compute_default_verb_patch(verb_id, args, verb)
     }
 
@@ -974,8 +983,11 @@ impl ProjectStore {
                 verb_id: verb_id.to_string(),
             })?;
 
-        // Step B: compute patch + data.
-        let (patch, data, warnings) = self.compute_verb_patch(verb_id, &args, verb.as_ref())?;
+        // Step B: compute patch + data. This is the §0.8 persist path, so
+        // verbs with filesystem side effects (asset.import's CAS write)
+        // run with `SideEffects::Persist`.
+        let (patch, data, warnings) =
+            self.compute_verb_patch(verb_id, &args, verb.as_ref(), SideEffects::Persist)?;
 
         // Step B': empty-patch fast-path (§0.6/§0.8). A verb whose patch
         // resolved to `[]` is a read-only verb or a no-op — there is
@@ -1137,6 +1149,12 @@ impl ProjectStore {
     /// touches the idempotency index. The patch returned is exactly the
     /// patch that *would* be applied — the §0.5.1 guarantee.
     ///
+    /// Side effects: this path passes
+    /// [`crate::verbs::asset_import::SideEffects::ComputeOnly`] down the
+    /// compute chain, so `asset.import` computes the real content hash +
+    /// would-be patch but **skips** the CAS byte-write. A dry run leaves
+    /// no orphaned object under `assets/` (§0.5.1 "persist nothing").
+    ///
     /// # Errors
     ///
     /// - [`LifecycleError::UnknownVerb`] — verb id not in registry.
@@ -1153,7 +1171,7 @@ impl ProjectStore {
             .ok_or_else(|| LifecycleError::UnknownVerb {
                 verb_id: verb_id.to_string(),
             })?;
-        self.compute_verb_patch(verb_id, args, verb.as_ref())
+        self.compute_verb_patch(verb_id, args, verb.as_ref(), SideEffects::ComputeOnly)
     }
 
     /// Steps 1-3 of §0.8 write-ordering. Shared between the keyed and

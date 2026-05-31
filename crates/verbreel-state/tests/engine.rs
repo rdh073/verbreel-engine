@@ -44,6 +44,27 @@ fn event_count(root: &std::path::Path) -> usize {
     }
 }
 
+/// Count content-addressed objects under `<root>/assets/`
+/// (`assets/<aa>/<sha256>.<ext>`). A missing `assets/` dir counts as 0.
+fn cas_object_count(root: &std::path::Path) -> usize {
+    fn walk(dir: &std::path::Path, n: &mut usize) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, n);
+            } else {
+                *n += 1;
+            }
+        }
+    }
+    let mut n = 0;
+    walk(&root.join("assets"), &mut n);
+    n
+}
+
 // ---- Test 1: project-less read → Ok, event_id == "", patch == [] -----
 
 #[test]
@@ -283,6 +304,133 @@ fn dry_run_computes_patch_without_persisting() {
     );
 }
 
+// ---- Test 8b: dry_run asset.import → would-be patch, NO CAS write -----
+//
+// §0.5.1 regression: a dry `asset.import` MUST compute the real sha256 +
+// would-be patch but MUST NOT copy the source bytes into the CAS (no
+// orphaned object under `<root>/assets/`).
+
+#[test]
+fn dry_run_asset_import_does_not_write_cas() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let project_id = create_project(&mut engine, &dir, "import-dry");
+    let root = dir.path().join("import-dry");
+
+    // A real on-disk source file to import.
+    let src = dir.path().join("source.srt");
+    std::fs::write(&src, b"1\n00:00:00,000 --> 00:00:01,000\nhello\n").unwrap();
+
+    let cas_before = cas_object_count(&root);
+    let events_before = event_count(&root);
+
+    let env = engine.dispatch(
+        "asset.import",
+        json!({
+            "project_id": project_id,
+            "paths": [src.to_string_lossy()],
+            "dry_run": true,
+        }),
+    );
+
+    let Envelope::Ok {
+        patch, event_id, ..
+    } = &env
+    else {
+        panic!("dry asset.import must be Ok, got {env:?}");
+    };
+    // (a) Ok with a NON-EMPTY would-be patch and event_id == "".
+    assert_ne!(
+        *patch,
+        json!([]),
+        "dry asset.import returns the would-be patch (§0.5.1)"
+    );
+    let ops = patch.as_array().expect("patch is an array");
+    assert_eq!(ops.len(), 1, "one add op per imported path");
+    assert_eq!(ops[0]["op"], "add");
+    assert_eq!(ops[0]["path"], "/assets/-");
+    // The patch carries the REAL content hash (the §0.5.1 "patch reflects
+    // real probed values" guarantee).
+    assert!(
+        ops[0]["value"]["hash"]
+            .as_str()
+            .is_some_and(|h| h.len() == 64),
+        "dry import patch carries the real sha256 hash"
+    );
+    assert_eq!(event_id, "", "dry_run returns event_id \"\"");
+
+    // (b) No new CAS object on disk; no event written.
+    assert_eq!(
+        cas_object_count(&root),
+        cas_before,
+        "dry asset.import must NOT write a CAS object (§0.5.1 persist nothing)"
+    );
+    assert_eq!(
+        event_count(&root),
+        events_before,
+        "dry asset.import must not persist an event"
+    );
+}
+
+// ---- Test 8c: real asset.import DOES write the CAS object -------------
+//
+// Contrasting persist-path test: proves the §0.8 mutate path still copies
+// the source bytes into the content-addressed store byte-for-byte.
+
+#[test]
+fn real_asset_import_writes_cas_object() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let project_id = create_project(&mut engine, &dir, "import-real");
+    let root = dir.path().join("import-real");
+
+    let bytes = b"1\n00:00:00,000 --> 00:00:01,000\nhello\n";
+    let src = dir.path().join("source.srt");
+    std::fs::write(&src, bytes).unwrap();
+
+    let cas_before = cas_object_count(&root);
+    let events_before = event_count(&root);
+
+    let env = engine.dispatch(
+        "asset.import",
+        json!({
+            "project_id": project_id,
+            "paths": [src.to_string_lossy()],
+        }),
+    );
+
+    let Envelope::Ok {
+        patch, event_id, ..
+    } = &env
+    else {
+        panic!("real asset.import must be Ok, got {env:?}");
+    };
+    assert_ne!(*patch, json!([]), "real import produces a non-empty patch");
+    assert_ne!(event_id, "", "real import persists a real event");
+
+    // Exactly one new CAS object exists, and its bytes match the source.
+    assert_eq!(
+        cas_object_count(&root),
+        cas_before + 1,
+        "real asset.import writes exactly one CAS object"
+    );
+    let rel = patch.as_array().unwrap()[0]["value"]["path"]
+        .as_str()
+        .expect("asset value carries a CAS-relative path");
+    let cas_path = root.join(rel);
+    assert!(cas_path.exists(), "the CAS object exists at {rel}");
+    assert_eq!(
+        std::fs::read(&cas_path).unwrap(),
+        bytes,
+        "CAS object bytes match the source byte-for-byte"
+    );
+    assert_eq!(
+        event_count(&root),
+        events_before + 1,
+        "real asset.import appends exactly one event"
+    );
+}
+
 // ---- Test 10: Envelope::to_json exact §0.1 shape (Ok + Err) ----------
 // (Issue #443 test target #9 — register → resolve — lives in
 // `tests/resolve.rs` because the resolver is storage-side, not engine.
@@ -506,6 +654,76 @@ fn save_unopened_project_returns_not_found() {
         panic!("save on unopened project must be Err, got {env:?}");
     };
     assert_eq!(code, "E_PROJECT_NOT_FOUND");
+}
+
+#[test]
+fn reused_idempotency_key_with_different_args_returns_conflict() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let project_id = create_project(&mut engine, &dir, "idem-conflict");
+
+    // First call: writes an event and records the key → fingerprint.
+    let first = engine.dispatch(
+        "marker.add",
+        json!({
+            "project_id": project_id,
+            "time_tk": 1_000,
+            "label": "Intro",
+            "idempotency_key": "k-conflict",
+        }),
+    );
+    assert!(first.is_ok(), "first keyed call must succeed: {first:?}");
+
+    // Same key, DIFFERENT args (time_tk differs ⇒ different fingerprint).
+    // The §0.8 index returns ConflictingFingerprint → E_IDEMPOTENCY_CONFLICT.
+    let second = engine.dispatch(
+        "marker.add",
+        json!({
+            "project_id": project_id,
+            "time_tk": 9_999,
+            "label": "Intro",
+            "idempotency_key": "k-conflict",
+        }),
+    );
+    let Envelope::Err { code, .. } = &second else {
+        panic!("reused key with new args must be Err, got {second:?}");
+    };
+    assert_eq!(code, "E_IDEMPOTENCY_CONFLICT");
+}
+
+#[test]
+fn forget_empty_path_returns_bad_range() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+
+    // project.forget with an empty `path` reaches validate_path → BadRange
+    // → forget_error_to_envelope → E_BAD_RANGE. (Empty path is the
+    // deterministic malformed-range trigger; a NUL byte also works.)
+    let env = engine.dispatch("project.forget", json!({ "path": "" }));
+    let Envelope::Err { code, .. } = &env else {
+        panic!("forget with empty path must be Err, got {env:?}");
+    };
+    assert_eq!(code, "E_BAD_RANGE");
+}
+
+#[test]
+fn open_already_locked_project_returns_project_locked() {
+    let dir = TempDir::new().unwrap();
+
+    // Engine 1 creates the project and keeps it open — it holds the
+    // exclusive `events.jsonl` flock for the lifetime of its store.
+    let mut engine1 = Engine::new(dir.path());
+    let _id = create_project(&mut engine1, &dir, "locked");
+    let root = dir.path().join("locked");
+
+    // Engine 2 tries to open the same path → the flock try_lock returns
+    // WouldBlock → ProjectOpenError::ProjectLocked → E_PROJECT_LOCKED.
+    let mut engine2 = Engine::new(dir.path());
+    let env = engine2.dispatch("project.open", json!({ "path": root }));
+    let Envelope::Err { code, .. } = &env else {
+        panic!("opening a locked project must be Err, got {env:?}");
+    };
+    assert_eq!(code, "E_PROJECT_LOCKED");
 }
 
 // ---- Engine::resolve_root threads home + storage resolver -----------
