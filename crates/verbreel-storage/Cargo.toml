@@ -2,6 +2,7 @@
 name = "verbreel-storage"
 description = "Filesystem CAS, OPFS shim, file layout."
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

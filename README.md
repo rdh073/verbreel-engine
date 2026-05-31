@@ -42,13 +42,13 @@ rustup default 1.92
 # require FFmpeg headers.
 cargo build --workspace
 
-# Build the CLI
+# Build the CLI. Add `--features native-render` when you want render.start.
 cargo build --release -p verbreel-cli
 
-# Build the MCP server
+# Build the MCP server. Add `--features native-render` when you want render.start.
 cargo build --release -p verbreel-mcp
 
-# Build the HTTP server
+# Build the HTTP server. Add `--features native-render` when you want render.start.
 cargo build --release -p verbreel-http
 
 # Build the WASM preview module
@@ -59,9 +59,9 @@ The release binaries are:
 
 | Surface | Binary | Current v1 floor |
 |---|---|---|
-| CLI | `target/release/verbreel` | `project list` |
-| MCP | `target/release/verbreel-mcp` | MCP `tools/list` and `project.list` |
-| HTTP | `target/release/verbreel-http` | `GET /healthz`, `GET /tools`, `POST /tools/project.list` |
+| CLI | `target/release/verbreel` | `project list`; `render start` in native-render builds |
+| MCP | `target/release/verbreel-mcp` | MCP `tools/list`, `project.list`; `render.start` in native-render builds |
+| HTTP | `target/release/verbreel-http` | `GET /healthz`, `GET /tools`, `POST /tools/project.list`; `POST /tools/render.start` in native-render builds |
 
 Run the current surfaces directly from the workspace:
 
@@ -115,9 +115,16 @@ ${CARGO_TARGET_DIR:-target}/verbreel-examples/native-render-spine-s1-1080p.json
 
 The JSON manifest records the verb sequence, output bytes, SHA-256, 1080p frame
 count, and render fps smoke baseline. Set `VERBREEL_EXAMPLES_MIN_RENDER_FPS` to
-raise the local regression floor. `render.start` on the CLI/MCP/HTTP surfaces is
-still a v1 floor in `verbreel-state`; wiring those public surfaces to the same
-composition-root render path is Phase 6 release-readiness work.
+raise the local regression floor. CLI/MCP/HTTP expose `render.start` when built
+with `--features native-render`; those surfaces use the same native runtime path
+as the release binary.
+
+## Release
+
+The v1.0.0 release uses one workspace version and GitHub Release assets for the
+CLI binary. Workspace crates are intentionally not published to crates.io for
+v1.0.0. See [RELEASE.md](RELEASE.md) for the distribution policy, verification
+commands, and annotated tag flow.
 
 ## Spec
 

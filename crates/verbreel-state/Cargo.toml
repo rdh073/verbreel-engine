@@ -2,6 +2,7 @@
 name = "verbreel-state"
 description = "Project graph, §0.13 invariants, apply()/reconstructor — the engine kernel."
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
