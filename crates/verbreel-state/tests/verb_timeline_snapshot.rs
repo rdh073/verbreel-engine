@@ -322,8 +322,8 @@ fn verb_routes_through_mutate_via_verb() {
         )
         .expect("timeline.snapshot should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("timeline.snapshot expected Applied outcome");
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("timeline.snapshot expected NoOp outcome");
     };
 
     assert!(warnings.is_empty());

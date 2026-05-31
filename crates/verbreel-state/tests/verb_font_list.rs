@@ -270,8 +270,8 @@ fn verb_routes_through_mutate_via_verb() {
         .mutate_via_verb("font.list", json!({"project_id": FIXTURE_PROJECT_ID}), None)
         .expect("font.list should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("expected Applied outcome from font.list");
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("expected NoOp outcome from font.list");
     };
     assert!(warnings.is_empty());
 

@@ -61,6 +61,7 @@ fn mutate_via_verb_set_metadata_round_trip() {
         event_id,
         data,
         warnings,
+        ..
     } = outcome
     else {
         panic!("happy path must return Applied, got {outcome:?}");
@@ -301,6 +302,7 @@ fn mutate_via_verb_idempotency_replays() {
         event_id: first_id,
         data: first_data,
         warnings: first_warnings,
+        ..
     } = first
     else {
         panic!("first call should be Applied, got {first:?}");
@@ -318,6 +320,7 @@ fn mutate_via_verb_idempotency_replays() {
         event_id: replay_id,
         data: replay_data,
         warnings: replay_warnings,
+        ..
     } = second
     else {
         panic!("second call should be Replayed, got {second:?}");
@@ -534,7 +537,15 @@ impl Verb for BadReconstructVerb {
         _prior: &Project,
         _args: &Value,
     ) -> Result<(json_patch::Patch, Value, Vec<Value>), VerbError> {
-        Ok((json_patch::Patch(Vec::new()), Value::Null, Vec::new()))
+        // Emit a non-empty patch so the §0.8 write-ordering + idempotency
+        // replay path is exercised — an empty patch would route to the
+        // `MutateOutcome::NoOp` read-only fast-path, which never reaches
+        // the replay reconstructor under test here.
+        let patch: json_patch::Patch = serde_json::from_value(json!([
+            { "op": "add", "path": "/metadata/_replay_probe", "value": "x" }
+        ]))
+        .expect("static probe patch is valid RFC 6902");
+        Ok((patch, Value::Null, Vec::new()))
     }
 
     fn reconstruct(
@@ -568,11 +579,14 @@ impl Verb for WarningsCountVerb {
         _prior: &Project,
         _args: &Value,
     ) -> Result<(json_patch::Patch, Value, Vec<Value>), VerbError> {
-        Ok((
-            json_patch::Patch(Vec::new()),
-            json!({ "warnings_count": 0 }),
-            Vec::new(),
-        ))
+        // Non-empty patch so the keyed replay path is reached rather than
+        // the empty-patch `NoOp` fast-path. The replay never applies this
+        // patch (it returns the cached envelope), so the value is inert.
+        let patch: json_patch::Patch = serde_json::from_value(json!([
+            { "op": "add", "path": "/metadata/_replay_probe", "value": "x" }
+        ]))
+        .expect("static probe patch is valid RFC 6902");
+        Ok((patch, json!({ "warnings_count": 0 }), Vec::new()))
     }
 
     fn reconstruct(
@@ -606,8 +620,9 @@ fn replay_reconstruct_error_propagates() {
         ProjectStore::create_with_registry(dir.path(), load_empty_project(), &registry, &[])
             .expect("create_with_registry with custom registry + no fixtures");
 
-    // First call: Applied (compute_patch is a no-op so the empty patch
-    // sails through apply()).
+    // First call: Applied (compute_patch emits a non-empty probe patch
+    // so the call writes an event and registers the idempotency key,
+    // which the replay path below then re-reads).
     let args = json!({ "any": "args" });
     let first = store
         .mutate_via_verb("test.bad_reconstruct", args.clone(), Some("k".into()))
@@ -705,6 +720,7 @@ fn replay_preserves_recorded_warnings() {
         event_id,
         data,
         warnings,
+        ..
     } = outcome
     else {
         panic!("expected Replayed (idempotency dedup), got {outcome:?}");

@@ -721,8 +721,11 @@ fn compute_patch_empty_array_noop_does_not_write_event_if_kernel_skips() {
     let outcome = store
         .mutate_via_verb("marker.remove", args, Some("no-op-array".into()))
         .expect("empty array can still route");
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("empty-array no-op is Applied, got {outcome:?}");
+    // marker.remove over an empty `markers` array computes an empty
+    // patch — the §0.6/§0.8 fast-path routes it to `NoOp` and writes no
+    // event line.
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("empty-array no-op must be NoOp (no event), got {outcome:?}");
     };
     let data: MarkerRemoveData = serde_json::from_value(data).expect("data deserializes");
     assert_eq!(data.removed_marker_ids, Vec::<String>::new());
@@ -732,13 +735,8 @@ fn compute_patch_empty_array_noop_does_not_write_event_if_kernel_skips() {
     drop(store);
     let after = count_event_lines(dir.path());
 
-    if after == before {
-        return;
-    }
-
     assert_eq!(
-        after,
-        before + 1,
-        "empty array currently still writes one event; this is a known no-op-event deviation"
+        after, before,
+        "an empty-patch no-op must not write an event line"
     );
 }

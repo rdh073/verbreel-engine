@@ -345,8 +345,10 @@ fn verb_routes_through_mutate_via_verb_for_empty_paths() {
         )
         .expect("asset.import should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("expected Applied outcome for empty-paths asset.import");
+    // asset.import over an empty `paths` array imports nothing — empty
+    // patch → NoOp, no event line (§0.6/§0.8 no-op fast-path).
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("expected NoOp outcome for empty-paths asset.import, got {outcome:?}");
     };
     assert!(warnings.is_empty());
 

@@ -806,7 +806,7 @@ fn default_registry_contains_stock_search() {
 
 #[cfg(feature = "native")]
 #[test]
-fn mutate_via_verb_local_returns_applied_with_empty_items() {
+fn mutate_via_verb_local_returns_noop_with_empty_items() {
     use tempfile::TempDir;
 
     let dir = TempDir::new().expect("tempdir");
@@ -822,8 +822,9 @@ fn mutate_via_verb_local_returns_applied_with_empty_items() {
         .mutate_via_verb("stock.search", args_value_local(), None)
         .expect("stock.search local routes");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("expected Applied from stock.search");
+    // stock.search is read-only (empty patch) → NoOp, no event line.
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("expected NoOp from read-only stock.search, got {outcome:?}");
     };
     assert!(warnings.is_empty());
     let typed: StockSearchData = serde_json::from_value(data).expect("data deserializes");

@@ -470,6 +470,7 @@ fn verb_routes_through_mutate_via_verb() {
         event_id: _event_id,
         data,
         warnings,
+        ..
     } = outcome
     else {
         panic!("happy path must return Applied, got {outcome:?}");
@@ -526,6 +527,7 @@ fn replay_via_idempotency_returns_same_marker_id() {
         data: second_data,
         warnings,
         event_id: _event_id,
+        ..
     } = second
     else {
         panic!("replay path must return Replayed, got {second:?}");

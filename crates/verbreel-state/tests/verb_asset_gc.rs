@@ -354,8 +354,8 @@ fn verb_routes_through_mutate_via_verb() {
         .mutate_via_verb("asset.gc", json!({"project_id": FIXTURE_PROJECT_ID}), None)
         .expect("asset.gc should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("expected Applied outcome from asset.gc");
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("expected NoOp outcome from asset.gc");
     };
     assert!(warnings.is_empty());
 

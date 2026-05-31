@@ -550,8 +550,8 @@ fn verb_routes_through_mutate_via_verb() {
         )
         .expect("mutate_via_verb happy path");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("happy path must return Applied, got {outcome:?}");
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("happy path must return NoOp, got {outcome:?}");
     };
 
     let typed: DescribeData = serde_json::from_value(data).expect("describe data is DescribeData");

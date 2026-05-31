@@ -281,8 +281,10 @@ fn verb_routes_through_mutate_via_verb() {
         )
         .expect("marker.list should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("marker.list should apply");
+    // marker.list is read-only (empty patch) — the §0.6/§0.8 fast-path
+    // routes it to `NoOp` with no event line.
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("marker.list should be NoOp (read-only, empty patch), got {outcome:?}");
     };
 
     assert!(warnings.is_empty());
@@ -292,13 +294,9 @@ fn verb_routes_through_mutate_via_verb() {
     assert_eq!(data.markers[1].time_tk.get(), 1_000);
 
     let after = count_event_lines(dir.path());
-    if after == before {
-        return;
-    }
     assert_eq!(
-        after,
-        before + 1,
-        "marker.list should not unexpectedly write more than one event"
+        after, before,
+        "marker.list is read-only and must not write an event line"
     );
 }
 
@@ -339,8 +337,8 @@ fn read_only_no_state_mutation() {
         )
         .expect("marker.list should apply");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("marker.list should apply, got {outcome:?}");
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("marker.list should be NoOp (read-only), got {outcome:?}");
     };
 
     let _data: MarkerListData =
@@ -355,7 +353,12 @@ fn read_only_no_state_mutation() {
 
 #[cfg(feature = "native")]
 #[test]
-fn replay_returns_same_marker_list() {
+fn keyed_read_verb_is_noop_not_replay() {
+    // A read verb (empty patch) writes no event, so an `idempotency_key`
+    // on it never lands in the §0.8 index — a same-key second call is
+    // another fresh `NoOp`, not a `Replayed` with `W_REPLAY`. The
+    // contract callers depend on (same args → same data) still holds
+    // because the verb recomputes its data from current state.
     use tempfile::TempDir;
 
     let dir = TempDir::new().expect("tempdir");
@@ -402,30 +405,34 @@ fn replay_returns_same_marker_list() {
             Some("marker-list-replay".into()),
         )
         .expect("first marker.list call");
-    let MutateOutcome::Applied {
+    let MutateOutcome::NoOp {
         data: first_data, ..
     } = first
     else {
-        panic!("first call should be Applied");
+        panic!("first call should be NoOp (read verb), got {first:?}");
     };
     let first_data: MarkerListData =
         serde_json::from_value(first_data).expect("marker.list data deserializes");
 
     let second = store
         .mutate_via_verb("marker.list", args, Some("marker-list-replay".into()))
-        .expect("replay call");
-    let MutateOutcome::Replayed {
+        .expect("second call");
+    let MutateOutcome::NoOp {
         data: second_data,
         warnings,
         ..
     } = second
     else {
-        panic!("second call should be Replayed");
+        panic!("second call should also be NoOp (read verbs do not replay), got {second:?}");
     };
 
     let second_data: MarkerListData =
-        serde_json::from_value(second_data).expect("marker.list replay data deserializes");
+        serde_json::from_value(second_data).expect("marker.list second data deserializes");
     assert_eq!(first_data, second_data);
-    assert_eq!(warnings.len(), 1);
-    assert_eq!(warnings[0]["code"], "W_REPLAY");
+    // No event was ever written, so there is nothing to replay — no
+    // `W_REPLAY` warning is appended.
+    assert!(
+        warnings.iter().all(|w| w["code"] != "W_REPLAY"),
+        "a read verb's keyed retry must not produce W_REPLAY"
+    );
 }

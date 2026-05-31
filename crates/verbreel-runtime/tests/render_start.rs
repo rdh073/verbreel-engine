@@ -208,8 +208,11 @@ fn apply_verb(
 ) -> anyhow::Result<serde_json::Value> {
     let outcome = store.mutate_via_verb(verb, args, None)?;
     match outcome {
+        // `NoOp` is the empty-patch read/no-op outcome added alongside
+        // the §0.1 patch surfacing; it carries the same `data` envelope.
         verbreel_state::MutateOutcome::Applied { data, .. }
-        | verbreel_state::MutateOutcome::Replayed { data, .. } => Ok(data),
+        | verbreel_state::MutateOutcome::Replayed { data, .. }
+        | verbreel_state::MutateOutcome::NoOp { data, .. } => Ok(data),
     }
 }
 

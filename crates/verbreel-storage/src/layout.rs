@@ -17,7 +17,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::fs::atomic_write_bytes;
 
@@ -152,4 +152,98 @@ pub fn register_project(home: &Path, project_id: &str, project_path: &Path) -> i
     existing.extend_from_slice(&line);
 
     atomic_write_bytes(&index_path, &existing)
+}
+
+/// One row read back from the projects index. Deserialize counterpart of
+/// the [`IndexEntry`] write shape — only `id` and `path` are stored, so a
+/// borrow-free owned struct is the natural read target.
+#[derive(Debug, Deserialize)]
+struct IndexRow {
+    id: String,
+    path: String,
+}
+
+/// Failure modes of [`resolve_root_for_project_id`].
+///
+/// `NotFound` is the spec-load-bearing case: the surfaces map it to
+/// `E_PROJECT_NOT_FOUND` (§0.12). `Io` and `InvalidIndex` distinguish a
+/// missing/unreadable index from one whose lines are not valid index
+/// JSON — a hand-corrupted index is a hard error, not a silent miss,
+/// because skipping the bad line could resolve a *stale* registration
+/// for the same id and hand back the wrong root.
+#[derive(Debug, thiserror::Error)]
+pub enum ResolveError {
+    /// No index entry maps `project_id` to a root. Surfaces map this to
+    /// `E_PROJECT_NOT_FOUND` (§0.12). Carries the unresolved id.
+    #[error("project not found: {0}")]
+    NotFound(String),
+
+    /// The index file could not be read for a reason other than
+    /// "does not exist" (a missing index is treated as an empty index,
+    /// i.e. `NotFound`, not `Io`).
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    /// A line in the index is not valid `{"id":...,"path":...}` JSON.
+    #[error("projects index `{path}` has invalid JSON: {detail}")]
+    InvalidIndex {
+        /// The index path that failed to parse.
+        path: String,
+        /// The underlying serde error message.
+        detail: String,
+    },
+}
+
+/// Resolve a project root via `<home>/.verbreel/projects-index`.
+///
+/// Lines are scanned **newest-first** (`.rev()`); the most recent
+/// registration for an id wins, so re-registering a moved project (a
+/// fresh `register_project` append) shadows the older path without a
+/// rewrite of the whole file. Mirrors the index-lookup half of
+/// `verbreel-runtime`'s render resolver (its `lib.rs:95-116`) minus the
+/// explicit candidate-roots scan — that scan is render-delivery-specific
+/// and stays in `verbreel-runtime`.
+///
+/// A missing index file (the user has never registered a project) is
+/// treated as an empty index and yields [`ResolveError::NotFound`], not
+/// [`ResolveError::Io`] — "no registrations" and "this id is not
+/// registered" are the same outcome for the caller.
+///
+/// # Errors
+///
+/// - [`ResolveError::NotFound`] — no entry maps `project_id` to a root
+///   (including the "index file absent" case).
+/// - [`ResolveError::Io`] — the index exists but could not be read.
+/// - [`ResolveError::InvalidIndex`] — a non-empty line is not valid
+///   index JSON (a hand-corrupted index aborts rather than silently
+///   skipping the line, which could resolve a stale registration).
+pub fn resolve_root_for_project_id(home: &Path, project_id: &str) -> Result<PathBuf, ResolveError> {
+    let index_path = projects_index_path(home);
+
+    let contents = match fs::read_to_string(&index_path) {
+        Ok(contents) => contents,
+        // A missing index == an empty index: the id is simply not
+        // registered. Every other IO failure is surfaced.
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(ResolveError::NotFound(project_id.to_string()));
+        }
+        Err(err) => return Err(ResolveError::Io(err)),
+    };
+
+    for line in contents
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+    {
+        let row: IndexRow =
+            serde_json::from_str(line).map_err(|err| ResolveError::InvalidIndex {
+                path: index_path.display().to_string(),
+                detail: err.to_string(),
+            })?;
+        if row.id == project_id {
+            return Ok(PathBuf::from(row.path));
+        }
+    }
+
+    Err(ResolveError::NotFound(project_id.to_string()))
 }

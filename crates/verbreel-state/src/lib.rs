@@ -68,6 +68,8 @@ pub mod asset_meta;
 pub mod canvas;
 pub mod clip;
 pub mod effect;
+#[cfg(feature = "native")]
+pub mod engine;
 pub mod font_registry;
 pub mod idempotency;
 pub mod invariants;
@@ -97,6 +99,8 @@ pub use clip::{BlendMode, Clip, ClipMask, FadeCurve, MaskKind, SpeedCurvePoint};
 pub use effect::{
     Effect, EffectKind, EffectNewtypeError, EffectWindow, EffectWindowDependencyError,
 };
+#[cfg(feature = "native")]
+pub use engine::{Engine, Envelope};
 pub use font_registry::{RegistryFamily, RegistrySource};
 pub use idempotency::{
     AlreadyExists, Clock, DEFAULT_STALE_IN_PROGRESS, DEFAULT_TTL, Entry, EntryState,

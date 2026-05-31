@@ -442,8 +442,8 @@ fn verb_routes_through_mutate_via_verb() {
         )
         .expect("clip.list should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("clip.list should be Applied");
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("clip.list should be NoOp");
     };
     let data: ClipListData = serde_json::from_value(data).expect("clip.list data deserializes");
     assert_eq!(data.clips.len(), 3);

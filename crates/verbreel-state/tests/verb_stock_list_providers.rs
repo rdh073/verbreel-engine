@@ -349,8 +349,8 @@ fn verb_routes_through_mutate_via_verb() {
         )
         .expect("stock.list_providers should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("expected Applied outcome from stock.list_providers");
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("expected NoOp outcome from stock.list_providers");
     };
     assert!(warnings.is_empty());
 
