@@ -14,8 +14,8 @@ use std::path::Path;
 
 use tempfile::TempDir;
 use verbreel_storage::layout::{
-    IndexEntry, ResolveError, list_and_prune, read_index, register_project,
-    resolve_root_for_project_id,
+    IndexEntry, ResolveError, deregister_project_by_id, deregister_project_by_path, list_and_prune,
+    read_index, register_project, resolve_root_for_project_id,
 };
 
 const ID_A: &str = "0192f3a0-0000-7000-8000-000000000001";
@@ -254,4 +254,67 @@ fn corrupt_document_with_no_match_is_invalid_index_not_not_found() {
         matches!(err, ResolveError::InvalidIndex { .. }),
         "damaged index + absent id must surface InvalidIndex, got {err:?}"
     );
+}
+
+// --- deregister_project_by_id / by_path (§2.8) ---------------------------
+
+#[test]
+fn deregister_by_id_returns_removed_path_then_id_no_longer_resolves() {
+    let home = TempDir::new().unwrap();
+    register_project(home.path(), ID_A, "alpha", Path::new("/tmp/alpha"), AT).unwrap();
+
+    let removed = deregister_project_by_id(home.path(), ID_A).unwrap();
+    assert_eq!(
+        removed.as_deref(),
+        Some("/tmp/alpha"),
+        "deregister must return the removed entry's recorded path"
+    );
+
+    let err = resolve_root_for_project_id(home.path(), ID_A).unwrap_err();
+    assert!(
+        matches!(err, ResolveError::NotFound(_)),
+        "the forgotten id must no longer resolve, got {err:?}"
+    );
+}
+
+#[test]
+fn deregister_by_id_unknown_returns_none_and_leaves_index() {
+    let home = TempDir::new().unwrap();
+    register_project(home.path(), ID_A, "alpha", Path::new("/tmp/alpha"), AT).unwrap();
+
+    let removed = deregister_project_by_id(home.path(), ID_B).unwrap();
+    assert_eq!(removed, None, "unknown id must report nothing removed");
+
+    let index = read_index(home.path()).unwrap();
+    assert!(
+        index.contains_key(ID_A),
+        "an unmatched deregister must not disturb other entries"
+    );
+}
+
+#[test]
+fn deregister_by_path_indexed_returns_true_and_removes_entry() {
+    let home = TempDir::new().unwrap();
+    register_project(home.path(), ID_A, "alpha", Path::new("/tmp/alpha"), AT).unwrap();
+
+    let removed = deregister_project_by_path(home.path(), "/tmp/alpha").unwrap();
+    assert!(removed, "an indexed path must report removed=true");
+
+    let index = read_index(home.path()).unwrap();
+    assert!(
+        !index.contains_key(ID_A),
+        "the entry whose path matched must be gone"
+    );
+}
+
+#[test]
+fn deregister_by_path_unindexed_returns_false() {
+    let home = TempDir::new().unwrap();
+    register_project(home.path(), ID_A, "alpha", Path::new("/tmp/alpha"), AT).unwrap();
+
+    let removed = deregister_project_by_path(home.path(), "/tmp/not-here").unwrap();
+    assert!(!removed, "an unindexed path must report removed=false");
+
+    let index = read_index(home.path()).unwrap();
+    assert_eq!(index.len(), 1, "a non-matching path must leave the index intact");
 }

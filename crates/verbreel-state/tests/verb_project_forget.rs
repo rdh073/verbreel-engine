@@ -3,10 +3,16 @@
 //! The verb is a free function with no `Verb` trait impl (engine-
 //! scoped — see the module doc comment in
 //! `src/verbs/project_forget.rs`), so these tests exercise the
-//! function surface directly. No project fixture is needed because
-//! the verb does not read or mutate any project state.
+//! function surface directly. The verb is `#[cfg(feature = "native")]`-
+//! gated because it touches the on-disk projects-index; tests use a
+//! [`tempfile::TempDir`] as `home` so no real `~/.verbreel/` is touched.
+//! Index-removal round-trips (id/path hit) are covered end-to-end in
+//! `tests/engine.rs`; this file pins the arg-shape + miss paths.
+
+#![cfg(feature = "native")]
 
 use serde_json::{Value, json};
+use tempfile::TempDir;
 use verbreel_state::{ProjectForgetArgs, ProjectForgetData, ProjectForgetError, project_forget};
 
 // --- Args deserialization -------------------------------------------------
@@ -63,11 +69,12 @@ fn args_deser_empty_object() {
 
 #[test]
 fn both_fields_set_returns_args_incompatible() {
+    let home = TempDir::new().unwrap();
     let args = ProjectForgetArgs {
         path: Some("/tmp/p".to_string()),
         project_id: Some("0190b8d3-15e3-7000-bd00-000000000001".to_string()),
     };
-    let err = project_forget(&args).expect_err("both-set must fail");
+    let err = project_forget(home.path(), &args).expect_err("both-set must fail");
     match err {
         ProjectForgetError::ArgsIncompatible { detail } => {
             assert!(detail.contains("mutually exclusive"));
@@ -78,8 +85,9 @@ fn both_fields_set_returns_args_incompatible() {
 
 #[test]
 fn neither_field_set_returns_args_incompatible() {
+    let home = TempDir::new().unwrap();
     let args = ProjectForgetArgs::default();
-    let err = project_forget(&args).expect_err("neither-set must fail");
+    let err = project_forget(home.path(), &args).expect_err("neither-set must fail");
     match err {
         ProjectForgetError::ArgsIncompatible { detail } => {
             assert!(detail.contains("exactly one"));
@@ -92,11 +100,12 @@ fn neither_field_set_returns_args_incompatible() {
 
 #[test]
 fn empty_path_returns_bad_range() {
+    let home = TempDir::new().unwrap();
     let args = ProjectForgetArgs {
         path: Some(String::new()),
         project_id: None,
     };
-    let err = project_forget(&args).expect_err("empty path must fail");
+    let err = project_forget(home.path(), &args).expect_err("empty path must fail");
     match err {
         ProjectForgetError::BadRange { detail } => {
             assert!(detail.contains("empty"));
@@ -107,11 +116,12 @@ fn empty_path_returns_bad_range() {
 
 #[test]
 fn leading_nul_byte_path_returns_bad_range() {
+    let home = TempDir::new().unwrap();
     let args = ProjectForgetArgs {
         path: Some("\0/tmp/p".to_string()),
         project_id: None,
     };
-    let err = project_forget(&args).expect_err("NUL-byte path must fail");
+    let err = project_forget(home.path(), &args).expect_err("NUL-byte path must fail");
     match err {
         ProjectForgetError::BadRange { detail } => {
             assert!(detail.contains("NUL"));
@@ -122,34 +132,39 @@ fn leading_nul_byte_path_returns_bad_range() {
 
 #[test]
 fn embedded_nul_byte_path_returns_bad_range() {
+    let home = TempDir::new().unwrap();
     let args = ProjectForgetArgs {
         path: Some("/tmp/\0proj".to_string()),
         project_id: None,
     };
-    let err = project_forget(&args).expect_err("embedded NUL must fail");
+    let err = project_forget(home.path(), &args).expect_err("embedded NUL must fail");
     assert!(matches!(err, ProjectForgetError::BadRange { .. }));
 }
 
-// --- Id form (v1 floor: always not found) --------------------------------
+// --- Id form (unregistered id -> not found) ------------------------------
 
 #[test]
 fn id_form_returns_project_not_found() {
+    let home = TempDir::new().unwrap();
     let args = ProjectForgetArgs {
         path: None,
         project_id: Some("0190b8d3-15e3-7000-bd00-000000000001".to_string()),
     };
-    let err = project_forget(&args).expect_err("id form v1 floor never resolves");
+    let err =
+        project_forget(home.path(), &args).expect_err("unregistered id resolves to not-found");
     assert!(matches!(err, ProjectForgetError::ProjectNotFound { .. }));
 }
 
 #[test]
 fn id_form_echoes_lookup_in_error() {
+    let home = TempDir::new().unwrap();
     let id = "01900000-0000-7000-8000-000000000abc".to_string();
     let args = ProjectForgetArgs {
         path: None,
         project_id: Some(id.clone()),
     };
-    let err = project_forget(&args).expect_err("id form v1 floor never resolves");
+    let err =
+        project_forget(home.path(), &args).expect_err("unregistered id resolves to not-found");
     match err {
         ProjectForgetError::ProjectNotFound { lookup } => assert_eq!(lookup, id),
         other => panic!("expected ProjectNotFound, got {other:?}"),
@@ -160,11 +175,12 @@ fn id_form_echoes_lookup_in_error() {
 
 #[test]
 fn absolute_path_returns_was_in_index_false() {
+    let home = TempDir::new().unwrap();
     let args = ProjectForgetArgs {
         path: Some("/home/user/projects/demo".to_string()),
         project_id: None,
     };
-    let data = project_forget(&args).expect("path form happy path");
+    let data = project_forget(home.path(), &args).expect("path form happy path");
     assert_eq!(
         data,
         ProjectForgetData {
@@ -176,24 +192,28 @@ fn absolute_path_returns_was_in_index_false() {
 
 #[test]
 fn removed_path_echoes_input_verbatim() {
+    let home = TempDir::new().unwrap();
     let raw = "/very/specific/path-with-dashes-and_underscores";
     let args = ProjectForgetArgs {
         path: Some(raw.to_string()),
         project_id: None,
     };
-    let data = project_forget(&args).expect("path form happy path");
+    let data = project_forget(home.path(), &args).expect("path form happy path");
     assert_eq!(data.removed_path, raw);
 }
 
 #[test]
 fn relative_path_returns_was_in_index_false() {
     // Spec doesn't require absolute paths; the index would store
-    // whatever the user opened. v1 floor accepts and echoes it.
+    // whatever the user opened. A path absent from the index echoes
+    // back with was_in_index: false.
+    let home = TempDir::new().unwrap();
     let args = ProjectForgetArgs {
         path: Some("./local-project".to_string()),
         project_id: None,
     };
-    let data = project_forget(&args).expect("relative path is well-formed at v1");
+    let data =
+        project_forget(home.path(), &args).expect("relative path is well-formed and not indexed");
     assert_eq!(data.removed_path, "./local-project");
     assert!(!data.was_in_index);
 }
@@ -202,11 +222,12 @@ fn relative_path_returns_was_in_index_false() {
 
 #[test]
 fn envelope_has_exactly_two_keys() {
+    let home = TempDir::new().unwrap();
     let args = ProjectForgetArgs {
         path: Some("/tmp/p".to_string()),
         project_id: None,
     };
-    let data = project_forget(&args).expect("happy path");
+    let data = project_forget(home.path(), &args).expect("happy path");
     let value: Value = serde_json::to_value(&data).expect("envelope serializes");
     let obj = value.as_object().expect("envelope is a JSON object");
 
@@ -221,11 +242,12 @@ fn envelope_has_exactly_two_keys() {
 
 #[test]
 fn was_in_index_is_json_boolean() {
+    let home = TempDir::new().unwrap();
     let args = ProjectForgetArgs {
         path: Some("/tmp/p".to_string()),
         project_id: None,
     };
-    let data = project_forget(&args).expect("happy path");
+    let data = project_forget(home.path(), &args).expect("happy path");
     let value: Value = serde_json::to_value(&data).expect("envelope serializes");
     assert_eq!(value["was_in_index"], json!(false));
     assert!(value["was_in_index"].is_boolean());

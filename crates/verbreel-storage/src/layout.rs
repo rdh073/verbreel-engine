@@ -227,6 +227,70 @@ pub fn register_project(
     write_index(&index_path, &index)
 }
 
+/// Remove the entry keyed by `project_id` from the §2.6 projects index,
+/// returning the removed entry's path, or `None` if no such entry exists.
+///
+/// The read-modify-write runs under the same exclusive `flock` as
+/// [`register_project`], so a concurrent register/forget cannot tear the
+/// file. A missing entry leaves the index untouched (no rewrite) and
+/// returns `None` — the caller maps that to `E_PROJECT_NOT_FOUND` (§2.8).
+/// The returned path is the index entry's recorded `path`, so the caller
+/// can echo it as `removed_path` without re-resolving.
+///
+/// # Errors
+///
+/// - [`io::Error`] of kind `InvalidData` if the existing index is corrupt
+///   (so a damaged index surfaces, never silently empties).
+/// - [`io::Error`] of kind `WouldBlock` on lock contention, or any other
+///   IO failure reading/writing the index.
+pub fn deregister_project_by_id(home: &Path, project_id: &str) -> io::Result<Option<String>> {
+    let (_guard, index_path, mut index) = lock_and_read(home)?;
+    match index.remove(project_id) {
+        Some(entry) => {
+            write_index(&index_path, &index)?;
+            Ok(Some(entry.path))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Remove every entry whose recorded `path` equals `project_path` from the
+/// §2.6 projects index, returning whether any entry was removed.
+///
+/// The path form has no map key to probe, so this is a linear scan over
+/// the (small) index: an entry matches when its stored `path` string is
+/// byte-equal to `project_path`. The whole read-scan-write runs under the
+/// shared RMW lock. When nothing matches the file is left untouched (no
+/// rewrite) and `false` is returned — the path form never errors on a
+/// miss (§2.8: `was_in_index: false`).
+///
+/// Comparison is on the stored string verbatim — no canonicalisation —
+/// because the index stores the absolutised root the verb validated at
+/// register time, and `project.forget`'s path form is documented to take
+/// the same on-disk path string.
+///
+/// # Errors
+///
+/// - [`io::Error`] of kind `InvalidData` if the existing index is corrupt.
+/// - [`io::Error`] of kind `WouldBlock` on lock contention, or any other
+///   IO failure reading/writing the index.
+pub fn deregister_project_by_path(home: &Path, project_path: &str) -> io::Result<bool> {
+    let (_guard, index_path, mut index) = lock_and_read(home)?;
+    let matched: Vec<String> = index
+        .iter()
+        .filter(|(_, entry)| entry.path == project_path)
+        .map(|(id, _)| id.clone())
+        .collect();
+    if matched.is_empty() {
+        return Ok(false);
+    }
+    for id in &matched {
+        index.remove(id);
+    }
+    write_index(&index_path, &index)?;
+    Ok(true)
+}
+
 /// Read the index, prune stale entries, and return the surviving map
 /// plus the ids removed — all under one RMW lock acquisition (§2.6).
 ///
