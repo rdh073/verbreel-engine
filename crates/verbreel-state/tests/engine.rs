@@ -732,9 +732,11 @@ fn open_already_locked_project_returns_project_locked() {
 fn resolve_root_through_index() {
     // The engine's `resolve_root` delegates to the storage resolver
     // against `self.home`. Register an id → resolve returns the root;
-    // an unknown id → NotFound. (Index registration is a surface
-    // concern; project.create does not yet register, so the test
-    // registers directly to exercise the delegation.)
+    // an unknown id → NotFound. This test registers directly (not via a
+    // lifecycle verb) to isolate the resolve delegation; the
+    // create/open-register-then-resolve round-trips live in
+    // `create_registers_in_index_resolvable_fresh_engine` and
+    // `open_registers_in_index_resolvable_fresh_engine` below.
     use verbreel_storage::layout::{ResolveError, register_project};
 
     let home = TempDir::new().unwrap();
@@ -752,5 +754,130 @@ fn resolve_root_through_index() {
     assert!(
         matches!(err, ResolveError::NotFound(_)),
         "unknown id must resolve to NotFound, got {err:?}"
+    );
+}
+
+// ---- Regression: create populates the index so a fresh engine resolves
+//
+// The root-cause guard for the inert-CLI bug: before this fix, the
+// `project.create` handler inserted the project into the in-memory open-map
+// but never wrote `<home>/.verbreel/projects-index`. A one-shot CLI process
+// that does `project create` then exits leaves an empty index, so the NEXT
+// process (`verbreel clip add <id>`) builds a fresh `Engine` whose
+// `resolve_root(id)` returns NotFound — every project-scoped CLI verb is
+// inert. Resolving through a *fresh* `Engine` (distinct from the one that
+// created the project) is exactly the cross-process path the CLI exercises.
+
+#[test]
+fn create_registers_in_index_resolvable_fresh_engine() {
+    let dir = TempDir::new().unwrap();
+    let id = {
+        let mut engine = Engine::new(dir.path());
+        create_project(&mut engine, &dir, "indexed-create")
+    };
+    let expected_root = dir.path().join("indexed-create");
+
+    // A brand-new engine on the SAME home — its open-map is empty, so the
+    // only way it can resolve the id is the on-disk index the create wrote.
+    let fresh = Engine::new(dir.path());
+    assert_eq!(
+        fresh
+            .resolve_root(&id)
+            .expect("create must populate the index"),
+        expected_root,
+        "project.create must register id→root so a fresh engine resolves it"
+    );
+}
+
+// ---- Regression: open (re-)registers in the index ---------------------
+//
+// `project.open` must also write the index (§2.6). We force a closed-on-disk
+// project by creating + closing inside one engine, deleting the index file
+// it wrote, then opening in a fresh engine and asserting the fresh open
+// re-populated the index for cross-process resolution.
+
+#[test]
+fn open_registers_in_index_resolvable_fresh_engine() {
+    let dir = TempDir::new().unwrap();
+    let root = {
+        let mut engine = Engine::new(dir.path());
+        let id = create_project(&mut engine, &dir, "indexed-open");
+        engine.dispatch("project.close", json!({ "project_id": id }));
+        dir.path().join("indexed-open")
+    };
+
+    // Wipe the index the create wrote, so the only entry under test is the
+    // one project.open is responsible for writing.
+    let index = dir.path().join(".verbreel").join("projects-index");
+    if index.exists() {
+        std::fs::remove_file(&index).unwrap();
+    }
+
+    let id = {
+        let mut engine = Engine::new(dir.path());
+        let env = engine.dispatch("project.open", json!({ "path": &root }));
+        let Envelope::Ok { data, .. } = &env else {
+            panic!("project.open must be Ok, got {env:?}");
+        };
+        data["project_id"]
+            .as_str()
+            .expect("open returns project_id")
+            .to_string()
+    };
+
+    // Fresh engine, empty open-map → resolution can only come from the
+    // index entry project.open wrote.
+    let fresh = Engine::new(dir.path());
+    assert_eq!(
+        fresh
+            .resolve_root(&id)
+            .expect("open must populate the index"),
+        root,
+        "project.open must register id→root so a fresh engine resolves it"
+    );
+}
+
+// ---- Non-fatal index-write failure ------------------------------------
+//
+// If writing the projects-index fails, `project.create` must still succeed
+// (the project IS on disk + open in the engine) and surface a
+// `W_INDEX_WRITE_FAILED` warning rather than failing the whole call or
+// swallowing the error. We make the index write fail deterministically by
+// planting a regular FILE where `register_project` needs the `.verbreel`
+// DIRECTORY: its `create_dir_all(<home>/.verbreel)` then errors, which is
+// the documented non-fatal path.
+
+#[test]
+fn create_index_write_failure_is_nonfatal_warns() {
+    let dir = TempDir::new().unwrap();
+
+    // The project lives under a separate `projects/` subdir so the home's
+    // `.verbreel` can be a file without colliding with the project root's
+    // own `.verbreel/` directory.
+    let home = dir.path().join("home");
+    let at = dir.path().join("projects");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&at).unwrap();
+    // Block `<home>/.verbreel` from being a directory.
+    std::fs::write(home.join(".verbreel"), b"not a dir").unwrap();
+
+    let mut engine = Engine::new(&home);
+    let env = engine.dispatch(
+        "project.create",
+        json!({ "name": "warns", "canvas": "1080x1920", "at": at }),
+    );
+
+    let Envelope::Ok { warnings, .. } = &env else {
+        panic!("create must stay Ok despite an index-write failure, got {env:?}");
+    };
+    assert!(
+        warnings.iter().any(|w| w["code"] == "W_INDEX_WRITE_FAILED"),
+        "an index-write failure must surface W_INDEX_WRITE_FAILED, got {warnings:?}"
+    );
+    // And the project is genuinely open in the engine despite the warning.
+    assert_eq!(
+        engine.open_count(),
+        1,
+        "the project is created + open even though indexing failed"
     );
 }
