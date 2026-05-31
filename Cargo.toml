@@ -13,6 +13,7 @@ members = [
     "crates/verbreel-storage",
     "crates/verbreel-ai",
     "crates/verbreel-runtime",
+    "crates/verbreel-agent",
     "crates/verbreel-cli",
     "crates/verbreel-mcp",
     "crates/verbreel-http",
@@ -102,6 +103,12 @@ clap          = { version = "4", features = ["derive", "env", "cargo"] }
 
 # MCP
 rmcp          = { version = "1.7", features = ["server", "transport-io", "transport-streamable-http-server"] }
+
+# HTTP client — the `verbreel-agent` Claude planner's live leg (feature `claude`).
+# `blocking` keeps the planner synchronous (mirrors verbreel-ai's std::process
+# sidecar transport); `rustls-tls` avoids a system OpenSSL build dep. Off by
+# default — the planner logic is transport-agnostic and unit-tested with a mock.
+reqwest       = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 # Render (Research 01)
 wgpu          = { version = "29" }
