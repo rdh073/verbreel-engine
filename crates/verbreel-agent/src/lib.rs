@@ -23,7 +23,7 @@
 //! ## Crate dependency rule
 //!
 //! ```text
-//! verbreel-agent → verbreel-state, verbreel-storage, verbreel-args
+//! verbreel-agent → verbreel-state, verbreel-args
 //!   [feature "claude"] + reqwest
 //! ```
 //!

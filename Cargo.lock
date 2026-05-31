@@ -3271,7 +3271,6 @@ dependencies = [
  "thiserror 2.0.18",
  "verbreel-args",
  "verbreel-state",
- "verbreel-storage",
 ]
 
 [[package]]

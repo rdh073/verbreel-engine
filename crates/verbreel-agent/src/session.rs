@@ -51,6 +51,10 @@ pub enum RunOutcome {
     Query {
         /// The verb's `data` envelope.
         data: Value,
+        /// Warnings the verb emitted. Read-only verbs rarely warn, but
+        /// the field is threaded for symmetry with [`RunOutcome::Mutated`]
+        /// so an advisory warning on a query is never silently dropped.
+        warnings: Vec<Value>,
     },
     /// A state-changing verb: an event was durably written (§0.8) and the
     /// patch applied to the in-memory project.
@@ -81,7 +85,7 @@ impl RunOutcome {
     #[must_use]
     pub fn data(&self) -> &Value {
         match self {
-            RunOutcome::Query { data }
+            RunOutcome::Query { data, .. }
             | RunOutcome::Mutated { data, .. }
             | RunOutcome::Replayed { data, .. } => data,
         }
@@ -207,14 +211,14 @@ impl Session {
                 .ok_or_else(|| AgentError::UnknownVerb {
                     verb: verb_id.to_string(),
                 })?;
-            let (patch, data, _warnings) = verb
-                .compute_patch(self.store.project(), &args)
-                .map_err(|source| AgentError::VerbExecution {
-                    verb: verb_id.to_string(),
-                    source,
-                })?;
+            let (patch, data, warnings) =
+                verb.compute_patch(self.store.project(), &args)
+                    .map_err(|source| AgentError::VerbExecution {
+                        verb: verb_id.to_string(),
+                        source,
+                    })?;
             if patch.0.is_empty() {
-                return Ok(RunOutcome::Query { data });
+                return Ok(RunOutcome::Query { data, warnings });
             }
         }
 
@@ -410,6 +414,24 @@ mod tests {
             .run("clip.teleport", json!({}), None)
             .expect_err("unknown verb rejected");
         assert!(matches!(err, AgentError::UnknownVerb { .. }));
+        assert_eq!(events_len(session.root()), before);
+    }
+
+    #[test]
+    fn malformed_args_surface_as_verb_execution_without_an_event() {
+        let (_dir, mut session) = temp_project();
+        let before = events_len(session.root());
+        // clip.trim expects `clip: String`; a number trips the verb's own
+        // arg deserialization in the read-only peek, before any patch or
+        // event — surfacing as VerbExecution, not a lifecycle error.
+        let err = session
+            .run("clip.trim", json!({ "clip": 123 }), None)
+            .expect_err("malformed args must be rejected");
+        assert!(
+            matches!(err, AgentError::VerbExecution { .. }),
+            "expected VerbExecution, got {err:?}"
+        );
+        // The peek wrote nothing.
         assert_eq!(events_len(session.root()), before);
     }
 

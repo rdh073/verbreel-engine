@@ -29,7 +29,7 @@ verbreel-codec-web    → verbreel-ir  (wasm32-only)
 verbreel-storage → verbreel-types, verbreel-events
 verbreel-ai      → verbreel-types, verbreel-state
 verbreel-runtime → verbreel-state, verbreel-storage, verbreel-canon, verbreel-ir, verbreel-render
-verbreel-agent   → verbreel-state, verbreel-storage, verbreel-args  (+ reqwest under feature "claude")
+verbreel-agent   → verbreel-state, verbreel-args  (+ reqwest under feature "claude")
 verbreel-cli     → verbreel-agent, verbreel-state, verbreel-storage (+ verbreel-runtime behind native-render)
 verbreel-mcp     → verbreel-agent, verbreel-state, verbreel-storage (+ verbreel-runtime behind native-render)
 verbreel-http    → verbreel-agent, verbreel-state, verbreel-storage (+ verbreel-runtime behind native-render)

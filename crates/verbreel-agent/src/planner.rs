@@ -10,6 +10,8 @@
 //! abstraction, never on `reqwest`. The composition root (the CLI / HTTP
 //! server) injects the concrete client.
 
+use std::fmt::Write as _;
+
 use serde_json::Value;
 
 use crate::capabilities::Capabilities;
@@ -86,9 +88,17 @@ pub fn build_system_prompt(caps: &Capabilities) -> String {
          {\"steps\": [{\"verb\": \"<id>\", \"args\": { ... }}, ...], \"rationale\": \"<one sentence>\"}\n\n\
          Rules:\n\
          - Use ONLY verb ids from the catalog below.\n\
-         - Omit `project_id` from args; the engine injects it.\n\
-         - Time fields are engine ticks at 240000 Hz (1 second = 240000 ticks).\n\
-         - Prefer the fewest steps that achieve the intent.\n\
+         - Omit `project_id` from args; the engine injects it.\n",
+    );
+    // Source the tick rate from the live catalog rather than repeating
+    // the magic number, so the prompt cannot drift from the engine.
+    let _ = writeln!(
+        s,
+        "- Time fields are engine ticks at {hz} Hz (1 second = {hz} ticks).",
+        hz = caps.tick_rate_hz,
+    );
+    s.push_str(
+        "- Prefer the fewest steps that achieve the intent.\n\
          - If the intent is impossible with the available verbs, return an empty steps list \
            and explain why in `rationale`.\n\n\
          VERB CATALOG (by domain):\n",

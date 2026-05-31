@@ -211,8 +211,6 @@ pub async fn agent_plan(
     Path(name): Path<String>,
     body: Result<Json<AgentBody>, JsonRejection>,
 ) -> Response {
-    use verbreel_agent::{AnthropicClient, LlmPlanner, Planner};
-
     if let Some(resp) = reject_unsafe_name(&name) {
         return resp;
     }
@@ -221,43 +219,40 @@ pub async fn agent_plan(
         Err(rejection) => return bad_request(&rejection.body_text()),
     };
 
-    let caps = Capabilities::current();
-    let client = match AnthropicClient::from_env() {
-        Ok(c) => c,
-        Err(e) => return agent_error_response(&AgentError::Planner(e)),
-    };
-    let plan = match LlmPlanner::new(client).plan(&body.intent, &caps) {
-        Ok(p) => p,
-        Err(e) => return agent_error_response(&AgentError::Planner(e)),
-    };
-    let plan_json = serde_json::to_value(&plan).unwrap_or(Value::Null);
-
-    if !body.apply {
-        return (
-            StatusCode::OK,
-            Json(json!({ "plan": plan_json, "applied": false })),
-        )
-            .into_response();
-    }
-
-    let root = state.workspace.join(&name);
-    let mut session = match Session::open(&root) {
-        Ok(s) => s,
-        Err(e) => return agent_error_response(&e),
-    };
-    match session.apply_plan(&plan, &caps) {
-        Ok(results) => {
-            let steps: Vec<Value> = results
-                .iter()
-                .map(|r| json!({ "verb": r.verb, "outcome": outcome_json(&r.outcome) }))
-                .collect();
-            (
-                StatusCode::OK,
-                Json(json!({ "plan": plan_json, "applied": true, "steps": steps })),
-            )
-                .into_response()
+    // The Claude planner crosses the network with a *blocking* HTTP client
+    // and the Session apply does blocking file IO. Running either directly
+    // on a Tokio worker would park the thread for the whole multi-second
+    // round-trip (and `reqwest::blocking` panics when entered from inside a
+    // runtime), so the entire blocking unit is offloaded to `spawn_blocking`.
+    let workspace = state.workspace.clone();
+    let task = tokio::task::spawn_blocking(move || -> Result<Value, AgentError> {
+        use verbreel_agent::{AnthropicClient, LlmPlanner, Planner};
+        let caps = Capabilities::current();
+        let client = AnthropicClient::from_env().map_err(AgentError::Planner)?;
+        let plan = LlmPlanner::new(client)
+            .plan(&body.intent, &caps)
+            .map_err(AgentError::Planner)?;
+        let plan_json = serde_json::to_value(&plan).unwrap_or(Value::Null);
+        if !body.apply {
+            return Ok(json!({ "plan": plan_json, "applied": false }));
         }
-        Err(e) => agent_error_response(&e),
+        let mut session = Session::open(workspace.join(&name))?;
+        let results = session.apply_plan(&plan, &caps)?;
+        let steps: Vec<Value> = results
+            .iter()
+            .map(|r| json!({ "verb": r.verb, "outcome": outcome_json(&r.outcome) }))
+            .collect();
+        Ok(json!({ "plan": plan_json, "applied": true, "steps": steps }))
+    });
+
+    match task.await {
+        Ok(Ok(body)) => (StatusCode::OK, Json(body)).into_response(),
+        Ok(Err(e)) => agent_error_response(&e),
+        Err(join) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "planner task failed", "detail": join.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -281,7 +276,12 @@ pub async fn agent_plan(
 /// Shape one [`RunOutcome`] as the JSON body of a `call_tool` response.
 fn outcome_json(outcome: &RunOutcome) -> Value {
     match outcome {
-        RunOutcome::Query { data } => json!({ "kind": "query", "mutated": false, "data": data }),
+        RunOutcome::Query { data, warnings } => json!({
+            "kind": "query",
+            "mutated": false,
+            "data": data,
+            "warnings": warnings,
+        }),
         RunOutcome::Mutated {
             event_id,
             data,

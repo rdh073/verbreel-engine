@@ -21,9 +21,9 @@ claude = ["dep:reqwest"]
 
 [dependencies]
 # Engine kernel — `ProjectStore` lifecycle + the §0.8 `mutate_via_verb` forward
-# path live here (default `native` feature pulls verbreel-storage transitively).
+# path live here (default `native` feature pulls verbreel-storage transitively,
+# so the AX layer does not depend on verbreel-storage directly).
 verbreel-state = { path = "../verbreel-state" }
-verbreel-storage = { path = "../verbreel-storage" }
 # Per-verb JSON Schemas for the capability catalog (agent discovery surface).
 verbreel-args = { path = "../verbreel-args" }
 serde.workspace = true
