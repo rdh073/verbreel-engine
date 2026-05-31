@@ -13,6 +13,8 @@
 
 #![cfg(feature = "native-render")]
 
+mod common;
+
 use clap::Parser;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -169,6 +171,47 @@ fn render_start_bad_codec_is_schema_violation() {
         env.get("code").and_then(Value::as_str),
         Some("E_SCHEMA_VIOLATION"),
         "a deserialize failure on the typed args must surface E_SCHEMA_VIOLATION (not a runtime E_* code), got: {env}"
+    );
+}
+
+/// `render start` with NO resolvable project (no `--project`, no
+/// active-project file) must surface `E_PROJECT_NOT_FOUND` — the same code
+/// every other project-scoped verb returns for a missing project context
+/// (§0.7 uniform error codes; cf. `clip add` → `E_PROJECT_NOT_FOUND`).
+///
+/// Before the fix the missing `project_id` reached the typed
+/// `RenderStartArgs` deserialize and surfaced `E_SCHEMA_VIOLATION` (a
+/// required-field error), diverging from the engine path. The CLI now
+/// resolves the project-presence guard BEFORE the deserialize.
+#[test]
+fn render_start_without_project_is_project_not_found() {
+    // Empty runtime, hermetic home: no --project flag and no active-project
+    // file, so no project_id is injected. A fresh temp home (via `with_home`)
+    // has no active-project file, so the active-project lookup yields nothing
+    // — and the env mutation is serialized through the shared `env_lock`, so
+    // no sibling test's `resolve_home` read races this write.
+    let runtime = RenderRuntimeConfig::new();
+    let (code, env) = common::with_home(|_home| {
+        dispatch_with(
+            &runtime,
+            &[
+                "verbreel",
+                "render",
+                "start",
+                "--preset",
+                "deterministic",
+                "--out_path",
+                "exports/out.mp4",
+            ],
+        )
+    });
+    assert_eq!(code, 1, "no project context must fail: {env}");
+    assert_eq!(env.get("ok").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        env.get("code").and_then(Value::as_str),
+        Some("E_PROJECT_NOT_FOUND"),
+        "no resolvable project must match the engine path's code, not \
+         E_SCHEMA_VIOLATION from a missing-field deserialize, got: {env}"
     );
 }
 

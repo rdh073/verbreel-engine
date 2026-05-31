@@ -49,6 +49,31 @@ fn unknown_verb_uses_exit_code_one_not_two() {
 }
 
 #[test]
+fn help_with_positional_topic_hints_topic_flag() {
+    // `verbreel help foo` parses `foo` as a verb positional → id `help.foo`,
+    // which the engine rejects as E_UNKNOWN_VERB. The user meant a help
+    // topic, so the CLI attaches a `--topic` hint pointing at the correct
+    // flag syntax. (The engine knows nothing of CLI flag spelling, so the
+    // hint is a surface concern.)
+    let (code, out, _) = run_argv(&["verbreel", "help", "foo"]);
+    assert_eq!(code, 1, "help.foo is E_UNKNOWN_VERB → exit 1");
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        v.get("code").and_then(Value::as_str),
+        Some("E_UNKNOWN_VERB"),
+        "got: {out}"
+    );
+    let hint = v
+        .get("hint")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("expected a --topic hint on help.<topic>, got: {out}"));
+    assert!(
+        hint.contains("--topic"),
+        "hint must point at the --topic flag, got: {hint}"
+    );
+}
+
+#[test]
 fn unknown_project_action_is_unknown_verb() {
     // `project frobnicate` → id `project.frobnicate`, engine ok:false.
     let (code, out, _) = run_argv(&["verbreel", "project", "frobnicate"]);

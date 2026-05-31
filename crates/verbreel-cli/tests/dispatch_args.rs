@@ -68,6 +68,32 @@ fn non_object_args_json_is_rejected() {
 }
 
 #[test]
+fn args_flag_missing_value_is_bad_args() {
+    // `--args` with no following value (end of tail) is E_BAD_ARGS, not a
+    // bare-boolean coercion: the JSON blob has no escape-hatch payload.
+    let err = parse_flags(&[s("--args")]).expect_err("--args needs a value");
+    assert_eq!(err.code, "E_BAD_ARGS");
+    assert!(
+        err.message.contains("--args"),
+        "message must name --args, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn project_flag_missing_value_is_bad_args() {
+    // `--project` with no following value is E_BAD_ARGS — a routing flag
+    // with no id is a content reject, not a bare boolean.
+    let err = parse_flags(&[s("--project")]).expect_err("--project needs a value");
+    assert_eq!(err.code, "E_BAD_ARGS");
+    assert!(
+        err.message.contains("--project"),
+        "message must name --project, got: {}",
+        err.message
+    );
+}
+
+#[test]
 fn project_flag_is_captured_not_an_arg() {
     let parsed = parse_flags(&[s("--project"), s("abc")]).expect("parse");
     assert_eq!(parsed.project.as_deref(), Some("abc"));
@@ -162,6 +188,33 @@ fn prefix_without_project_context_errors() {
             v.get("code").and_then(Value::as_str),
             Some("E_PROJECT_NOT_FOUND"),
             "got: {v}"
+        );
+    });
+}
+
+#[test]
+fn empty_raw_tail_is_missing_noun_bad_args() {
+    // `run` may be called directly with an empty tail (clap's
+    // arg_required_else_help guards the binary path, but `run` is public).
+    // The no-noun branch must surface E_BAD_ARGS "missing <noun>" on
+    // stdout, exit 1 — not panic on the empty raw.
+    common::with_home(|_home| {
+        let mut out: Vec<u8> = Vec::new();
+        let code = run(Cli { raw: Vec::new() }, &mut out).expect("run must not fail to write");
+        assert_eq!(code, 1, "missing noun is ok:false → exit 1");
+        let v: Value = serde_json::from_str(&String::from_utf8(out).expect("utf-8"))
+            .expect("envelope is JSON");
+        assert_eq!(v.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            v.get("code").and_then(Value::as_str),
+            Some("E_BAD_ARGS"),
+            "got: {v}"
+        );
+        assert!(
+            v.get("message")
+                .and_then(Value::as_str)
+                .is_some_and(|m| m.contains("missing <noun>")),
+            "message must name the missing noun, got: {v}"
         );
     });
 }

@@ -127,14 +127,19 @@ impl VerbreelServer {
     /// index.
     ///
     /// Under `native-render` the render runtime is resolved from the
-    /// environment ([`verbreel_runtime::RenderRuntimeConfig::from_env`]),
-    /// matching the HTTP / CLI surfaces.
+    /// environment ([`verbreel_runtime::RenderRuntimeConfig::from_env`])
+    /// and then pointed at the same `home`
+    /// ([`verbreel_runtime::RenderRuntimeConfig::with_home`]) so render's
+    /// project-index resolution matches the Engine root — a `TempDir` home
+    /// resolves the same projects the Engine sees, not the developer's
+    /// process `HOME`.
     #[must_use]
     pub fn with_home(home: impl Into<PathBuf>) -> Self {
+        let home = home.into();
         Self {
-            engine: Arc::new(Mutex::new(Engine::new(home))),
             #[cfg(feature = "native-render")]
-            render_runtime: verbreel_runtime::RenderRuntimeConfig::from_env(),
+            render_runtime: verbreel_runtime::RenderRuntimeConfig::from_env().with_home(&home),
+            engine: Arc::new(Mutex::new(Engine::new(home))),
         }
     }
 
