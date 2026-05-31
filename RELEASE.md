@@ -40,8 +40,9 @@ cargo run -p verbreel-conformance --release
 cargo run -p examples --features native-render
 ```
 
-The native render smoke requires FFmpeg development libraries and a software
-Vulkan path such as lavapipe on Linux.
+The native render smoke requires FFmpeg development libraries (`libavcodec-dev`,
+`libavdevice-dev`, `libavformat-dev`, `libavutil-dev`, `libswscale-dev`) and a
+software Vulkan path such as lavapipe on Linux.
 
 ## Tag And Publish
 
