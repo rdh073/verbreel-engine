@@ -304,6 +304,53 @@ fn dry_run_computes_patch_without_persisting() {
     );
 }
 
+// ---- Test 8a: malformed dry_run on a project-scoped verb is rejected ---
+//
+// §0.5.1 regression: a present-but-non-boolean `dry_run` (`"true"`, `1`,
+// `null`, `{}`) must NOT coerce to `false` and persist the real mutation on
+// the project-scoped path. `marker.add` is a persistent verb here; a malformed
+// dry_run must be rejected at the dispatch boundary and write no event.
+
+#[test]
+fn malformed_dry_run_on_project_scoped_verb_is_rejected_and_persists_nothing() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let project_id = create_project(&mut engine, &dir, "badtype-scoped");
+    let root = dir.path().join("badtype-scoped");
+    let before = event_count(&root);
+
+    for bad in [json!("true"), json!(1), json!(null), json!({})] {
+        let env = engine.dispatch(
+            "marker.add",
+            json!({
+                "project_id": project_id,
+                "time_tk": 3_000,
+                "label": "Bad",
+                "dry_run": bad,
+            }),
+        );
+        let Envelope::Err { code, .. } = &env else {
+            panic!("non-boolean dry_run on marker.add must be rejected, got {env:?}");
+        };
+        assert_eq!(code, "E_SCHEMA_VIOLATION");
+    }
+
+    assert_eq!(
+        event_count(&root),
+        before,
+        "a rejected malformed-dry_run call must not persist any event"
+    );
+    let listed = engine.dispatch("marker.list", json!({ "project_id": project_id }));
+    let Envelope::Ok { data, .. } = listed else {
+        panic!("marker.list must be Ok");
+    };
+    assert_eq!(
+        data["markers"].as_array().map(Vec::len),
+        Some(0),
+        "a rejected malformed-dry_run call must not mutate in-memory state"
+    );
+}
+
 // ---- Test 8b: dry_run asset.import → would-be patch, NO CAS write -----
 //
 // §0.5.1 regression: a dry `asset.import` MUST compute the real sha256 +
