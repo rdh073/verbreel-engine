@@ -27,11 +27,15 @@
 //! ## §0.5 universal args
 //!
 //! `dry_run`, `idempotency_key`, and `exact_time` are read from the
-//! top-level of the args object. `dry_run` computes the patch but skips
-//! persistence and returns `event_id: ""` (§0.5.1). `idempotency_key`
-//! threads to `mutate_via_verb` (and is ignored under `dry_run` per
-//! §0.5.1). `exact_time` is passed through to the verb in `args`
-//! untouched — the verb owns its snap semantics.
+//! top-level of the args object. On **project-scoped** verbs `dry_run`
+//! computes the patch but skips persistence and returns `event_id: ""`
+//! (§0.5.1) and `idempotency_key` threads to `mutate_via_verb` (ignored
+//! under `dry_run` per §0.5.1). On **lifecycle** verbs `dry_run` is
+//! rejected (the free functions have no compute-only path — they always
+//! persist — so honoring §0.5.1's "no persistent side effect" means not
+//! running them; see `dispatch_lifecycle`). `exact_time` is passed
+//! through to the verb in `args` untouched — the verb owns its snap
+//! semantics.
 
 #![cfg(feature = "native")]
 
@@ -216,13 +220,28 @@ impl Engine {
     // is a known false-positive for this public ownership-handoff shape.
     #[allow(clippy::needless_pass_by_value)]
     pub fn dispatch(&mut self, verb_id: &str, args: Value) -> Envelope {
+        // §0.5: `dry_run` is a boolean universal arg. Type-check it once here,
+        // at the routing boundary, before any path acts on it. It is stripped
+        // before the per-verb `deny_unknown_fields` struct deserializes and
+        // dispatch runs no JSON-schema validation, so this is the only place a
+        // malformed `dry_run` is caught. Reading it via `bool_arg`'s lossy
+        // `as_bool().unwrap_or(false)` instead would coerce `{"dry_run":"true"}`
+        // / `1` / `null` to `false` and silently run the REAL mutation under a
+        // preview-intent flag (§0.5.1 violation) — destructive for both
+        // `dispatch_lifecycle` (e.g. project.forget) and `dispatch_project_scoped`
+        // (e.g. keyframe.remove). Rejecting a present-but-non-boolean value here
+        // closes that trap for every route at the root.
+        let dry_run = match dry_run_flag(&args) {
+            Ok(flag) => flag,
+            Err(env) => return *env,
+        };
         if LIFECYCLE_VERBS.contains(&verb_id) {
-            return self.dispatch_lifecycle(verb_id, &args);
+            return self.dispatch_lifecycle(verb_id, &args, dry_run);
         }
         if PROJECTLESS_READ_VERBS.contains(&verb_id) {
             return self.dispatch_projectless_read(verb_id, &args);
         }
-        self.dispatch_project_scoped(verb_id, &args)
+        self.dispatch_project_scoped(verb_id, &args, dry_run)
     }
 
     /// All dispatchable verb ids: the registry verbs (sorted) plus the
@@ -264,7 +283,13 @@ impl Engine {
     // Routing — project-scoped registry verbs
     // ---------------------------------------------------------------
 
-    fn dispatch_project_scoped(&mut self, verb_id: &str, args: &Value) -> Envelope {
+    fn dispatch_project_scoped(&mut self, verb_id: &str, args: &Value, dry_run: bool) -> Envelope {
+        // `dry_run` is the type-validated flag from `dispatch` (a present
+        // non-boolean was already rejected there) — NOT re-read via the lossy
+        // `bool_arg`, which would coerce a malformed value to `false` and run
+        // the real mutation under a preview flag. `keyframe.remove --dry_run`
+        // is the canonical destructive-preview case this protects.
+
         // Unknown verb (not a registry verb and not a lifecycle verb).
         if self.registry.get(verb_id).is_none() {
             return Envelope::err("E_UNKNOWN_VERB", format!("unknown verb: {verb_id}"));
@@ -279,7 +304,6 @@ impl Engine {
             return project_not_found(&project_id);
         }
 
-        let dry_run = bool_arg(args, "dry_run");
         let idempotency_key = string_arg(args, "idempotency_key");
 
         // Strip the engine-consumed universal args before the verb sees
@@ -327,8 +351,12 @@ impl Engine {
         // `schema.rs` / `list_capabilities.rs`), so the engine injects a
         // synthetic valid UUID to satisfy deserialization. The caller
         // never supplies one.
+        // Defensive: the project-less read arg structs do not yet carry
+        // `deny_unknown_fields`, so a stray universal arg is currently
+        // tolerated — but strip it anyway so the day one of them tightens to
+        // deny-unknown, a keyed/dry-run call here does not start 400ing (§0.5).
         let synthetic_id = ProjectId::now();
-        let args = inject_project_id(args, synthetic_id);
+        let args = inject_project_id(&strip_universal_args(args), synthetic_id);
         let synthetic = crate::synthetic_empty_project(synthetic_id);
         match verb.compute_patch(&synthetic, &args) {
             Ok((patch, data, warnings)) => match serialize_or_internal(verb_id, "patch", &patch) {
@@ -343,7 +371,44 @@ impl Engine {
     // Routing — lifecycle verbs (manage the open-project map)
     // ---------------------------------------------------------------
 
-    fn dispatch_lifecycle(&mut self, verb_id: &str, args: &Value) -> Envelope {
+    fn dispatch_lifecycle(&mut self, verb_id: &str, args: &Value, dry_run: bool) -> Envelope {
+        // §0.5.1: under `dry_run` the engine guarantees NO persistent side
+        // effect. The six lifecycle free functions only ever persist
+        // (create/duplicate write a project to disk, save rewrites the
+        // snapshot, forget removes the on-disk root, open/close mutate the
+        // flock + open-map) — none has a compute-only path. Stripping
+        // `dry_run` and proceeding would silently perform the real mutation,
+        // turning `project.forget --dry_run` into an irreversible delete under
+        // a flag whose whole purpose is "preview, no side effects". So reject
+        // a `dry_run: true` lifecycle call explicitly instead of
+        // strip-and-proceed: a safe error, not a silent destructive action.
+        // `dry_run` is the type-validated flag from `dispatch` (a present
+        // non-boolean was already rejected there as a malformed universal arg).
+        if dry_run {
+            return Envelope::Err {
+                code: "E_SCHEMA_VIOLATION".to_string(),
+                message: format!(
+                    "{verb_id}: dry_run is not supported on lifecycle verbs \
+                     (they have no compute-only path; §0.5.1)"
+                ),
+                hint: Some("drop dry_run; lifecycle verbs always persist their effect".to_string()),
+                details: Some(json!({ "verb_id": verb_id, "arg": "dry_run" })),
+            };
+        }
+        // Strip the engine-consumed universal args once before any handler
+        // deserializes into its `deny_unknown_fields` arg struct: §0.8
+        // designates project.create/.duplicate as legitimate idempotency_key
+        // surfaces, so a keyed lifecycle call must not 400.
+        //
+        // `idempotency_key` is stripped (so the keyed call doesn't 400) but
+        // NOT yet threaded into the lifecycle free functions — unlike
+        // dispatch_project_scoped, which passes it to mutate_via_verb for §0.8
+        // dedup. So a keyed project.create/.duplicate is accepted but the key
+        // is not honored for dedup: a second keyed call re-executes (and a
+        // second create hits E_PROJECT_EXISTS) rather than replaying. Wiring
+        // §0.8 dedup through the lifecycle path is tracked in #461; until then
+        // the key is accepted-but-not-yet-honored, not silently dedup-effective.
+        let args = &strip_universal_args(args);
         match verb_id {
             "project.create" => self.handle_create(args),
             "project.open" => self.handle_open(args),
@@ -659,9 +724,42 @@ fn inject_project_id(args: &Value, id: ProjectId) -> Value {
     Value::Object(obj)
 }
 
-/// Read a top-level boolean arg, defaulting to `false`.
-fn bool_arg(args: &Value, key: &str) -> bool {
-    args.get(key).and_then(Value::as_bool).unwrap_or(false)
+/// Type-check + read the §0.5 `dry_run` universal arg.
+///
+/// Returns `Ok(false)` when absent or explicit `false`, `Ok(true)` when
+/// explicit boolean `true`, and an `E_SCHEMA_VIOLATION` envelope when present
+/// but not a JSON boolean (`"true"`, `1`, `null`, `{}`, …).
+///
+/// This deliberately does NOT coerce like `as_bool().unwrap_or(false)`: a
+/// lossy coercion of a malformed `dry_run` to `false` would run the real,
+/// persistent mutation under a preview-intent flag — a §0.5.1 violation that
+/// is destructive on both the lifecycle and project-scoped dispatch paths.
+/// `dry_run` is stripped before any `deny_unknown_fields` arg struct
+/// deserializes and dispatch runs no JSON-schema validation, so this is the
+/// single point where a malformed value is caught.
+fn dry_run_flag(args: &Value) -> Result<bool, Box<Envelope>> {
+    match args.get("dry_run") {
+        None | Some(Value::Bool(false)) => Ok(false),
+        Some(Value::Bool(true)) => Ok(true),
+        Some(other) => Err(Box::new(Envelope::Err {
+            code: "E_SCHEMA_VIOLATION".to_string(),
+            message: format!("dry_run must be a boolean, got {}", json_type_name(other)),
+            hint: Some("pass dry_run as a JSON boolean (true / false)".to_string()),
+            details: Some(json!({ "arg": "dry_run", "value": other })),
+        })),
+    }
+}
+
+/// Name the JSON type of a value for an error message.
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 /// Read a top-level string arg, if present and non-null.

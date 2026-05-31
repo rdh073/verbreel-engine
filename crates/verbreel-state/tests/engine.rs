@@ -304,6 +304,61 @@ fn dry_run_computes_patch_without_persisting() {
     );
 }
 
+// ---- Test 8a: malformed dry_run on a project-scoped verb is rejected ---
+//
+// §0.5.1 regression: a present-but-non-boolean `dry_run` (`"true"`, `1`,
+// `null`, `{}`) must NOT coerce to `false` and persist the real mutation on
+// the project-scoped path. `marker.add` is a persistent verb here; a malformed
+// dry_run must be rejected at the dispatch boundary and write no event.
+
+#[test]
+fn malformed_dry_run_on_project_scoped_verb_is_rejected_and_persists_nothing() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let project_id = create_project(&mut engine, &dir, "badtype-scoped");
+    let root = dir.path().join("badtype-scoped");
+    let before = event_count(&root);
+
+    for bad in [json!("true"), json!(1), json!(null), json!({})] {
+        let env = engine.dispatch(
+            "marker.add",
+            json!({
+                "project_id": project_id,
+                "time_tk": 3_000,
+                "label": "Bad",
+                "dry_run": bad,
+            }),
+        );
+        let Envelope::Err { code, details, .. } = &env else {
+            panic!("non-boolean dry_run on marker.add must be rejected, got {env:?}");
+        };
+        assert_eq!(code, "E_SCHEMA_VIOLATION");
+        assert_eq!(
+            details
+                .as_ref()
+                .and_then(|d| d.get("arg"))
+                .and_then(Value::as_str),
+            Some("dry_run"),
+            "rejection must name dry_run as the offending arg (dispatch-boundary type gate)"
+        );
+    }
+
+    assert_eq!(
+        event_count(&root),
+        before,
+        "a rejected malformed-dry_run call must not persist any event"
+    );
+    let listed = engine.dispatch("marker.list", json!({ "project_id": project_id }));
+    let Envelope::Ok { data, .. } = listed else {
+        panic!("marker.list must be Ok");
+    };
+    assert_eq!(
+        data["markers"].as_array().map(Vec::len),
+        Some(0),
+        "a rejected malformed-dry_run call must not mutate in-memory state"
+    );
+}
+
 // ---- Test 8b: dry_run asset.import → would-be patch, NO CAS write -----
 //
 // §0.5.1 regression: a dry `asset.import` MUST compute the real sha256 +
@@ -947,4 +1002,259 @@ fn create_index_write_failure_is_nonfatal_warns() {
         1,
         "the project is created + open even though indexing failed"
     );
+}
+
+// ---- Regression: universal args on lifecycle verbs (issue #446) -------
+//
+// The six lifecycle arg structs all carry `#[serde(deny_unknown_fields)]`.
+// `strip_universal_args` used to run only in `dispatch_project_scoped`, so a
+// lifecycle call carrying a §0.5 universal arg (`idempotency_key` / `dry_run`)
+// deserialized straight into the typed struct, hit the deny-unknown gate, and
+// wrongly returned E_SCHEMA_VIOLATION — even though §0.8 designates
+// `project.create` / `.duplicate` as legitimate idempotency_key surfaces.
+// Each assertion below FAILS before the fix (the call 400s) and passes after.
+
+#[test]
+fn create_with_idempotency_key_is_not_schema_violation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+
+    let env = engine.dispatch(
+        "project.create",
+        json!({
+            "name": "idem-create",
+            "canvas": "1080x1920",
+            "at": dir.path(),
+            "idempotency_key": "k",
+        }),
+    );
+    assert!(
+        env.is_ok(),
+        "project.create with idempotency_key must succeed, not 400 E_SCHEMA_VIOLATION: {env:?}"
+    );
+}
+
+#[test]
+fn open_with_universal_args_is_not_schema_violation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "idem-open");
+    engine.dispatch("project.close", json!({ "project_id": id }));
+    let root = dir.path().join("idem-open");
+
+    let env = engine.dispatch(
+        "project.open",
+        json!({ "path": &root, "idempotency_key": "k", "dry_run": false }),
+    );
+    assert!(
+        env.is_ok(),
+        "project.open with universal args must succeed, not E_SCHEMA_VIOLATION: {env:?}"
+    );
+}
+
+#[test]
+fn save_with_universal_args_is_not_schema_violation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "idem-save");
+
+    let env = engine.dispatch(
+        "project.save",
+        json!({ "project_id": id, "idempotency_key": "k", "dry_run": false }),
+    );
+    assert!(
+        env.is_ok(),
+        "project.save with universal args must succeed, not E_SCHEMA_VIOLATION: {env:?}"
+    );
+}
+
+#[test]
+fn close_with_universal_args_is_not_schema_violation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "idem-close");
+
+    let env = engine.dispatch(
+        "project.close",
+        json!({ "project_id": id, "idempotency_key": "k", "dry_run": false }),
+    );
+    assert!(
+        env.is_ok(),
+        "project.close with universal args must succeed, not E_SCHEMA_VIOLATION: {env:?}"
+    );
+}
+
+#[test]
+fn duplicate_with_idempotency_key_is_not_schema_violation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "idem-dup-src");
+    let source_path = dir.path().join("idem-dup-src");
+
+    let env = engine.dispatch(
+        "project.duplicate",
+        json!({
+            "project_id": id,
+            "name": "idem-dup-dst",
+            "source_path": source_path,
+            "idempotency_key": "k",
+        }),
+    );
+    assert!(
+        env.is_ok(),
+        "project.duplicate with idempotency_key must succeed, not E_SCHEMA_VIOLATION: {env:?}"
+    );
+}
+
+#[test]
+fn forget_with_universal_args_is_not_schema_violation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "idem-forget");
+    // forget removes the on-disk root; close first so the flock is released.
+    engine.dispatch("project.close", json!({ "project_id": id }));
+    let root = dir.path().join("idem-forget");
+
+    let env = engine.dispatch(
+        "project.forget",
+        json!({ "path": &root, "idempotency_key": "k", "dry_run": false }),
+    );
+    assert!(
+        env.is_ok(),
+        "project.forget with universal args must succeed, not E_SCHEMA_VIOLATION: {env:?}"
+    );
+}
+
+// ---- dry_run on lifecycle verbs is rejected, never silently performed ----
+//
+// §0.5.1: `dry_run: true` guarantees no persistent side effect. The lifecycle
+// free functions have no compute-only path — they always persist. So the
+// engine must REJECT `dry_run: true` on a lifecycle verb rather than strip it
+// and proceed (which would perform the real, unconditional mutation). The
+// canonical hazard is `project.forget --dry_run` deleting the on-disk root
+// under a preview flag; the first test pins that the root survives.
+
+#[test]
+fn forget_with_dry_run_is_rejected_and_does_not_remove_root() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "dryrun-forget");
+    engine.dispatch("project.close", json!({ "project_id": id }));
+    let root = dir.path().join("dryrun-forget");
+    assert!(
+        root.exists(),
+        "project root exists before the dry-run forget"
+    );
+
+    let env = engine.dispatch("project.forget", json!({ "path": &root, "dry_run": true }));
+
+    let Envelope::Err { code, .. } = &env else {
+        panic!("project.forget with dry_run must be rejected, got {env:?}");
+    };
+    assert_eq!(
+        code, "E_SCHEMA_VIOLATION",
+        "dry_run on a lifecycle verb is rejected at the dispatch boundary"
+    );
+    assert!(
+        root.exists(),
+        "project.forget --dry_run must NOT remove the on-disk root (§0.5.1: no persistent side effect)"
+    );
+}
+
+#[test]
+fn create_with_dry_run_is_rejected_and_writes_nothing() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+
+    let env = engine.dispatch(
+        "project.create",
+        json!({
+            "name": "dryrun-create",
+            "canvas": "1080x1920",
+            "at": dir.path(),
+            "dry_run": true,
+        }),
+    );
+
+    let Envelope::Err { code, .. } = &env else {
+        panic!("project.create with dry_run must be rejected, got {env:?}");
+    };
+    assert_eq!(code, "E_SCHEMA_VIOLATION");
+    assert!(
+        !dir.path().join("dryrun-create").exists(),
+        "project.create --dry_run must NOT write a project to disk (§0.5.1)"
+    );
+    assert_eq!(
+        engine.open_count(),
+        0,
+        "a rejected dry-run create must not enter a project into the open-map"
+    );
+}
+
+#[test]
+fn forget_with_non_boolean_dry_run_is_rejected_and_does_not_remove_root() {
+    // A present-but-not-bool `dry_run` (e.g. the string "true" or 1) must NOT
+    // coerce to false and fall through to a real, destructive forget. The
+    // boundary rejects any present dry_run that is not the boolean `false`.
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "badtype-forget");
+    engine.dispatch("project.close", json!({ "project_id": id }));
+    let root = dir.path().join("badtype-forget");
+    assert!(
+        root.exists(),
+        "root exists before the malformed dry-run forget"
+    );
+
+    for bad in [json!("true"), json!(1), json!(null), json!({})] {
+        let env = engine.dispatch("project.forget", json!({ "path": &root, "dry_run": bad }));
+        let Envelope::Err { code, details, .. } = &env else {
+            panic!("non-boolean dry_run on project.forget must be rejected, got {env:?}");
+        };
+        assert_eq!(code, "E_SCHEMA_VIOLATION");
+        // Pin that the dry_run type-gate fired, not some unrelated schema error.
+        assert_eq!(
+            details
+                .as_ref()
+                .and_then(|d| d.get("arg"))
+                .and_then(Value::as_str),
+            Some("dry_run"),
+            "rejection must name dry_run as the offending arg"
+        );
+        assert!(
+            root.exists(),
+            "malformed dry_run must NOT trigger a real forget that removes the root"
+        );
+    }
+}
+
+#[test]
+fn forget_with_explicit_dry_run_false_is_accepted() {
+    // The escape valve: an explicit `dry_run: false` is the documented
+    // non-dry-run signal and must still perform the real forget.
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "falsedry-forget");
+    engine.dispatch("project.close", json!({ "project_id": id }));
+    let root = dir.path().join("falsedry-forget");
+
+    let env = engine.dispatch("project.forget", json!({ "path": &root, "dry_run": false }));
+    assert!(
+        env.is_ok(),
+        "explicit dry_run:false must be accepted as a real call: {env:?}"
+    );
+}
+
+#[test]
+fn save_with_dry_run_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "dryrun-save");
+
+    let env = engine.dispatch("project.save", json!({ "project_id": id, "dry_run": true }));
+
+    let Envelope::Err { code, .. } = &env else {
+        panic!("project.save with dry_run must be rejected, got {env:?}");
+    };
+    assert_eq!(code, "E_SCHEMA_VIOLATION");
 }
