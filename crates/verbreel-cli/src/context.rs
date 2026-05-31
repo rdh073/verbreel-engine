@@ -31,6 +31,13 @@ use verbreel_state::{Engine, Envelope};
 /// engine does not otherwise distinguish "needs an open project" from
 /// "global lifecycle verb" — and §0.12 names these three explicitly as
 /// the dotted verbs that take no `project_id`.
+///
+/// NOTE (review P3): this is the one hardcoded verb list left in the
+/// surface (flat-vs-dotted is otherwise read from `Engine::verb_ids()`).
+/// A future dotted *global* verb (e.g. a hypothetical `config.set`) would
+/// be misclassified as project-scoped and forced through pre-open until
+/// added here. The engine exposes no "is this verb global?" predicate
+/// today; when it does, this list should derive from it.
 const DOTTED_GLOBAL_VERBS: [&str; 3] = ["project.create", "project.open", "project.list"];
 
 /// Reconstruct the verb id from the leading positionals.

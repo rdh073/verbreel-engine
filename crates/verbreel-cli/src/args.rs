@@ -49,6 +49,15 @@ impl CliArgError {
 /// integer tick count. A bare integer is never ambiguous — it is already
 /// a tick count and stays an `i64` via the normal numeric branch (the
 /// duration grammar deliberately does not match a bare integer).
+///
+/// NOTE (§0.2 deliberate footgun, review [P2-4]): under a permissive
+/// `additionalProperties:true` schema a non-temporal value like
+/// `--label 30s` would also coerce to ticks. This is the documented §0.2
+/// "grammar match, not flag name" choice — accepted because the spec
+/// pins duration syntax as load-bearing and the blast radius is narrow
+/// (values ending `s`/`ms`/`tk` or matching `HH:MM:SS`). Not changed
+/// here: a per-flag time-type schema is out of scope for the generic
+/// dispatcher.
 #[must_use]
 pub fn coerce_scalar(raw: &str) -> Value {
     if let Some(ticks) = duration_str_to_ticks(raw) {
@@ -176,6 +185,14 @@ pub fn parse_flags(tail: &[String]) -> Result<ParsedFlags, CliArgError> {
 /// A token is a "flag" if it starts with `--` (a long flag) or is a
 /// single `-` (degenerate). A `-10`-shaped token is a hyphen *value*, not
 /// a flag, so that `--from_tk -10` parses `-10` as the value.
+///
+/// NOTE (review P3): the flag-name strip above accepts `--`/`-`, but this
+/// predicate only treats `--<alpha>` (and bare `-`) as flags, so a
+/// single-dash `-v` or a `--<digit>` token at a *value* position is
+/// consumed as a value while the same token at a *flag* position parses
+/// as a flag. No corruption path (hyphen values are consumed before
+/// reaching a flag position); the spec's CLI grammar uses only long
+/// `--flag` names, so single-dash short flags are not a supported surface.
 fn is_flag(token: &str) -> bool {
     token == "-"
         || token

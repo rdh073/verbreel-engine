@@ -114,13 +114,15 @@ fn non_duration_string_stays_string() {
 use clap::Parser;
 use verbreel_cli::{Cli, run};
 
-fn dispatch_under(home: &std::path::Path, argv: &[&str]) -> (i32, Value) {
+// `VERBREEL_HOME` is already set by the enclosing `with_home`, so the
+// dispatch reads the temp home from the env — no `home` param needed
+// (review P3: the prior `home` arg was dead, only `let _ = home;`-ed).
+fn dispatch_under(argv: &[&str]) -> (i32, Value) {
     let cli = Cli::try_parse_from(argv).expect("argv must parse");
     let mut out: Vec<u8> = Vec::new();
     let code = run(cli, &mut out).expect("run must not fail to write");
     let body = String::from_utf8(out).expect("utf-8");
     let v: Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("not JSON: {e}\n{body}"));
-    let _ = home;
     (code, v)
 }
 
@@ -130,7 +132,7 @@ fn project_flag_opens_and_dispatches_scoped_verb() {
         let id = common::create_registered_project(home);
         // `clip list` is a project-scoped read; with --project it opens
         // the registered project and dispatches, returning ok:true.
-        let (code, v) = dispatch_under(home, &["verbreel", "clip", "list", "--project", &id]);
+        let (code, v) = dispatch_under(&["verbreel", "clip", "list", "--project", &id]);
         assert_eq!(code, 0, "scoped read with --project must succeed: {v}");
         assert_eq!(v.get("ok").and_then(Value::as_bool), Some(true));
     });
@@ -142,7 +144,7 @@ fn active_project_file_supplies_project_id() {
         let id = common::create_registered_project(home);
         // Write the active-project file directly, then omit --project.
         verbreel_cli::home::write_active_project(home, &id).expect("write active");
-        let (code, v) = dispatch_under(home, &["verbreel", "clip", "list"]);
+        let (code, v) = dispatch_under(&["verbreel", "clip", "list"]);
         assert_eq!(code, 0, "scoped read via active-project must succeed: {v}");
         assert_eq!(v.get("ok").and_then(Value::as_bool), Some(true));
     });
@@ -153,8 +155,8 @@ fn prefix_without_project_context_errors() {
     // §0.3 guard: a project-scoped verb with no --project and no
     // active-project → E_PROJECT_NOT_FOUND on stdout, exit 1, *before*
     // any prefix resolution.
-    common::with_home(|home| {
-        let (code, v) = dispatch_under(home, &["verbreel", "clip", "list", "--clip_id", "c9f3a8"]);
+    common::with_home(|_home| {
+        let (code, v) = dispatch_under(&["verbreel", "clip", "list", "--clip_id", "c9f3a8"]);
         assert_eq!(code, 1);
         assert_eq!(
             v.get("code").and_then(Value::as_str),
@@ -170,21 +172,18 @@ fn create_with_activate_writes_active_project() {
     // id to the active-project file for the next invocation.
     common::with_home(|home| {
         let dest = home.join("created");
-        let (code, v) = dispatch_under(
-            home,
-            &[
-                "verbreel",
-                "project",
-                "create",
-                "--name",
-                "activated",
-                "--canvas",
-                "64x64",
-                "--at",
-                dest.to_str().unwrap(),
-                "--activate",
-            ],
-        );
+        let (code, v) = dispatch_under(&[
+            "verbreel",
+            "project",
+            "create",
+            "--name",
+            "activated",
+            "--canvas",
+            "64x64",
+            "--at",
+            dest.to_str().unwrap(),
+            "--activate",
+        ]);
         assert_eq!(code, 0, "create must succeed: {v}");
         let written = verbreel_cli::home::read_active_project(home)
             .expect("active-project file must be written");
