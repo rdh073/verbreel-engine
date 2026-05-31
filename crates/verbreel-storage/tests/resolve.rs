@@ -322,3 +322,69 @@ fn deregister_by_path_unindexed_returns_false() {
         "a non-matching path must leave the index intact"
     );
 }
+
+#[test]
+fn deregister_by_path_near_miss_is_byte_exact_and_does_nothing() {
+    // The path form compares the stored string verbatim — no
+    // canonicalisation (§2.8: the path form takes the exact on-disk
+    // string the index recorded at register time). A textually-different
+    // but logically-similar path (here a trailing slash) is therefore a
+    // miss: removed=false and the entry stays. This pins the sharp edge
+    // as intentional so a future "helpful" canonicalisation can't slip
+    // in silently.
+    let home = TempDir::new().unwrap();
+    register_project(home.path(), ID_A, "alpha", Path::new("/tmp/alpha"), AT).unwrap();
+
+    let removed = deregister_project_by_path(home.path(), "/tmp/alpha/").unwrap();
+    assert!(
+        !removed,
+        "a trailing-slash near-miss is not byte-equal, so nothing is removed"
+    );
+
+    let index = read_index(home.path()).unwrap();
+    assert!(
+        index.contains_key(ID_A),
+        "the byte-inexact near-miss must leave the original entry intact"
+    );
+}
+
+#[test]
+fn deregister_by_id_corrupt_index_surfaces_invalid_data_not_silent_empty() {
+    // A damaged index must surface an InvalidData IO error through the
+    // RMW read, never be silently swallowed to an empty map (which would
+    // make the deregister a no-op and the verb report "nothing removed").
+    // This is the storage half of the verb's E_IO path.
+    use std::fs;
+
+    let home = TempDir::new().unwrap();
+    let index = home.path().join(".verbreel/projects-index");
+    fs::create_dir_all(index.parent().unwrap()).unwrap();
+    fs::write(&index, b"{ not a json object").unwrap();
+
+    let err = deregister_project_by_id(home.path(), ID_A).unwrap_err();
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::InvalidData,
+        "corrupt index must surface InvalidData, got {err:?}"
+    );
+}
+
+#[test]
+fn deregister_by_path_corrupt_index_surfaces_invalid_data_not_silent_empty() {
+    // Same invariant for the path form: a corrupt index must not read as
+    // an empty map (which would silently return was_in_index=false), it
+    // must surface InvalidData so the verb can map it to E_IO.
+    use std::fs;
+
+    let home = TempDir::new().unwrap();
+    let index = home.path().join(".verbreel/projects-index");
+    fs::create_dir_all(index.parent().unwrap()).unwrap();
+    fs::write(&index, b"{ not a json object").unwrap();
+
+    let err = deregister_project_by_path(home.path(), "/tmp/alpha").unwrap_err();
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::InvalidData,
+        "corrupt index must surface InvalidData, got {err:?}"
+    );
+}

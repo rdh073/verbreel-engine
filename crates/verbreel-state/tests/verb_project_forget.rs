@@ -274,3 +274,61 @@ fn bad_range_display_surfaces_detail() {
     assert!(s.contains("bad range"));
     assert!(s.contains("specific complaint"));
 }
+
+// --- Corrupt-index -> E_IO (Io variant) ----------------------------------
+//
+// The Io variant only became reachable in the slice that wired the real
+// index RMW: a corrupt projects-index parses to InvalidData inside
+// `lock_and_read`, which `deregister_project_by_{id,path}` propagate and
+// `forget` converts to `ProjectForgetError::Io` (mapped to E_IO by the
+// engine envelope). These two tests pin both lookup forms onto that path
+// so the live E_IO code has direct coverage at the verb surface — not
+// just the silent-empty regression a corrupt index must never become.
+
+fn write_corrupt_index(home: &std::path::Path) {
+    use std::fs;
+    let index = home.join(".verbreel/projects-index");
+    fs::create_dir_all(index.parent().unwrap()).unwrap();
+    fs::write(&index, b"{ not a json object").unwrap();
+}
+
+#[test]
+fn id_form_on_corrupt_index_returns_io() {
+    let home = TempDir::new().unwrap();
+    write_corrupt_index(home.path());
+    let args = ProjectForgetArgs {
+        path: None,
+        project_id: Some("0190b8d3-15e3-7000-bd00-000000000001".to_string()),
+    };
+    let err = project_forget(home.path(), &args).expect_err("corrupt index must not succeed");
+    match err {
+        ProjectForgetError::Io(e) => assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::InvalidData,
+            "a corrupt index must surface as InvalidData IO, got {e:?}"
+        ),
+        other => panic!("expected Io(InvalidData), got {other:?}"),
+    }
+}
+
+#[test]
+fn path_form_on_corrupt_index_returns_io_not_was_in_index_false() {
+    // A corrupt index must NOT silently read as empty and report
+    // was_in_index: false — that would mask a damaged registry. It must
+    // surface E_IO instead.
+    let home = TempDir::new().unwrap();
+    write_corrupt_index(home.path());
+    let args = ProjectForgetArgs {
+        path: Some("/tmp/alpha".to_string()),
+        project_id: None,
+    };
+    let err = project_forget(home.path(), &args).expect_err("corrupt index must not succeed");
+    match err {
+        ProjectForgetError::Io(e) => assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::InvalidData,
+            "a corrupt index must surface as InvalidData IO, got {e:?}"
+        ),
+        other => panic!("expected Io(InvalidData), got {other:?}"),
+    }
+}
