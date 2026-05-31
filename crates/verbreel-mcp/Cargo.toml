@@ -38,3 +38,9 @@ native-render = [
 # Tests build an Engine over a TempDir home so each gets an isolated
 # .verbreel/projects-index.
 tempfile.workspace = true
+# server_e2e.rs drives the ServerHandler trait end-to-end over an
+# in-process tokio::io::duplex pipe: a real rmcp client (client feature)
+# on one half, VerbreelServer.serve() on the other. Peer::new is
+# pub(crate) in rmcp 1.7, so a live duplex client is the only way to
+# build the RequestContext those trait methods require.
+rmcp = { workspace = true, features = ["client", "transport-async-rw"] }
