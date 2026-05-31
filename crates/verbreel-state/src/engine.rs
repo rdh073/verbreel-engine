@@ -403,14 +403,20 @@ impl Engine {
         match project_open::open(&typed) {
             Ok((store, data)) => {
                 let id = store.project().id;
+                // Register the ABSOLUTIZED root the store resolved, NOT the
+                // caller's raw `typed.path`: `project.open` accepts a relative
+                // path (resolved against the caller's cwd by `to_absolute`),
+                // and a relative entry in the durable index would later resolve
+                // against a *different* process's cwd — defeating the
+                // cross-process resolution this registration exists for.
+                // `store.root()` is the absolute path the verb validated.
+                let root = store.root().to_path_buf();
                 self.open.insert(id, store);
-                // §2.6: opening (re-)appends the id→root entry. The
-                // resolver scans newest-first, so an already-indexed
-                // project is shadowed by this fresh append (newest wins) —
-                // re-registering never corrupts the index, it just records
-                // the most recent open. `typed.path` is the root the caller
-                // opened (the verb already validated it holds `project.json`).
-                let warnings = self.register_in_index(&id, &typed.path);
+                // §2.6: opening (re-)appends the id→root entry. The resolver
+                // scans newest-first, so an already-indexed project is
+                // shadowed by this fresh append (newest wins) — re-registering
+                // never corrupts the index, it just records the most recent open.
+                let warnings = self.register_in_index(&id, &root);
                 match serialize_or_internal("project.open", "data", &data) {
                     Ok(data_value) => Envelope::ok(data_value, json!([]), warnings, String::new()),
                     Err(env) => *env,

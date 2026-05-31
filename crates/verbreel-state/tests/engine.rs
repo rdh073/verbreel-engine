@@ -657,6 +657,66 @@ fn save_unopened_project_returns_not_found() {
 }
 
 #[test]
+fn open_with_relative_path_registers_absolute_root() {
+    use std::sync::Mutex;
+    // `std::env::set_current_dir` is process-global; serialize the cwd
+    // window so a parallel test never observes the temporary cwd. (No other
+    // engine test mutates cwd or opens with a relative path, so this lock is
+    // the only cwd writer.)
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
+    let _cwd_guard = CWD_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let original_cwd = std::env::current_dir().unwrap();
+
+    let dir = TempDir::new().unwrap();
+    let abs_root = dir.path().join("rel-open");
+    {
+        let mut engine = Engine::new(dir.path());
+        let id = create_project(&mut engine, &dir, "rel-open");
+        engine.dispatch("project.close", json!({ "project_id": id }));
+    }
+    // Wipe the index the create wrote, so the only entry under test is the
+    // one `project.open` registers.
+    let index = dir.path().join(".verbreel").join("projects-index");
+    if index.exists() {
+        std::fs::remove_file(&index).unwrap();
+    }
+
+    // cd into the temp dir so "rel-open" is a valid RELATIVE path to the
+    // project; `project.open`'s `to_absolute` resolves it against this cwd.
+    std::env::set_current_dir(dir.path()).unwrap();
+    let opened = {
+        let mut engine = Engine::new(dir.path());
+        engine.dispatch("project.open", json!({ "path": "rel-open" }))
+    };
+    // Restore cwd before any assertion that could unwind the test.
+    std::env::set_current_dir(&original_cwd).unwrap();
+
+    let Envelope::Ok { data, .. } = &opened else {
+        panic!("project.open(relative) must be Ok, got {opened:?}");
+    };
+    let id = data["project_id"]
+        .as_str()
+        .expect("open returns project_id");
+
+    // A fresh engine (empty open-map) must resolve the id to the ABSOLUTE
+    // root, not the raw relative "rel-open" — otherwise a later one-shot
+    // process resolves it against the wrong cwd. Regression guard for the
+    // `typed.path`-vs-`store.root()` registration bug.
+    let fresh = Engine::new(dir.path());
+    let resolved = fresh
+        .resolve_root(id)
+        .expect("open must register a resolvable root");
+    assert!(
+        resolved.is_absolute(),
+        "registered root must be absolute, got {resolved:?}"
+    );
+    assert_eq!(
+        resolved, abs_root,
+        "project.open(relative) must register the absolutized root, not the raw relative path"
+    );
+}
+
+#[test]
 fn reused_idempotency_key_with_different_args_returns_conflict() {
     let dir = TempDir::new().unwrap();
     let mut engine = Engine::new(dir.path());
