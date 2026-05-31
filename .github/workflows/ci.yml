@@ -80,6 +80,49 @@ jobs:
       # 121-verb / 121-fixture set); no caching of the report itself.
       - run: cargo run -p verbreel-conformance --release
 
+  ffmpeg:
+    name: cargo test/clippy codec-native (rsmpeg feature-on)
+    # ubuntu-24.04, NOT 22.04: rsmpeg is pinned to the `ffmpeg6` ABI, and
+    # 22.04's apt libav* is FFmpeg 4.4 (libavcodec 58) — an ABI mismatch
+    # that fails rsmpeg's bindgen. 24.04 ships FFmpeg 6.1.1 (libavcodec 60)
+    # via plain apt, satisfying `ffmpeg6` with no PPA or source build.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: install system FFmpeg 6.x dev libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libavcodec-dev libavformat-dev libavutil-dev \
+            libavdevice-dev libavfilter-dev libswscale-dev \
+            libswresample-dev libpostproc-dev pkg-config libclang-dev
+      - name: drop Libs.private from FFmpeg .pc files
+        # rusty_ffmpeg's build script (link_system_ffmpeg) probes its
+        # hardcoded 7-lib set — including libavdevice — with pkg-config in
+        # `--static` mode (it always passes .statik(true); no env overrides
+        # that). Static mode concatenates each .pc's `Libs.private`, which
+        # for libavdevice lists the full capture/render backend chain
+        # (raw1394, jack, SDL2, alsa, GL, pulse, …). Ubuntu ships libav* as
+        # dynamic .so only, so those backend -dev packages are absent and
+        # rust-lld fails with `unable to find library -lraw1394` etc. The
+        # .so already resolves its own deps, so for a dynamic link the
+        # Libs.private chain is spurious — strip it so the static probe
+        # returns just the FFmpeg libs Ubuntu actually provides.
+        run: |
+          pcdir=$(pkg-config --variable=pcfiledir libavcodec)
+          sudo sed -i '/^Libs.private:/d' \
+            "$pcdir"/lib{avcodec,avformat,avutil,avdevice,avfilter,swscale,swresample,postproc}.pc
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ffmpeg
+      - name: cargo test (rsmpeg feature-on)
+        run: cargo test -p verbreel-codec-native --features rsmpeg
+      - name: cargo clippy (rsmpeg feature-on)
+        run: cargo clippy -p verbreel-codec-native --features rsmpeg -- -D warnings
+
   wasm-check:
     name: cargo check wasm32
     runs-on: ubuntu-22.04
