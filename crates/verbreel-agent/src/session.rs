@@ -262,7 +262,11 @@ impl Session {
     /// - Any error [`Session::run`] can return, from the first failing
     ///   step.
     /// - [`AgentError::Lifecycle`] — the final save failed.
-    pub fn apply_plan(&mut self, plan: &Plan, caps: &Capabilities) -> Result<Vec<StepResult>, AgentError> {
+    pub fn apply_plan(
+        &mut self,
+        plan: &Plan,
+        caps: &Capabilities,
+    ) -> Result<Vec<StepResult>, AgentError> {
         plan.validate(caps)?;
         let mut results = Vec::with_capacity(plan.steps.len());
         for step in &plan.steps {
@@ -345,8 +349,8 @@ mod tests {
 
     fn temp_project() -> (tempfile::TempDir, Session) {
         let dir = tempfile::tempdir().expect("tempdir");
-        let session = Session::create(dir.path(), "demo", "1920x1080", None)
-            .expect("create project");
+        let session =
+            Session::create(dir.path(), "demo", "1920x1080", None).expect("create project");
         (dir, session)
     }
 

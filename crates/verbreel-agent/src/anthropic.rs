@@ -47,19 +47,23 @@ impl AnthropicClient {
     /// is unset, and [`PlannerError::Transport`] if the HTTP client cannot
     /// be built.
     pub fn from_env() -> Result<Self, PlannerError> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| PlannerError::NotConfigured {
-            detail: "set ANTHROPIC_API_KEY to use the Claude planner, or pass a plan file with \
+        let api_key =
+            std::env::var("ANTHROPIC_API_KEY").map_err(|_| PlannerError::NotConfigured {
+                detail:
+                    "set ANTHROPIC_API_KEY to use the Claude planner, or pass a plan file with \
                      `--plan`"
-                .to_string(),
-        })?;
-        let model = std::env::var("VERBREEL_PLANNER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+                        .to_string(),
+            })?;
+        let model =
+            std::env::var("VERBREEL_PLANNER_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
         let base_url =
             std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
-        let http = reqwest::blocking::Client::builder()
-            .build()
-            .map_err(|e| PlannerError::Transport {
-                detail: format!("could not build HTTP client: {e}"),
-            })?;
+        let http =
+            reqwest::blocking::Client::builder()
+                .build()
+                .map_err(|e| PlannerError::Transport {
+                    detail: format!("could not build HTTP client: {e}"),
+                })?;
         Ok(Self {
             http,
             api_key,

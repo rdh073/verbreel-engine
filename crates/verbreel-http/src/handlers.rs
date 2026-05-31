@@ -200,7 +200,11 @@ pub async fn agent_plan(
     let plan_json = serde_json::to_value(&plan).unwrap_or(Value::Null);
 
     if !body.apply {
-        return (StatusCode::OK, Json(json!({ "plan": plan_json, "applied": false }))).into_response();
+        return (
+            StatusCode::OK,
+            Json(json!({ "plan": plan_json, "applied": false })),
+        )
+            .into_response();
     }
 
     let root = state.workspace.join(&name);
@@ -347,8 +351,14 @@ fn parse_fps_opt(fps: Option<&str>) -> Result<Option<(u32, u32)>, String> {
     let (num, den) = s
         .split_once('/')
         .ok_or_else(|| "fps must be <num>/<den>, e.g. 30/1".to_string())?;
-    let num = num.trim().parse().map_err(|_| "fps numerator invalid".to_string())?;
-    let den = den.trim().parse().map_err(|_| "fps denominator invalid".to_string())?;
+    let num = num
+        .trim()
+        .parse()
+        .map_err(|_| "fps numerator invalid".to_string())?;
+    let den = den
+        .trim()
+        .parse()
+        .map_err(|_| "fps denominator invalid".to_string())?;
     Ok(Some((num, den)))
 }
 
@@ -359,8 +369,10 @@ fn parse_fps_opt(fps: Option<&str>) -> Result<Option<(u32, u32)>, String> {
 /// is created if absent.
 #[must_use]
 pub fn workspace_from_env() -> PathBuf {
-    let dir = std::env::var_os("VERBREEL_WORKSPACE")
-        .map_or_else(|| std::env::temp_dir().join("verbreel-workspace"), PathBuf::from);
+    let dir = std::env::var_os("VERBREEL_WORKSPACE").map_or_else(
+        || std::env::temp_dir().join("verbreel-workspace"),
+        PathBuf::from,
+    );
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

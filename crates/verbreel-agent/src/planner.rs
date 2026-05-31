@@ -194,7 +194,9 @@ mod tests {
         let planner = LlmPlanner::new(MockLlm::new(
             r#"{"steps":[{"verb":"project.rename","args":{"name":"x"}}],"rationale":"rename"}"#,
         ));
-        let plan = planner.plan("rename the project to x", &caps).expect("plans");
+        let plan = planner
+            .plan("rename the project to x", &caps)
+            .expect("plans");
         assert_eq!(plan.len(), 1);
         assert_eq!(plan.steps[0].verb, "project.rename");
         assert_eq!(plan.rationale.as_deref(), Some("rename"));

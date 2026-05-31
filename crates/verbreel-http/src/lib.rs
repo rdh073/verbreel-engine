@@ -74,10 +74,7 @@ pub fn router(state: AppState) -> Router {
             "/projects",
             get(handlers::list_projects).post(handlers::create_project),
         )
-        .route(
-            "/projects/{name}/tools/{verb}",
-            post(handlers::call_tool),
-        )
+        .route("/projects/{name}/tools/{verb}", post(handlers::call_tool))
         .route("/projects/{name}/agent", post(handlers::agent_plan))
         .with_state(state)
 }

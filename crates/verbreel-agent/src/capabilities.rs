@@ -98,7 +98,10 @@ impl Capabilities {
     pub fn by_domain(&self) -> BTreeMap<String, Vec<String>> {
         let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for v in &self.verbs {
-            grouped.entry(v.domain.clone()).or_default().push(v.id.clone());
+            grouped
+                .entry(v.domain.clone())
+                .or_default()
+                .push(v.id.clone());
         }
         for ids in grouped.values_mut() {
             ids.sort();

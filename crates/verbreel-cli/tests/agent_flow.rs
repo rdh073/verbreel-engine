@@ -68,7 +68,10 @@ fn create_then_plan_then_observe_persists() {
 
     // 3. read the persisted state back through a fresh open.
     let info = ok(&["verbreel", "run", root, "project.info"]);
-    assert!(info.contains("\"name\": \"Highlight Reel\""), "info: {info}");
+    assert!(
+        info.contains("\"name\": \"Highlight Reel\""),
+        "info: {info}"
+    );
     // create seeds Video 1 + Audio 1; track.add added a second video.
     assert!(info.contains("\"video\": 2"), "info: {info}");
 }
