@@ -290,5 +290,19 @@ fn assert_render_event_recorded(
     assert_eq!(recorded["details"]["job_id"], data.job_id);
     assert_eq!(recorded["details"]["output_path"], data.output_path);
     assert_eq!(recorded["details"]["duration_tk"], data.duration_tk);
+    // §0.1 self-reference guard: the recorded payload MUST NOT embed its own
+    // not-yet-minted id. `event_id` is set on the returned copy only *after*
+    // record_render_start_event mints it, so the persisted warning carries the
+    // empty default. This locks the ordering against a refactor that moves the
+    // `data.event_id = event_id` assignment above the record call — which would
+    // still pass the `event["id"] == data.event_id` check but reintroduce the
+    // self-reference this PR guards against.
+    assert!(
+        recorded["details"]["event_id"]
+            .as_str()
+            .unwrap_or("")
+            .is_empty(),
+        "recorded render.start payload must not embed its own event_id (self-reference): {recorded}"
+    );
     Ok(event)
 }
