@@ -90,7 +90,7 @@ Linux prerequisites:
 sudo apt-get update
 sudo apt-get install -y \
   pkg-config libclang-dev \
-  libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+  libavcodec-dev libavdevice-dev libavformat-dev libavutil-dev libswscale-dev \
   mesa-vulkan-drivers
 ```
 

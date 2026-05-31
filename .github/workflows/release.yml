@@ -51,7 +51,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config libclang-dev \
-            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libavcodec-dev libavdevice-dev libavformat-dev libavutil-dev libswscale-dev \
             mesa-vulkan-drivers
       - name: Render example
         env:
@@ -84,7 +84,7 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y \
               pkg-config libclang-dev \
-              libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
+              libavcodec-dev libavdevice-dev libavformat-dev libavutil-dev libswscale-dev
           elif [ "$RUNNER_OS" = "macOS" ]; then
             brew install ffmpeg llvm pkg-config
             echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
