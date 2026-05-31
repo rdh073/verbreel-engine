@@ -1,6 +1,6 @@
 //! Integration tests for [`verbreel_storage::layout::resolve_root_for_project_id`]
 //! and the §2.6 keyed-object index lifecycle helpers
-//! ([`register_project`], [`deregister_project`], [`prune_stale`]).
+//! ([`register_project`], [`list_and_prune`]).
 //!
 //! The index is a single JSON object keyed by `project_id` (§2.6), so a
 //! lookup is an O(1) map probe — not a newest-first line scan. These
@@ -9,11 +9,12 @@
 //! in from #445 (a corrupt single document fails atomically; the
 //! per-line shadow bug vanishes with the format).
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use tempfile::TempDir;
 use verbreel_storage::layout::{
-    IndexEntry, ResolveError, deregister_project, prune_stale, read_index, register_project,
+    IndexEntry, ResolveError, list_and_prune, read_index, register_project,
     resolve_root_for_project_id,
 };
 
@@ -96,52 +97,14 @@ fn register_stores_all_section_2_6_fields() {
     assert_eq!(entry.last_opened_at, AT);
 }
 
-// --- deregister_project --------------------------------------------------
+// --- list_and_prune ------------------------------------------------------
 
-#[test]
-fn deregister_removes_entry_and_reports_presence() {
-    let home = TempDir::new().unwrap();
-    register_project(home.path(), ID_A, "alpha", Path::new("/tmp/alpha"), AT).unwrap();
-    register_project(home.path(), ID_B, "beta", Path::new("/tmp/beta"), AT).unwrap();
-
-    assert!(
-        deregister_project(home.path(), ID_A).unwrap(),
-        "was present"
-    );
-    assert!(
-        matches!(
-            resolve_root_for_project_id(home.path(), ID_A),
-            Err(ResolveError::NotFound(_))
-        ),
-        "deregistered id must no longer resolve"
-    );
-    // The untouched sibling still resolves.
-    assert_eq!(
-        resolve_root_for_project_id(home.path(), ID_B).unwrap(),
-        Path::new("/tmp/beta"),
-    );
+fn no_exempt() -> BTreeSet<String> {
+    BTreeSet::new()
 }
 
 #[test]
-fn deregister_absent_id_returns_false() {
-    let home = TempDir::new().unwrap();
-    register_project(home.path(), ID_A, "alpha", Path::new("/tmp/alpha"), AT).unwrap();
-    assert!(
-        !deregister_project(home.path(), ID_B).unwrap(),
-        "absent id reports was_in_index=false, not an error"
-    );
-}
-
-#[test]
-fn deregister_on_absent_index_returns_false() {
-    let home = TempDir::new().unwrap();
-    assert!(!deregister_project(home.path(), ID_A).unwrap());
-}
-
-// --- prune_stale ---------------------------------------------------------
-
-#[test]
-fn prune_stale_removes_entries_whose_path_is_gone() {
+fn list_and_prune_removes_entries_whose_path_is_gone() {
     let home = TempDir::new().unwrap();
     let live = TempDir::new().unwrap(); // exists on disk
     register_project(home.path(), ID_A, "alpha", live.path(), AT).unwrap();
@@ -154,33 +117,84 @@ fn prune_stale_removes_entries_whose_path_is_gone() {
     )
     .unwrap();
 
-    let removed = prune_stale(home.path()).unwrap();
+    let (index, removed) = list_and_prune(home.path(), &no_exempt()).unwrap();
     assert_eq!(
         removed,
         vec![ID_B.to_string()],
-        "only the stale id is pruned"
+        "only the gone-path id is pruned"
     );
-
-    let index = read_index(home.path()).unwrap();
-    assert_eq!(index.len(), 1);
+    assert_eq!(index.len(), 1, "returned map already reflects the prune");
     assert!(index.contains_key(ID_A), "live entry survives the prune");
+
+    // The on-disk rewrite matches the returned map.
+    let reread = read_index(home.path()).unwrap();
+    assert_eq!(reread.len(), 1);
+    assert!(reread.contains_key(ID_A));
 }
 
 #[test]
-fn prune_stale_no_op_when_all_live_returns_empty() {
+fn list_and_prune_no_op_when_all_live_returns_empty() {
     let home = TempDir::new().unwrap();
     let live = TempDir::new().unwrap();
     register_project(home.path(), ID_A, "alpha", live.path(), AT).unwrap();
 
-    let removed = prune_stale(home.path()).unwrap();
-    assert!(removed.is_empty(), "no stale entries -> empty removed list");
+    let (index, removed) = list_and_prune(home.path(), &no_exempt()).unwrap();
+    assert!(removed.is_empty(), "no gone-path entries -> empty removed");
+    assert_eq!(index.len(), 1);
+}
+
+#[test]
+fn list_and_prune_on_absent_index_is_empty() {
+    let home = TempDir::new().unwrap();
+    let (index, removed) = list_and_prune(home.path(), &no_exempt()).unwrap();
+    assert!(removed.is_empty());
+    assert!(index.is_empty());
+}
+
+#[test]
+fn list_and_prune_never_removes_an_exempt_id_even_when_path_is_gone() {
+    // An open project whose path is transiently unreachable must NOT be
+    // dropped from the durable index by a read-shaped verb. The engine
+    // passes its open-project ids as `exempt`.
+    let home = TempDir::new().unwrap();
+    register_project(
+        home.path(),
+        ID_A,
+        "alpha",
+        Path::new("/no/such/path/ever"),
+        AT,
+    )
+    .unwrap();
+
+    let exempt: BTreeSet<String> = [ID_A.to_string()].into_iter().collect();
+    let (index, removed) = list_and_prune(home.path(), &exempt).unwrap();
+    assert!(
+        removed.is_empty(),
+        "an exempt (open) id is preserved despite a gone path"
+    );
+    assert!(index.contains_key(ID_A));
+    // Untouched index when only an exempt entry would have been pruned.
     assert_eq!(read_index(home.path()).unwrap().len(), 1);
 }
 
 #[test]
-fn prune_stale_on_absent_index_is_empty() {
+fn list_and_prune_corrupt_index_surfaces_invalid_data_not_empty() {
+    // A damaged index must surface an InvalidData IO error, never be
+    // silently swallowed to an empty map (the caller emits
+    // W_INDEX_UNREADABLE on this).
+    use std::fs;
+
     let home = TempDir::new().unwrap();
-    assert!(prune_stale(home.path()).unwrap().is_empty());
+    let index = home.path().join(".verbreel/projects-index");
+    fs::create_dir_all(index.parent().unwrap()).unwrap();
+    fs::write(&index, b"{ not a json object").unwrap();
+
+    let err = list_and_prune(home.path(), &no_exempt()).unwrap_err();
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::InvalidData,
+        "corrupt index must surface InvalidData, got {err:?}"
+    );
 }
 
 // --- #445 corruption regressions (folded; format makes them structural) --

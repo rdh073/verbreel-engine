@@ -8,7 +8,7 @@
 //!    `<root>/assets/` content-addressed storage tree).
 //!
 //! 2. [`projects_index_path`] + [`register_project`] /
-//!    [`deregister_project`] / [`prune_stale`] / [`resolve_root_for_project_id`]
+//!    [`list_and_prune`] / [`resolve_root_for_project_id`]
 //!    — the `<home>/.verbreel/projects-index` file (§2.6). It is a
 //!    **single JSON object keyed by `project_id`** (the same shape as
 //!    `~/.verbreel/idempotency.json`), maintained via `flock`'d
@@ -19,7 +19,7 @@
 //!    structurally impossible (#445): the file is one document, parsed
 //!    once — it either loads or fails atomically.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self};
 use std::path::{Path, PathBuf};
@@ -227,50 +227,64 @@ pub fn register_project(
     write_index(&index_path, &index)
 }
 
-/// Remove a project entry from the index by id (§2.8 `project.forget`).
+/// Read the index, prune stale entries, and return the surviving map
+/// plus the ids removed — all under one RMW lock acquisition (§2.6).
 ///
-/// Returns `true` if the entry was present (and therefore removed),
-/// `false` if no entry was keyed by `project_id`. A missing index reads
-/// as empty and yields `false` without writing.
+/// "Stale" is deliberately narrow: an entry is removed only when its
+/// `path` is confirmed gone via [`symlink_metadata`], i.e. the lookup
+/// returned `ENOENT`. A `Path::exists()`-style test would also report
+/// `false` for a transient `EACCES` or an unmounted network/external
+/// volume, which would permanently drop a still-valid registration on
+/// a momentary stat failure; those non-`NotFound` errors leave the
+/// entry in place. Entries whose id is in `exempt` are never pruned —
+/// the engine passes its open-project ids so a project it currently
+/// holds open is never removed from its own listing even if the path
+/// is transiently unreachable.
 ///
-/// # Errors
+/// Returning the post-prune index (not just the removed ids) lets the
+/// caller list under the same lock that pruned, closing the
+/// read-after-prune race a separate `read_index` would open and
+/// halving the lock/IO. When nothing is stale the file is left
+/// untouched (no rewrite). A missing index reads as empty.
 ///
-/// - [`io::Error`] of kind `InvalidData` if the existing index is
-///   corrupt, `WouldBlock` on lock contention, or any other IO failure.
-pub fn deregister_project(home: &Path, project_id: &str) -> io::Result<bool> {
-    let (_guard, index_path, mut index) = lock_and_read(home)?;
-    if index.remove(project_id).is_none() {
-        return Ok(false);
-    }
-    write_index(&index_path, &index)?;
-    Ok(true)
-}
-
-/// Prune index entries whose `path` no longer exists on disk (§2.6).
-///
-/// Returns the ids removed, in sorted order. When nothing is stale the
-/// index is left untouched (no rewrite). A missing index reads as empty
-/// and yields an empty list.
+/// Removed ids are returned in sorted order (BTreeMap iteration).
 ///
 /// # Errors
 ///
 /// - [`io::Error`] of kind `InvalidData` if the existing index is
-///   corrupt, `WouldBlock` on lock contention, or any other IO failure.
-pub fn prune_stale(home: &Path) -> io::Result<Vec<String>> {
+///   corrupt (so a damaged index surfaces, never silently empties).
+/// - [`io::Error`] of kind `WouldBlock` on lock contention, or any
+///   other IO failure reading/writing the index.
+pub fn list_and_prune(
+    home: &Path,
+    exempt: &BTreeSet<String>,
+) -> io::Result<(ProjectsIndex, Vec<String>)> {
     let (_guard, index_path, mut index) = lock_and_read(home)?;
     let removed: Vec<String> = index
         .iter()
-        .filter(|(_, entry)| !Path::new(&entry.path).exists())
+        .filter(|(id, entry)| !exempt.contains(*id) && path_confirmed_gone(&entry.path))
         .map(|(id, _)| id.clone())
         .collect();
     if removed.is_empty() {
-        return Ok(removed);
+        return Ok((index, removed));
     }
     for id in &removed {
         index.remove(id);
     }
     write_index(&index_path, &index)?;
-    Ok(removed)
+    Ok((index, removed))
+}
+
+/// `true` only when `path` is confirmed absent (`stat` → `ENOENT`).
+/// Any other `stat` error (`EACCES`, unmounted volume, `EIO`) returns
+/// `false` so a transiently-unreachable path is treated as present and
+/// its registration is preserved. Uses `symlink_metadata` to avoid
+/// following a dangling symlink into a misleading second error.
+fn path_confirmed_gone(path: &str) -> bool {
+    match fs::symlink_metadata(Path::new(path)) {
+        Ok(_) => false,
+        Err(e) => e.kind() == io::ErrorKind::NotFound,
+    }
 }
 
 /// Failure modes of [`resolve_root_for_project_id`].

@@ -595,35 +595,50 @@ impl Engine {
     /// is not represented in any patch — `W_INDEX_STALE` is the only
     /// observable signal that the index file was rewritten.
     ///
-    /// The index read/prune is best-effort: an IO or parse failure does
-    /// not fail the verb (a damaged index should not make "list my
-    /// projects" return an error). It logs via `tracing::warn!` and
-    /// returns an empty list, mirroring the `register_in_index`
-    /// non-fatal-index-write convention.
+    /// The read/prune is best-effort in the sense that a damaged index
+    /// does not fail the verb (a corrupt file should not make "list my
+    /// projects" return an error). But unlike a swallow-to-empty, a
+    /// read/parse failure surfaces a `W_INDEX_UNREADABLE` envelope
+    /// warning so the caller can distinguish "no projects registered"
+    /// from "index unreadable" — mirroring the `register_in_index`
+    /// `W_INDEX_WRITE_FAILED` convention (both log via `tracing::warn!`
+    /// AND emit an envelope warning; neither is silently swallowed).
+    ///
+    /// Pruning exempts every project this engine currently holds open:
+    /// a live project whose path is transiently unreachable must not be
+    /// dropped from the durable index by a read-shaped verb (§2.6).
     fn handle_project_list(&self) -> Envelope {
         let mut warnings: Vec<Value> = Vec::new();
 
-        let removed = match verbreel_storage::layout::prune_stale(&self.home) {
-            Ok(removed) => removed,
-            Err(e) => {
-                tracing::warn!(error = %e, "project.list: pruning the projects-index failed");
-                Vec::new()
-            }
-        };
-        for id in &removed {
-            warnings.push(json!({
-                "code": "W_INDEX_STALE",
-                "message": format!(
-                    "removed stale projects-index entry for `{id}` (path no longer exists)"
-                ),
-                "details": { "project_id": id },
-            }));
-        }
+        let exempt: std::collections::BTreeSet<String> =
+            self.open.keys().map(ToString::to_string).collect();
 
-        let index = match verbreel_storage::layout::read_index(&self.home) {
-            Ok(index) => index,
+        // One locked acquisition reads + prunes + returns the surviving
+        // map, so there is no read-after-prune race and the index is
+        // touched once. A read/parse failure is non-fatal but observable.
+        let index = match verbreel_storage::layout::list_and_prune(&self.home, &exempt) {
+            Ok((index, removed)) => {
+                for id in &removed {
+                    warnings.push(json!({
+                        "code": "W_INDEX_STALE",
+                        "message": format!(
+                            "removed stale projects-index entry for `{id}` (path no longer exists)"
+                        ),
+                        "details": { "project_id": id },
+                    }));
+                }
+                index
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "project.list: reading the projects-index failed");
+                warnings.push(json!({
+                    "code": "W_INDEX_UNREADABLE",
+                    "message": format!(
+                        "the projects-index could not be read; \
+                         project.list may be incomplete: {e}"
+                    ),
+                    "details": { "error": e.to_string() },
+                }));
                 verbreel_storage::layout::ProjectsIndex::new()
             }
         };

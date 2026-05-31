@@ -1258,3 +1258,160 @@ fn save_with_dry_run_is_rejected() {
     };
     assert_eq!(code, "E_SCHEMA_VIOLATION");
 }
+
+// ---- project.list engine handler (§2.6) — open/closed marking, prune ----
+
+/// Helper: extract the `Ok` envelope parts or panic.
+fn ok_parts(env: Envelope) -> (Value, Value, Vec<Value>, String) {
+    let Envelope::Ok {
+        data,
+        patch,
+        warnings,
+        event_id,
+    } = env
+    else {
+        panic!("expected Ok envelope, got {env:?}");
+    };
+    (data, patch, warnings, event_id)
+}
+
+#[test]
+fn project_list_marks_open_closed_prunes_stale_and_sorts() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+
+    // (1) A live project created + opened in this engine -> state "open".
+    let open_id = create_project(&mut engine, &dir, "open-proj");
+
+    // (2) A second real project, created then closed -> registered, on
+    // disk, but not in the open-map -> state "closed".
+    let closed_id = create_project(&mut engine, &dir, "closed-proj");
+    engine.dispatch("project.close", json!({ "project_id": closed_id }));
+
+    // (3) A stale registration pointing at a path that does not exist ->
+    // pruned on list with one W_INDEX_STALE warning.
+    let stale_id = "0192f3a0-0000-7000-8000-0000000000ff";
+    verbreel_storage::layout::register_project(
+        dir.path(),
+        stale_id,
+        "stale-proj",
+        std::path::Path::new("/no/such/path/ever/list-test"),
+        "2025-01-01T00:00:00Z",
+    )
+    .expect("register stale entry");
+
+    let env = engine.dispatch("project.list", json!({}));
+    let (data, patch, warnings, event_id) = ok_parts(env);
+
+    // Read-shaped verb: empty patch + event_id.
+    assert_eq!(patch, json!([]));
+    assert_eq!(event_id, "");
+
+    // Exactly one W_INDEX_STALE for the pruned entry.
+    let stale: Vec<&Value> = warnings
+        .iter()
+        .filter(|w| w["code"] == json!("W_INDEX_STALE"))
+        .collect();
+    assert_eq!(stale.len(), 1, "one stale entry pruned: {warnings:?}");
+    assert_eq!(stale[0]["details"]["project_id"], json!(stale_id));
+
+    let projects = data["projects"].as_array().expect("projects array");
+    assert_eq!(projects.len(), 2, "stale entry pruned from listing");
+
+    // Sorted by id ascending.
+    let ids: Vec<&str> = projects.iter().map(|p| p["id"].as_str().unwrap()).collect();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(ids, sorted, "projects sorted by id");
+
+    // open/closed marking from the live open-map.
+    let state_of = |id: &str| -> String {
+        projects
+            .iter()
+            .find(|p| p["id"] == json!(id))
+            .and_then(|p| p["state"].as_str())
+            .unwrap_or("missing")
+            .to_string()
+    };
+    assert_eq!(
+        state_of(&open_id),
+        "open",
+        "the open project is marked open"
+    );
+    assert_eq!(
+        state_of(&closed_id),
+        "closed",
+        "the closed project is marked closed"
+    );
+
+    // The stale entry is gone from the durable index after the prune.
+    let index = verbreel_storage::layout::read_index(dir.path()).unwrap();
+    assert!(
+        !index.contains_key(stale_id),
+        "stale entry pruned from disk"
+    );
+}
+
+#[test]
+fn project_list_does_not_prune_an_open_project_with_unreachable_path() {
+    // An open project whose path is (registered as) unreachable must NOT
+    // be dropped by project.list — the engine exempts its open ids. We
+    // simulate this by overwriting the open project's index entry with a
+    // gone path, then listing: it must survive and stay "open".
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let open_id = create_project(&mut engine, &dir, "still-open");
+
+    // Re-register the open id pointing at a path that does not exist.
+    verbreel_storage::layout::register_project(
+        dir.path(),
+        &open_id,
+        "still-open",
+        std::path::Path::new("/no/such/path/ever/open-exempt"),
+        "2025-01-01T00:00:00Z",
+    )
+    .expect("overwrite open entry with gone path");
+
+    let env = engine.dispatch("project.list", json!({}));
+    let (data, _, warnings, _) = ok_parts(env);
+
+    assert!(
+        warnings.iter().all(|w| w["code"] != json!("W_INDEX_STALE")),
+        "an open project must not be pruned: {warnings:?}"
+    );
+    let projects = data["projects"].as_array().expect("projects array");
+    let entry = projects
+        .iter()
+        .find(|p| p["id"] == json!(open_id))
+        .expect("open project still listed");
+    assert_eq!(entry["state"], json!("open"));
+
+    // And it survives in the durable index.
+    let index = verbreel_storage::layout::read_index(dir.path()).unwrap();
+    assert!(index.contains_key(&open_id), "open entry preserved on disk");
+}
+
+#[test]
+fn project_list_corrupt_index_warns_unreadable_not_silent_empty() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+
+    // Corrupt the index file directly.
+    let vdir = dir.path().join(".verbreel");
+    std::fs::create_dir_all(&vdir).unwrap();
+    std::fs::write(vdir.join("projects-index"), b"{ not json").unwrap();
+
+    let env = engine.dispatch("project.list", json!({}));
+    let (data, _, warnings, _) = ok_parts(env);
+
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w["code"] == json!("W_INDEX_UNREADABLE")),
+        "a corrupt index must surface W_INDEX_UNREADABLE, not a silent empty list: {warnings:?}"
+    );
+    assert!(
+        data["projects"].as_array().unwrap().is_empty(),
+        "unreadable index lists no projects"
+    );
+}
