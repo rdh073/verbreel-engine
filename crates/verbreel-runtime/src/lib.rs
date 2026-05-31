@@ -201,6 +201,28 @@ pub enum RuntimeError {
     },
 }
 
+impl RuntimeError {
+    /// The stable §0.7 `E_*` error code for this runtime failure, shared by
+    /// every surface (CLI/MCP/HTTP) so the wire `code` is uniform by
+    /// construction. The match is exhaustive: a new `RuntimeError` variant
+    /// is a compile error here, not a silent misclassification.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::ProjectNotFound { .. } => "E_PROJECT_NOT_FOUND",
+            Self::RenderPresetUnknown { .. } => "E_RENDER_PRESET_UNKNOWN",
+            Self::BadRange { .. } => "E_BAD_RANGE",
+            Self::BadTime { .. } => "E_BAD_TIME",
+            Self::ArgsIncompatible { .. } => "E_ARGS_INCOMPATIBLE",
+            Self::OutPathExists { .. } => "E_OUT_PATH_EXISTS",
+            Self::PathEscape { .. } => "E_PATH_ESCAPE",
+            Self::RenderEmptyRange => "E_RENDER_EMPTY_RANGE",
+            Self::Io { .. } => "E_IO",
+            Self::RenderFail { .. } => "E_RENDER_FAIL",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ProjectIndexEntry {
     id: String,
@@ -711,5 +733,63 @@ fn ir_node_id(raw: &str) -> Result<IrNodeId, RuntimeError> {
 fn render_fail<E: Display>(context: &'static str) -> impl FnOnce(E) -> RuntimeError + Copy {
     move |err| RuntimeError::RenderFail {
         detail: format!("{context}: {err}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeError;
+
+    fn detail() -> String {
+        "x".to_string()
+    }
+
+    #[test]
+    fn code_maps_every_variant_to_its_section_0_7_error() {
+        // Exhaustive table over every RuntimeError variant. Adding a variant
+        // without extending this table fails to compile in `code()`, and a
+        // copy-paste slip in the mapping is caught here rather than on the wire.
+        let cases: [(RuntimeError, &str); 10] = [
+            (
+                RuntimeError::ProjectNotFound {
+                    project_id: "p".to_string(),
+                },
+                "E_PROJECT_NOT_FOUND",
+            ),
+            (
+                RuntimeError::RenderPresetUnknown {
+                    preset: "p".to_string(),
+                },
+                "E_RENDER_PRESET_UNKNOWN",
+            ),
+            (RuntimeError::BadRange { detail: detail() }, "E_BAD_RANGE"),
+            (RuntimeError::BadTime { detail: detail() }, "E_BAD_TIME"),
+            (
+                RuntimeError::ArgsIncompatible { detail: detail() },
+                "E_ARGS_INCOMPATIBLE",
+            ),
+            (
+                RuntimeError::OutPathExists {
+                    path: "p".to_string(),
+                },
+                "E_OUT_PATH_EXISTS",
+            ),
+            (
+                RuntimeError::PathEscape {
+                    path: "p".to_string(),
+                },
+                "E_PATH_ESCAPE",
+            ),
+            (RuntimeError::RenderEmptyRange, "E_RENDER_EMPTY_RANGE"),
+            (RuntimeError::Io { detail: detail() }, "E_IO"),
+            (
+                RuntimeError::RenderFail { detail: detail() },
+                "E_RENDER_FAIL",
+            ),
+        ];
+
+        for (err, expected) in cases {
+            assert_eq!(err.code(), expected, "code mismatch for {err:?}");
+        }
     }
 }
