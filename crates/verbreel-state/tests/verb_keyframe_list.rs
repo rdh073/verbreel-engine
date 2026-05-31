@@ -353,8 +353,8 @@ fn verb_routes_through_mutate_via_verb() {
         .mutate_via_verb("keyframe.list", args, None)
         .expect("keyframe.list should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("happy path must return Applied");
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("happy path must return NoOp");
     };
 
     assert!(warnings.is_empty());

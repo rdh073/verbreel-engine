@@ -387,8 +387,8 @@ fn verb_routes_through_mutate_via_verb() {
         )
         .expect("schema should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("expected Applied outcome from schema");
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("expected NoOp outcome from schema");
     };
     assert!(warnings.is_empty());
 

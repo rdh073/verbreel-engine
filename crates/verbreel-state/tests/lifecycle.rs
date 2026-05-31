@@ -367,6 +367,7 @@ fn lifecycle_mutate_with_key_first_call_applied() {
             event_id,
             data: _,
             warnings: _,
+            ..
         } => event_id,
         other => panic!("first call should be Applied, got {other:?}"),
     };
@@ -398,6 +399,7 @@ fn lifecycle_mutate_with_key_replay_returns_replayed_outcome() {
         event_id: first_id,
         data: _,
         warnings: _,
+        ..
     } = first
     else {
         panic!("first call should be Applied, got {first:?}");
@@ -410,6 +412,7 @@ fn lifecycle_mutate_with_key_replay_returns_replayed_outcome() {
         event_id: replay_id,
         data: _,
         warnings: _,
+        ..
     } = second
     else {
         panic!("second call should be Replayed, got {second:?}");
@@ -512,6 +515,7 @@ fn lifecycle_mutate_without_key_skips_dedup() {
         event_id: id_one,
         data: _,
         warnings: _,
+        ..
     } = outcome_one
     else {
         panic!("first un-keyed call should be Applied");
@@ -520,6 +524,7 @@ fn lifecycle_mutate_without_key_skips_dedup() {
         event_id: id_two,
         data: _,
         warnings: _,
+        ..
     } = outcome_two
     else {
         panic!("second un-keyed call should be Applied");
@@ -561,6 +566,7 @@ fn lifecycle_open_rebuilds_index_from_events() {
             event_id,
             data: _,
             warnings: _,
+            ..
         } = outcome
         else {
             panic!("first call should be Applied");

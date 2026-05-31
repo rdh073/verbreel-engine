@@ -384,8 +384,8 @@ fn verb_routes_through_mutate_via_verb() {
         .mutate_via_verb("help", json!({ "project_id": FIXTURE_PROJECT_ID }), None)
         .expect("help should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("expected Applied outcome from help");
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("expected NoOp outcome from help");
     };
     assert!(warnings.is_empty());
 

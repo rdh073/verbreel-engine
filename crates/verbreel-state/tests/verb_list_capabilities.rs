@@ -309,8 +309,8 @@ fn verb_routes_through_mutate_via_verb() {
         )
         .expect("list_capabilities should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("expected Applied outcome from list_capabilities");
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("expected NoOp outcome from list_capabilities");
     };
     assert!(warnings.is_empty());
 

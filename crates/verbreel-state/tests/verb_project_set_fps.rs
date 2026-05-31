@@ -475,6 +475,7 @@ fn verb_routes_through_mutate_via_verb() {
         event_id,
         data,
         warnings: _,
+        ..
     } = outcome
     else {
         panic!("happy path must return Applied, got {outcome:?}");

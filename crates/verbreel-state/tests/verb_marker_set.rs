@@ -481,7 +481,8 @@ fn verb_routes_through_mutate_via_verb() {
         verbreel_state::MutateOutcome::Applied {
             event_id: _,
             data: _,
-            warnings: _
+            warnings: _,
+            ..
         }
     ));
 
@@ -548,7 +549,8 @@ fn replay_returns_same_marker_state() {
         verbreel_state::MutateOutcome::Applied {
             event_id: _,
             data: _,
-            warnings: _
+            warnings: _,
+            ..
         }
     ));
 

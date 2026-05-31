@@ -364,7 +364,7 @@ fn default_registry_route_returns_empty_history_data() {
 
 #[cfg(feature = "native")]
 #[test]
-fn mutate_via_verb_returns_applied_with_empty_history_data() {
+fn mutate_via_verb_returns_noop_with_empty_history_data() {
     use tempfile::TempDir;
 
     let dir = TempDir::new().expect("tempdir");
@@ -384,8 +384,9 @@ fn mutate_via_verb_returns_applied_with_empty_history_data() {
         )
         .expect("timeline.history should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("expected Applied outcome from timeline.history");
+    // timeline.history is read-only (empty patch) → NoOp, no event line.
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("expected NoOp outcome from read-only timeline.history, got {outcome:?}");
     };
     assert!(warnings.is_empty());
 

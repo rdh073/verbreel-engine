@@ -472,7 +472,7 @@ fn default_registry_contains_template_list() {
 
 #[cfg(feature = "native")]
 #[test]
-fn mutate_via_verb_returns_applied_empty_list_envelope() {
+fn mutate_via_verb_returns_noop_empty_list_envelope() {
     use tempfile::TempDir;
 
     let dir = TempDir::new().expect("tempdir");
@@ -496,8 +496,9 @@ fn mutate_via_verb_returns_applied_empty_list_envelope() {
         )
         .expect("template.list should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("expected Applied outcome from template.list");
+    // template.list is read-only (empty patch) → NoOp, no event line.
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("expected NoOp outcome from read-only template.list, got {outcome:?}");
     };
     assert!(warnings.is_empty());
 

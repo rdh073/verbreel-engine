@@ -277,6 +277,28 @@ pub struct SaveInfo {
 /// `warnings` is always empty — the raw API does not execute the verb
 /// trait and therefore cannot emit warnings yet.
 ///
+/// ## §0.1 envelope `patch` surfacing
+///
+/// All variants carry the RFC 6902 `patch` that the call resolved to
+/// (`Applied`/`NoOp` carry the freshly-computed patch; `Replayed` carries
+/// the recorded patch read back from the event line). The §0.1 result
+/// envelope requires `patch`, so the kernel surfaces the already-computed
+/// value rather than forcing the surface layer to recompute it. For the
+/// raw [`ProjectStore::mutate`] tuple API the caller already owns the
+/// patch they passed in, so it is echoed back unchanged.
+///
+/// ## Empty-patch fast-path (§0.6 read-only / no-op verbs)
+///
+/// A verb whose `compute_patch` resolves to an **empty** RFC 6902 patch
+/// (`[]`) is a read-only verb (`*.list`, `timeline.snapshot`, …) or a
+/// no-op. Per §0.6/§0.8 such a call has nothing to persist, so
+/// [`ProjectStore::mutate_via_verb`] returns [`MutateOutcome::NoOp`]
+/// **without** writing an event line — there is no `event_id` because no
+/// event exists. The surface layer maps `NoOp` to the §0.1 `event_id: ""`
+/// shape. This is the spec-faithful way to keep project-scoped read verbs
+/// out of `events.jsonl` without a `Verb`-trait `is_read_only` flag — the
+/// empty patch *is* the read-only signal.
+///
 /// ## Replay-path semantics
 ///
 /// On the [`MutateOutcome::Replayed`] path, the `data` field is
@@ -291,8 +313,9 @@ pub struct SaveInfo {
 /// `warnings.details.*` content still surfaces the original envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MutateOutcome {
-    /// First call (or call without an `idempotency_key`). The patch was
-    /// written to events.jsonl and applied in memory.
+    /// First call (or call without an `idempotency_key`) whose patch was
+    /// non-empty. The patch was written to events.jsonl and applied in
+    /// memory.
     Applied {
         /// Id of the event the call emitted.
         event_id: EventId,
@@ -305,6 +328,9 @@ pub enum MutateOutcome {
         /// For raw [`ProjectStore::mutate`] callers this is always
         /// `Vec::new()`.
         warnings: Vec<Value>,
+        /// The RFC 6902 patch that was written to the event line and
+        /// applied. Always non-empty on this variant.
+        patch: json_patch::Patch,
     },
     /// Same-key + same-fingerprint replay. Nothing was written, nothing
     /// was applied. `event_id` is the id of the original first call's
@@ -320,6 +346,27 @@ pub enum MutateOutcome {
         /// Replay semantics preserve the original event's warnings and
         /// append `W_REPLAY` as the final element.
         warnings: Vec<Value>,
+        /// The RFC 6902 patch recorded on the original event line, read
+        /// back during replay.
+        patch: json_patch::Patch,
+    },
+    /// Empty-patch fast-path (§0.6/§0.8): the verb's `compute_patch`
+    /// resolved to an empty patch (`[]`), so it is a read-only verb or a
+    /// no-op. No event was written and the in-memory project is
+    /// unchanged. There is no `event_id` because no event exists — the
+    /// surface layer maps this to the §0.1 `event_id: ""` shape.
+    ///
+    /// Only [`ProjectStore::mutate_via_verb`] produces this variant; the
+    /// raw [`ProjectStore::mutate`] tuple API always writes an event for
+    /// the patch it was handed (an empty patch passed to the raw API is
+    /// still recorded, preserving its pre-existing contract).
+    NoOp {
+        /// The verb's typed envelope `.data` value.
+        data: Value,
+        /// Emitted warning JSON values.
+        warnings: Vec<Value>,
+        /// The RFC 6902 patch — always empty (`[]`) on this variant.
+        patch: json_patch::Patch,
     },
 }
 
@@ -759,6 +806,7 @@ impl ProjectStore {
                 event_id,
                 data: Value::Null,
                 warnings,
+                patch: patch.clone(),
             });
         };
 
@@ -769,6 +817,10 @@ impl ProjectStore {
                 event_id,
                 data: Value::Null,
                 warnings: Vec::new(),
+                // Same fingerprint ⇒ same args ⇒ same patch the caller
+                // handed in; echo it (the raw API does not read the
+                // on-disk recorded patch).
+                patch: patch.clone(),
             }),
             LookupOutcome::InProgress => Err(LifecycleError::IdempotencyBusy { key }),
             LookupOutcome::ConflictingFingerprint {
@@ -801,6 +853,7 @@ impl ProjectStore {
                                 event_id,
                                 data: Value::Null,
                                 warnings: Vec::new(),
+                                patch: patch.clone(),
                             });
                         }
                     }
@@ -820,6 +873,7 @@ impl ProjectStore {
                             event_id,
                             data: Value::Null,
                             warnings: event_warnings,
+                            patch: patch.clone(),
                         })
                     }
                     Err(e) => {
@@ -923,68 +977,152 @@ impl ProjectStore {
         // Step B: compute patch + data.
         let (patch, data, warnings) = self.compute_verb_patch(verb_id, &args, verb.as_ref())?;
 
-        // Step C: delegate to the existing raw mutate() for §0.8
-        // write-ordering + idempotency. Then thread the typed `data`
+        // Step B': empty-patch fast-path (§0.6/§0.8). A verb whose patch
+        // resolved to `[]` is a read-only verb or a no-op — there is
+        // nothing new to persist.
+        //
+        // Idempotency interaction: the fast-path must NOT swallow a
+        // legitimate §0.8 replay. A mutating verb that was a real
+        // mutation on its first keyed call can compute an *empty* patch
+        // on a same-key retry once the first call already moved the
+        // graph (e.g. `marker.remove --soft` on an already-removed
+        // marker, `track.lock --locked true` on an already-locked
+        // track). For such a retry the §0.8 contract says: return the
+        // ORIGINAL cached envelope (`Replayed` + `W_REPLAY`), not a fresh
+        // `NoOp`. So when a key is present we consult the in-memory index
+        // first; only a genuine first-call no-op (no completed entry for
+        // the key) returns `NoOp`. An un-keyed empty patch is always a
+        // plain `NoOp` (read verbs, no-ops) — no index slot is taken.
+        if patch.0.is_empty() {
+            let Some(key) = idempotency_key.as_deref() else {
+                return Ok(MutateOutcome::NoOp {
+                    data,
+                    warnings,
+                    patch,
+                });
+            };
+
+            let fingerprint = verbreel_canon::sha256_hex(&args)?;
+            return match self.idempotency.lookup(key, &fingerprint) {
+                LookupOutcome::Completed { event_id } => {
+                    self.reconstruct_replayed(verb_id, verb.as_ref(), event_id)
+                }
+                LookupOutcome::InProgress => Err(LifecycleError::IdempotencyBusy {
+                    key: key.to_string(),
+                }),
+                LookupOutcome::ConflictingFingerprint {
+                    existing_fingerprint,
+                } => Err(LifecycleError::IdempotencyConflict {
+                    key: key.to_string(),
+                    existing_fingerprint,
+                }),
+                // First call (or aged-out) whose patch is empty: a fresh
+                // no-op. Do NOT reserve a slot or write an event — there
+                // is nothing to dedup against.
+                LookupOutcome::Absent | LookupOutcome::Expired => Ok(MutateOutcome::NoOp {
+                    data,
+                    warnings,
+                    patch,
+                }),
+            };
+        }
+
+        // Step C: non-empty patch — delegate to the raw mutate() for §0.8
+        // write-ordering + idempotency, then thread the typed `data`
         // through the returned outcome.
         match self.mutate_with_warnings(verb_id, args, &patch, idempotency_key, warnings)? {
             MutateOutcome::Applied {
-                event_id, warnings, ..
+                event_id,
+                warnings,
+                patch,
+                ..
             } => Ok(MutateOutcome::Applied {
                 event_id,
                 data,
                 warnings,
+                patch,
             }),
-            MutateOutcome::Replayed {
-                event_id,
-                warnings: _,
-                ..
-            } => {
-                // §0.8 replay: drop the freshly-computed `data` and
-                // reconstruct from the on-disk event line per the
-                // method's "Replay path semantics" rustdoc.
-                let recorded = self
-                    .backend
-                    .read_by_id(&event_id)?
-                    .ok_or(LifecycleError::ReplayEventMissing { event_id })?;
-
-                // `Verb::reconstruct` takes `patch: &Value` (the wire
-                // shape) — convert the recorded `json_patch::Patch`.
-                let patch_value = serde_json::to_value(&recorded.patch).map_err(|e| {
-                    LifecycleError::ReplayReconstructFailed {
-                        event_id,
-                        verb_id: verb_id.to_string(),
-                        source: ReconstructError::Custom(format!(
-                            "recorded patch could not be re-serialized to Value: {e}"
-                        )),
-                    }
-                })?;
-
-                let mut warnings = recorded.warnings.clone();
-                warnings.push(json!({
-                    "code": "W_REPLAY",
-                    "message": "idempotent replay"
-                }));
-
-                let data = verb
-                    .reconstruct(
-                        &recorded.args,
-                        &patch_value,
-                        &recorded.warnings,
-                        &self.project,
-                    )
-                    .map_err(|source| LifecycleError::ReplayReconstructFailed {
-                        event_id,
-                        verb_id: verb_id.to_string(),
-                        source,
-                    })?;
-
-                Ok(MutateOutcome::Replayed {
-                    event_id,
-                    data,
-                    warnings,
+            MutateOutcome::NoOp { .. } => {
+                // Unreachable: `mutate_with_warnings` (the raw write path)
+                // never emits `NoOp` — it always writes an event for the
+                // non-empty patch handed to it. Surface a typed error
+                // rather than silently fabricating an outcome.
+                Err(LifecycleError::VerbExecutionFailed {
+                    verb_id: verb_id.to_string(),
+                    source: VerbError::Custom(
+                        "internal: raw mutate path returned NoOp for a non-empty patch".to_string(),
+                    ),
                 })
             }
+            MutateOutcome::Replayed { event_id, .. } => {
+                // §0.8 replay: drop the freshly-computed `data` and
+                // reconstruct from the on-disk event line.
+                self.reconstruct_replayed(verb_id, verb.as_ref(), event_id)
+            }
         }
+    }
+
+    /// §0.8 replay-path data reconstruction. Reads the recorded event by
+    /// id, reconstructs the verb's `data` from the recorded 5-tuple, and
+    /// returns [`MutateOutcome::Replayed`] with the original warnings
+    /// (plus a trailing `W_REPLAY`) and the recorded patch.
+    ///
+    /// Shared between the non-empty-patch replay branch and the
+    /// empty-patch-but-keyed replay branch of [`Self::mutate_via_verb`]:
+    /// a same-key retry whose patch is now empty (because the first call
+    /// already moved the graph) must still surface the ORIGINAL envelope
+    /// per §0.8, not a fresh `NoOp`.
+    fn reconstruct_replayed(
+        &self,
+        verb_id: &str,
+        verb: &dyn Verb,
+        event_id: EventId,
+    ) -> Result<MutateOutcome, LifecycleError> {
+        let recorded = self
+            .backend
+            .read_by_id(&event_id)?
+            .ok_or(LifecycleError::ReplayEventMissing { event_id })?;
+
+        // `Verb::reconstruct` takes `patch: &Value` (the wire shape) —
+        // convert the recorded `json_patch::Patch`.
+        let patch_value = serde_json::to_value(&recorded.patch).map_err(|e| {
+            LifecycleError::ReplayReconstructFailed {
+                event_id,
+                verb_id: verb_id.to_string(),
+                source: ReconstructError::Custom(format!(
+                    "recorded patch could not be re-serialized to Value: {e}"
+                )),
+            }
+        })?;
+
+        let mut warnings = recorded.warnings.clone();
+        warnings.push(json!({
+            "code": "W_REPLAY",
+            "message": "idempotent replay"
+        }));
+
+        let data = verb
+            .reconstruct(
+                &recorded.args,
+                &patch_value,
+                &recorded.warnings,
+                &self.project,
+            )
+            .map_err(|source| LifecycleError::ReplayReconstructFailed {
+                event_id,
+                verb_id: verb_id.to_string(),
+                source,
+            })?;
+
+        Ok(MutateOutcome::Replayed {
+            event_id,
+            data,
+            warnings,
+            // §0.1 envelope `patch` on the replay path is the patch
+            // recorded on the original event line, not the duplicate
+            // call's freshly-computed one.
+            patch: recorded.patch,
+        })
     }
 
     /// Steps 1-3 of §0.8 write-ordering. Shared between the keyed and

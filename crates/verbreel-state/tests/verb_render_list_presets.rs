@@ -363,8 +363,8 @@ fn verb_routes_through_mutate_via_verb() {
         )
         .expect("render.list_presets should route");
 
-    let MutateOutcome::Applied { data, warnings, .. } = outcome else {
-        panic!("expected Applied outcome from render.list_presets");
+    let MutateOutcome::NoOp { data, warnings, .. } = outcome else {
+        panic!("expected NoOp outcome from render.list_presets");
     };
     assert!(warnings.is_empty());
 
