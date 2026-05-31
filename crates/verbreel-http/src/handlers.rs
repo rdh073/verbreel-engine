@@ -1,201 +1,366 @@
-//! HTTP endpoint handlers.
+//! HTTP endpoint handlers — the Agentic-Experience surface.
 //!
-//! Three responsibilities, kept separate from the routing surface in
-//! `lib.rs`:
+//! The server is bound to a *workspace* directory ([`AppState`]).
+//! Projects live at `<workspace>/<name>`; mutating verbs route through a
+//! real [`verbreel_agent::Session`] (the §0.8 write-ordering kernel), so
+//! edits persist. Three responsibility groups, kept separate from the
+//! routing surface in `lib.rs`:
 //!
-//! 1. [`healthz`] — flat liveness probe.
-//! 2. [`list_tools`] — advertise the verbs whitelisted in
-//!    [`SUPPORTED_VERBS`].
-//! 3. [`call_tool`] — route a `POST /tools/{verb}` request through
-//!    [`verbreel_state::default_registry`] and return the verb's `data`
-//!    envelope under a top-level `data` key.
+//! 1. **Discovery** — [`healthz`], [`capabilities`] (the full verb
+//!    catalog + per-verb args schemas), [`list_tools`].
+//! 2. **Project lifecycle** — [`list_projects`], [`create_project`].
+//! 3. **Dispatch** — [`call_tool`] applies one verb to a named project;
+//!    [`agent_plan`] (feature `claude`) turns an intent into a plan and
+//!    applies it.
 //!
-//! ## Why a whitelist
+//! ## Path-traversal guard
 //!
-//! `verbreel-state` ships ~82 production verbs. Most need an on-disk
-//! project, an event log, and a held lock — none of which this HTTP
-//! server owns at v1 floor. The [`SUPPORTED_VERBS`] constant makes the
-//! exposed surface explicit. Adding a verb later is additive: append
-//! its name here and (if richer than the default description is
-//! warranted) extend [`describe_verb`] with a matching arm. No edits
-//! to [`call_tool`] required — the dispatch is registry-driven.
-//!
-//! ## Response shape (`POST /tools/{verb}`)
-//!
-//! | Status | Body                                                |
-//! |--------|-----------------------------------------------------|
-//! | 200    | `{"data": <verb-envelope>}`                          |
-//! | 400    | `{"error": "bad args", "detail": "<reason>"}`        |
-//! | 404    | `{"error": "unknown verb", "verb": "<name>"}`        |
-//! | 500    | `{"error": "verb failure", "detail": "<reason>"}`    |
-//!
-//! 400 is reserved for malformed input — JSON syntax error, missing
-//! `Content-Type`, non-object body. Verb-level rejections (bad arg
-//! shape after parsing, invariant violation) surface as 500 with the
-//! verb's own error message, mirroring the MCP slice contract.
+//! Project names arrive in the URL path and are joined onto the
+//! workspace root. [`reject_unsafe_name`] turns any name that is not a
+//! single, plain path component (no separators, no `.`/`..`, no NUL) into
+//! a 400, so a request can never escape the workspace.
+
+use std::path::PathBuf;
 
 use axum::{
     Json,
-    extract::{Path, rejection::JsonRejection},
+    extract::{Path, State, rejection::JsonRejection},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
-use verbreel_state::{ProjectId, default_registry, synthetic_empty_project};
+use verbreel_agent::{AgentError, Capabilities, RunOutcome, Session};
 
-/// Verbs exposed by this HTTP server at the current slice.
-///
-/// Adding a verb later is additive: append its name and (if needed)
-/// extend [`describe_verb`].
-pub const SUPPORTED_VERBS: &[&str] = &["project.list"];
+use crate::AppState;
 
-/// Returns `true` when `verb` is exposed by this HTTP server.
-#[must_use]
-pub fn is_supported(verb: &str) -> bool {
-    SUPPORTED_VERBS.contains(&verb)
-}
-
-/// `GET /healthz` — flat liveness probe. Always returns
-/// `{"status": "ok"}` with a 200.
+/// `GET /healthz` — flat liveness probe.
 pub async fn healthz() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
-/// `GET /tools` — return the verbs whitelisted in [`SUPPORTED_VERBS`].
-///
-/// Output is sorted by `name` so the response is deterministic across
-/// invocations regardless of source-order changes to the whitelist.
+/// `GET /capabilities` — the full engine capability catalog (every verb,
+/// grouped by domain, with per-verb JSON args schemas). The surface an
+/// agent reads to plan.
+pub async fn capabilities() -> Json<Capabilities> {
+    Json(Capabilities::current())
+}
+
+/// `GET /tools` — every registered verb as a tool descriptor
+/// (`{ name, domain, args_schema? }`). The full surface, not a whitelist.
 pub async fn list_tools() -> Json<Value> {
-    let mut tools: Vec<Value> = SUPPORTED_VERBS
+    let caps = Capabilities::current();
+    let tools: Vec<Value> = caps
+        .verbs
         .iter()
-        .map(|name| {
+        .map(|v| {
             json!({
-                "name": name,
-                "description": describe_verb(name),
+                "name": v.id,
+                "domain": v.domain,
+                "args_schema": v.args_schema,
             })
         })
         .collect();
-    tools.sort_by(|a, b| {
-        a["name"]
-            .as_str()
-            .unwrap_or_default()
-            .cmp(b["name"].as_str().unwrap_or_default())
-    });
-    Json(json!({ "tools": tools }))
+    Json(json!({ "tools": tools, "count": tools.len() }))
 }
 
-/// `POST /tools/{verb}` — dispatch a verb through
-/// [`verbreel_state::default_registry`] and return its `data` envelope.
-///
-/// Response shape and error mapping are documented in the module-level
-/// doc table above.
-pub async fn call_tool(
-    Path(verb): Path<String>,
-    args: Result<Json<Value>, JsonRejection>,
-) -> impl IntoResponse {
-    if !is_supported(&verb) {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "unknown verb", "verb": verb })),
-        );
-    }
-
-    let args = match args {
-        Ok(Json(value)) => value,
-        Err(rejection) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": "bad args",
-                    "detail": rejection.body_text(),
-                })),
-            );
-        }
-    };
-
-    // The Verb trait demands a JSON object — reject every other shape
-    // up-front with the same 400 envelope so callers see a single
-    // failure mode for "your body wasn't a JSON object".
-    let mut args_obj = match args {
-        Value::Object(map) => map,
-        Value::Null => serde_json::Map::new(),
-        other => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": "bad args",
-                    "detail": format!(
-                        "tool arguments must be a JSON object, got: {other}"
-                    ),
-                })),
-            );
-        }
-    };
-
-    // project.list is project-agnostic at v1 floor, but the Verb trait
-    // still demands a `project_id` to clear its argument shape. When the
-    // caller supplies one, the same id MUST flow into both `args` and
-    // the synthetic `prior` — mismatched identities would let dispatch
-    // see one project in its args and a different one in its prior
-    // state, an invariant violation no current verb checks for but the
-    // surrounding contract requires.
-    let project_id: ProjectId = if let Some(existing) = args_obj.get("project_id") {
-        match serde_json::from_value::<ProjectId>(existing.clone()) {
-            Ok(parsed) => parsed,
-            Err(e) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({
-                        "error": "bad args",
-                        "detail": format!("invalid project_id: {e}"),
-                    })),
-                );
+/// `GET /projects` — names of every project under the workspace.
+pub async fn list_projects(State(state): State<AppState>) -> Response {
+    let mut names: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&state.workspace) {
+        for entry in entries.flatten() {
+            if entry.path().join("project.json").is_file()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                names.push(name.to_string());
             }
         }
-    } else {
-        let synthesized = ProjectId::now();
-        args_obj.insert("project_id".to_string(), json!(synthesized));
-        synthesized
-    };
-    let args = Value::Object(args_obj);
-    let prior = synthetic_empty_project(project_id);
+    }
+    names.sort();
+    (StatusCode::OK, Json(json!({ "projects": names }))).into_response()
+}
 
-    let registry = default_registry();
-    let Some(verb_impl) = registry.get(&verb) else {
-        // Whitelisted but missing from the registry — programmer bug,
-        // not a user-facing 404. Surface it as 500 so the misalignment
-        // is visible in logs rather than silently confusing the caller.
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": "verb failure",
-                "detail": format!("verb '{verb}' whitelisted but not in default_registry"),
-            })),
-        );
-    };
+/// Body for `POST /projects`.
+#[derive(Debug, Deserialize)]
+pub struct CreateProjectBody {
+    /// Project display name (also the workspace directory name).
+    pub name: String,
+    /// Canvas `<W>x<H>`; defaults to `1920x1080`.
+    #[serde(default)]
+    pub canvas: Option<String>,
+    /// Frame rate `<num>/<den>`; defaults to 30/1.
+    #[serde(default)]
+    pub fps: Option<String>,
+}
 
-    match verb_impl.compute_patch(&prior, &args) {
-        Ok((_patch, data, _warnings)) => (StatusCode::OK, Json(json!({ "data": data }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+/// `POST /projects` — create a project under the workspace.
+pub async fn create_project(
+    State(state): State<AppState>,
+    body: Result<Json<CreateProjectBody>, JsonRejection>,
+) -> Response {
+    let Json(body) = match body {
+        Ok(b) => b,
+        Err(rejection) => return bad_request(&rejection.body_text()),
+    };
+    if let Some(resp) = reject_unsafe_name(&body.name) {
+        return resp;
+    }
+    let canvas = body.canvas.as_deref().unwrap_or("1920x1080");
+    let fps = match parse_fps_opt(body.fps.as_deref()) {
+        Ok(f) => f,
+        Err(detail) => return bad_request(&detail),
+    };
+    match Session::create(&state.workspace, &body.name, canvas, fps) {
+        Ok(session) => (
+            StatusCode::CREATED,
             Json(json!({
-                "error": "verb failure",
-                "detail": e.to_string(),
+                "project_id": session.project_id().to_string(),
+                "name": body.name,
+                "root": session.root().display().to_string(),
             })),
-        ),
+        )
+            .into_response(),
+        Err(e) => agent_error_response(&e),
     }
 }
 
-/// Static descriptions for the verbs in this slice. New entries get
-/// added when their verb is whitelisted; the default branch keeps the
-/// `GET /tools` response well-formed even if a name is added to
-/// [`SUPPORTED_VERBS`] before its description is filled in.
-fn describe_verb(verb: &str) -> &'static str {
-    match verb {
-        "project.list" => {
-            "List all known projects. v1 floor returns an empty array — \
-             the real catalog index lands in a later slice."
-        }
-        _ => "Verbreel verb (no description provided).",
+/// `POST /projects/{name}/tools/{verb}` — apply one verb to a project.
+///
+/// Opens `<workspace>/<name>`, runs `verb` through the §0.8 forward path,
+/// saves on a mutation, and returns the verb's `data` envelope plus
+/// metadata. Read-only verbs return their data with no event written.
+pub async fn call_tool(
+    State(state): State<AppState>,
+    Path((name, verb)): Path<(String, String)>,
+    args: Result<Json<Value>, JsonRejection>,
+) -> Response {
+    if let Some(resp) = reject_unsafe_name(&name) {
+        return resp;
     }
+    let args = match args {
+        Ok(Json(value)) => value,
+        Err(rejection) => return bad_request(&rejection.body_text()),
+    };
+
+    let root = state.workspace.join(&name);
+    let mut session = match Session::open(&root) {
+        Ok(s) => s,
+        Err(e) => return agent_error_response(&e),
+    };
+    match session.run(&verb, args, None) {
+        Ok(outcome) => {
+            if outcome.mutated()
+                && let Err(e) = session.save()
+            {
+                return agent_error_response(&e);
+            }
+            (StatusCode::OK, Json(outcome_json(&outcome))).into_response()
+        }
+        Err(e) => agent_error_response(&e),
+    }
+}
+
+/// Body for `POST /projects/{name}/agent`.
+#[derive(Debug, Deserialize)]
+pub struct AgentBody {
+    /// Natural-language editing intent.
+    pub intent: String,
+    /// When true, apply the plan; when false (default), only return it.
+    #[serde(default)]
+    pub apply: bool,
+}
+
+/// `POST /projects/{name}/agent` — plan an intent (feature `claude`) and
+/// optionally apply it.
+#[cfg(feature = "claude")]
+pub async fn agent_plan(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    body: Result<Json<AgentBody>, JsonRejection>,
+) -> Response {
+    use verbreel_agent::{AnthropicClient, LlmPlanner, Planner};
+
+    if let Some(resp) = reject_unsafe_name(&name) {
+        return resp;
+    }
+    let Json(body) = match body {
+        Ok(b) => b,
+        Err(rejection) => return bad_request(&rejection.body_text()),
+    };
+
+    let caps = Capabilities::current();
+    let client = match AnthropicClient::from_env() {
+        Ok(c) => c,
+        Err(e) => return agent_error_response(&AgentError::Planner(e)),
+    };
+    let plan = match LlmPlanner::new(client).plan(&body.intent, &caps) {
+        Ok(p) => p,
+        Err(e) => return agent_error_response(&AgentError::Planner(e)),
+    };
+    let plan_json = serde_json::to_value(&plan).unwrap_or(Value::Null);
+
+    if !body.apply {
+        return (StatusCode::OK, Json(json!({ "plan": plan_json, "applied": false }))).into_response();
+    }
+
+    let root = state.workspace.join(&name);
+    let mut session = match Session::open(&root) {
+        Ok(s) => s,
+        Err(e) => return agent_error_response(&e),
+    };
+    match session.apply_plan(&plan, &caps) {
+        Ok(results) => {
+            let steps: Vec<Value> = results
+                .iter()
+                .map(|r| json!({ "verb": r.verb, "outcome": outcome_json(&r.outcome) }))
+                .collect();
+            (
+                StatusCode::OK,
+                Json(json!({ "plan": plan_json, "applied": true, "steps": steps })),
+            )
+                .into_response()
+        }
+        Err(e) => agent_error_response(&e),
+    }
+}
+
+/// Feature-off `POST /projects/{name}/agent` — planning needs `claude`.
+#[cfg(not(feature = "claude"))]
+pub async fn agent_plan(
+    State(_state): State<AppState>,
+    Path(_name): Path<String>,
+    _body: Result<Json<AgentBody>, JsonRejection>,
+) -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({
+            "error": "planner unavailable",
+            "detail": "rebuild verbreel-http with `--features claude` and set ANTHROPIC_API_KEY"
+        })),
+    )
+        .into_response()
+}
+
+/// Shape one [`RunOutcome`] as the JSON body of a `call_tool` response.
+fn outcome_json(outcome: &RunOutcome) -> Value {
+    match outcome {
+        RunOutcome::Query { data } => json!({ "kind": "query", "mutated": false, "data": data }),
+        RunOutcome::Mutated {
+            event_id,
+            data,
+            warnings,
+        } => json!({
+            "kind": "mutated",
+            "mutated": true,
+            "event_id": event_id,
+            "data": data,
+            "warnings": warnings,
+        }),
+        RunOutcome::Replayed {
+            event_id,
+            data,
+            warnings,
+        } => json!({
+            "kind": "replayed",
+            "mutated": false,
+            "event_id": event_id,
+            "data": data,
+            "warnings": warnings,
+        }),
+    }
+}
+
+/// Map an [`AgentError`] onto an HTTP status + JSON error body.
+fn agent_error_response(err: &AgentError) -> Response {
+    let (status, kind) = match err {
+        AgentError::UnknownVerb { .. } => (StatusCode::NOT_FOUND, "unknown verb"),
+        AgentError::VerbExecution { .. } | AgentError::InvalidPlan { .. } => {
+            (StatusCode::BAD_REQUEST, "bad request")
+        }
+        AgentError::ProjectCreate(_) => (StatusCode::CONFLICT, "project create failed"),
+        AgentError::Lifecycle(lifecycle) => lifecycle_status(lifecycle),
+        AgentError::Planner(planner) => planner_status(planner),
+    };
+    (
+        status,
+        Json(json!({ "error": kind, "detail": err.to_string() })),
+    )
+        .into_response()
+}
+
+/// HTTP status for a kernel lifecycle error.
+fn lifecycle_status(err: &verbreel_state::LifecycleError) -> (StatusCode, &'static str) {
+    use verbreel_state::LifecycleError as L;
+    match err {
+        L::NoProjectJson => (StatusCode::NOT_FOUND, "no such project"),
+        L::ProjectAlreadyExists => (StatusCode::CONFLICT, "project exists"),
+        L::LockHeldByAnotherProcess { .. } => (StatusCode::CONFLICT, "project locked"),
+        L::UnknownVerb { .. } => (StatusCode::NOT_FOUND, "unknown verb"),
+        L::VerbExecutionFailed { .. }
+        | L::IdempotencyConflict { .. }
+        | L::IdempotencyBusy { .. } => (StatusCode::BAD_REQUEST, "verb rejected"),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "engine failure"),
+    }
+}
+
+/// HTTP status for a planner error.
+fn planner_status(err: &verbreel_agent::PlannerError) -> (StatusCode, &'static str) {
+    use verbreel_agent::PlannerError as P;
+    match err {
+        P::NotConfigured { .. } => (StatusCode::NOT_IMPLEMENTED, "planner not configured"),
+        P::Transport { .. } => (StatusCode::BAD_GATEWAY, "planner transport"),
+        P::BadReply { .. } => (StatusCode::BAD_GATEWAY, "planner reply"),
+    }
+}
+
+/// 400 with a `{ error, detail }` body.
+fn bad_request(detail: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": "bad request", "detail": detail })),
+    )
+        .into_response()
+}
+
+/// Path-traversal guard for `<workspace>/<name>`: returns a 400 response
+/// when `name` is not a single, plain path component, else `None`.
+///
+/// Returns `Option<Response>` (not `Result<(), Response>`) because
+/// `axum::response::Response` is large — a `Result` Err of that size
+/// trips `clippy::result_large_err`, and the "rejection or nothing"
+/// shape is exactly an `Option` anyway.
+fn reject_unsafe_name(name: &str) -> Option<Response> {
+    let bad = name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0');
+    bad.then(|| {
+        bad_request("project name must be a single path component (no '/', '\\', '..', or NUL)")
+    })
+}
+
+/// Parse an optional `<num>/<den>` fps literal.
+fn parse_fps_opt(fps: Option<&str>) -> Result<Option<(u32, u32)>, String> {
+    let Some(s) = fps else { return Ok(None) };
+    let (num, den) = s
+        .split_once('/')
+        .ok_or_else(|| "fps must be <num>/<den>, e.g. 30/1".to_string())?;
+    let num = num.trim().parse().map_err(|_| "fps numerator invalid".to_string())?;
+    let den = den.trim().parse().map_err(|_| "fps denominator invalid".to_string())?;
+    Ok(Some((num, den)))
+}
+
+/// Resolve the workspace directory for the server from the environment.
+///
+/// `VERBREEL_WORKSPACE` pins a stable directory; unset falls back to
+/// `<temp>/verbreel-workspace` so the server always starts. The directory
+/// is created if absent.
+#[must_use]
+pub fn workspace_from_env() -> PathBuf {
+    let dir = std::env::var_os("VERBREEL_WORKSPACE")
+        .map_or_else(|| std::env::temp_dir().join("verbreel-workspace"), PathBuf::from);
+    let _ = std::fs::create_dir_all(&dir);
+    dir
 }

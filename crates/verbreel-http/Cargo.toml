@@ -15,7 +15,14 @@ path = "src/lib.rs"
 name = "verbreel_http"
 path = "src/main.rs"
 
+[features]
+default = []
+# Forward the live Claude planner so `POST /projects/{name}/agent` can
+# turn an intent into a plan. Off by default (no network stack).
+claude = ["verbreel-agent/claude"]
+
 [dependencies]
+verbreel-agent = { path = "../verbreel-agent" }
 verbreel-state = { path = "../verbreel-state" }
 verbreel-storage = { path = "../verbreel-storage" }
 tokio.workspace = true
@@ -25,6 +32,7 @@ tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 
@@ -34,3 +42,4 @@ uuid.workspace = true
 # direct dep of axum but is not re-exported from the public surface.
 http-body-util = "0.1"
 tower.workspace = true
+tempfile.workspace = true
