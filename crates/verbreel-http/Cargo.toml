@@ -16,20 +16,7 @@ path = "src/lib.rs"
 name = "verbreel-http"
 path = "src/main.rs"
 
-[features]
-default = []
-# Forward the live Claude planner so `POST /projects/{name}/agent` can
-# turn an intent into a plan. Off by default (no network stack).
-claude = ["verbreel-agent/claude"]
-# Route `render.start` to verbreel-runtime for an actual pixel encode.
-# Off by default — heavy GPU/FFmpeg deps.
-native-render = [
-    "dep:verbreel-runtime",
-    "verbreel-runtime/native-render",
-]
-
 [dependencies]
-verbreel-agent = { path = "../verbreel-agent" }
 verbreel-state = { path = "../verbreel-state" }
 verbreel-storage = { path = "../verbreel-storage" }
 verbreel-runtime = { path = "../verbreel-runtime", optional = true }
@@ -40,9 +27,15 @@ tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+
+[features]
+default = []
+native-render = [
+    "dep:verbreel-runtime",
+    "verbreel-runtime/native-render",
+]
 
 [dev-dependencies]
 # `Router::oneshot` integration tests collect response bodies with

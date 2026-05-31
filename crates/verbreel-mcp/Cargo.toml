@@ -17,7 +17,6 @@ name = "verbreel-mcp"
 path = "src/main.rs"
 
 [dependencies]
-verbreel-agent = { path = "../verbreel-agent" }
 verbreel-state = { path = "../verbreel-state" }
 verbreel-storage = { path = "../verbreel-storage" }
 verbreel-runtime = { path = "../verbreel-runtime", optional = true }
@@ -36,7 +35,8 @@ native-render = [
 ]
 
 [dev-dependencies]
-# Tests mint caller-supplied project ids and create real on-disk projects
-# (via verbreel-agent Session) to exercise the project-bound dispatch path.
+# Used in tests/tools.rs to mint a caller-supplied project_id and
+# confirm dispatch() preserves it (does not overwrite with the
+# internally-synthesised id).
 uuid.workspace = true
 tempfile.workspace = true
