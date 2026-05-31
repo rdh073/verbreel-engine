@@ -303,6 +303,55 @@ async fn call_tool_value_render_start_bad_args_maps_to_e_schema_violation() {
     assert_eq!(code, "E_SCHEMA_VIOLATION");
 }
 
+/// Under `native-render`, `with_home` must point the render runtime at the
+/// same `home` the Engine uses (`from_env().with_home(home)`), not at the
+/// developer's process `HOME` alone. A project registered ONLY in the
+/// injected temp home must resolve through the render path: a bad preset
+/// then surfaces `E_RENDER_PRESET_UNKNOWN` (resolution succeeded). Before
+/// the fix, `with_home` ignored `home` so the runtime never saw the temp
+/// index and the same call surfaced `E_PROJECT_NOT_FOUND`.
+#[cfg(feature = "native-render")]
+#[tokio::test]
+async fn with_home_injects_home_into_render_runtime() {
+    let home = TempDir::new().expect("tempdir");
+    let create = verbreel_state::project_create(&verbreel_state::ProjectCreateArgs {
+        name: "mcp-render-home".to_string(),
+        canvas: "64x64".to_string(),
+        fps_num: Some(30),
+        fps_den: Some(1),
+        at: Some(home.path().join("projects")),
+        activate: false,
+        metadata: serde_json::Map::new(),
+    })
+    .expect("project create");
+    let project_id = create.project_id.to_string();
+    verbreel_storage::layout::register_project(home.path(), &project_id, &create.path)
+        .expect("register project in temp home index");
+
+    let server = VerbreelServer::with_home(home.path());
+    let env = server
+        .call_tool_value(
+            "render.start",
+            json!({
+                "project_id": project_id,
+                "preset": "definitely-not-a-preset",
+                "out_path": "exports/out.mp4",
+            }),
+        )
+        .await
+        .expect("args are an object");
+
+    let Envelope::Err { code, .. } = &env else {
+        panic!("bad preset must be an err envelope, got {env:?}");
+    };
+    assert_eq!(
+        code, "E_RENDER_PRESET_UNKNOWN",
+        "with_home must inject home so the runtime resolves the temp-home \
+         project (then rejects the preset); E_PROJECT_NOT_FOUND means home \
+         was ignored, got: {env:?}"
+    );
+}
+
 #[test]
 fn get_info_advertises_tools_capability() {
     use rmcp::ServerHandler;

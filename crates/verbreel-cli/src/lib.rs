@@ -200,10 +200,22 @@ fn run_inner(
     #[cfg(feature = "native-render")]
     if verb_id == "render.start" {
         let active = home.as_deref().and_then(home::read_active_project);
-        if let Some(project_id) = parsed.project.clone().or(active) {
-            args_map.insert("project_id".to_string(), Value::String(project_id));
-        }
-        let env = render::dispatch(&args_map, runtime);
+        let env = match parsed.project.clone().or(active) {
+            Some(project_id) => {
+                args_map.insert("project_id".to_string(), Value::String(project_id));
+                render::dispatch(&args_map, runtime)
+            }
+            // §0.7 code alignment: no resolvable project must surface
+            // E_PROJECT_NOT_FOUND like every other project-scoped verb. The
+            // presence guard runs BEFORE the typed RenderStartArgs
+            // deserialize — otherwise the missing required `project_id`
+            // field surfaces as E_SCHEMA_VIOLATION, diverging from the
+            // engine path (`clip add` etc. → E_PROJECT_NOT_FOUND).
+            None => err_envelope(
+                "E_PROJECT_NOT_FOUND",
+                "no project context: pass --project <id> or set an active project",
+            ),
+        };
         let code = i32::from(!env.is_ok());
         return print_envelope(out, &env, code);
     }
@@ -234,7 +246,8 @@ fn run_inner(
         args_map.insert("project_id".to_string(), Value::String(project.clone()));
     }
 
-    let env = engine.dispatch(&verb_id, Value::Object(args_map.clone()));
+    let mut env = engine.dispatch(&verb_id, Value::Object(args_map.clone()));
+    hint_help_topic(&verb_id, noun, verb, &mut env);
 
     // §0.12 active-project writer: after a successful create/open that
     // carried `activate:true`, persist the returned id so a later
@@ -294,6 +307,26 @@ fn err_envelope(code: &str, message: impl Into<String>) -> Envelope {
         message: message.into(),
         hint: None,
         details: None,
+    }
+}
+
+/// Attach a `--topic` hint when `verbreel help <topic>` is mis-parsed.
+///
+/// `help` is a flat meta verb; a trailing positional (`verbreel help clip`)
+/// is read as a verb token, so [`context::reconstruct_verb_id`] produces
+/// the id `help.clip`, which the engine rejects with `E_UNKNOWN_VERB`. The
+/// user meant the `topic?` arg, spelled as a flag on this generic surface
+/// (`verbreel help --topic clip`). The engine cannot know the CLI's flag
+/// spelling, so the hint is a surface concern grafted onto the existing
+/// `E_UNKNOWN_VERB` envelope (no new code, no swallowed error).
+fn hint_help_topic(verb_id: &str, noun: &str, verb: Option<&str>, env: &mut Envelope) {
+    let (Some(topic), Envelope::Err { code, hint, .. }) = (verb, &mut *env) else {
+        return;
+    };
+    if noun == "help" && verb_id.starts_with("help.") && code == "E_UNKNOWN_VERB" {
+        *hint = Some(format!(
+            "did you mean a help topic? try `verbreel help --topic {topic}`"
+        ));
     }
 }
 

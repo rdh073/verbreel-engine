@@ -172,6 +172,53 @@ fn render_start_bad_codec_is_schema_violation() {
     );
 }
 
+/// `render start` with NO resolvable project (no `--project`, no
+/// active-project file) must surface `E_PROJECT_NOT_FOUND` — the same code
+/// every other project-scoped verb returns for a missing project context
+/// (§0.7 uniform error codes; cf. `clip add` → `E_PROJECT_NOT_FOUND`).
+///
+/// Before the fix the missing `project_id` reached the typed
+/// `RenderStartArgs` deserialize and surfaced `E_SCHEMA_VIOLATION` (a
+/// required-field error), diverging from the engine path. The CLI now
+/// resolves the project-presence guard BEFORE the deserialize.
+#[test]
+fn render_start_without_project_is_project_not_found() {
+    // Empty runtime, hermetic home: no --project flag and no active-project
+    // file, so no project_id is injected. With VERBREEL_HOME unset the
+    // active-project lookup yields nothing.
+    let runtime = RenderRuntimeConfig::new();
+    let prev = std::env::var_os("VERBREEL_HOME");
+    // SAFETY: this single-threaded test owns the env for its duration.
+    unsafe {
+        std::env::remove_var("VERBREEL_HOME");
+    }
+    let (code, env) = dispatch_with(
+        &runtime,
+        &[
+            "verbreel",
+            "render",
+            "start",
+            "--preset",
+            "deterministic",
+            "--out_path",
+            "exports/out.mp4",
+        ],
+    );
+    unsafe {
+        if let Some(v) = prev {
+            std::env::set_var("VERBREEL_HOME", v);
+        }
+    }
+    assert_eq!(code, 1, "no project context must fail: {env}");
+    assert_eq!(env.get("ok").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        env.get("code").and_then(Value::as_str),
+        Some("E_PROJECT_NOT_FOUND"),
+        "no resolvable project must match the engine path's code, not \
+         E_SCHEMA_VIOLATION from a missing-field deserialize, got: {env}"
+    );
+}
+
 struct ProjectFixture {
     _tmp: TempDir,
     root: std::path::PathBuf,
