@@ -402,8 +402,8 @@ pub use verbs::render_queue_status::{
     RenderQueueStatusArgs, RenderQueueStatusError, RenderQueueStatusVerb,
 };
 pub use verbs::render_start::{
-    RenderAudioCodec, RenderStartArgs, RenderStartData, RenderStartError, RenderStartVerb,
-    RenderVideoCodec,
+    RENDER_START_RESULT_WARNING, RenderAudioCodec, RenderStartArgs, RenderStartData,
+    RenderStartError, RenderStartVerb, RenderVideoCodec, render_start_result_warning,
 };
 pub use verbs::render_status::{
     RenderJobError, RenderJobState, RenderStatusArgs, RenderStatusData, RenderStatusError,

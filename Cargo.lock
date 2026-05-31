@@ -3061,9 +3061,11 @@ dependencies = [
  "anyhow",
  "clap",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "verbreel-runtime",
  "verbreel-state",
  "verbreel-storage",
 ]
@@ -3134,12 +3136,14 @@ dependencies = [
  "axum",
  "http-body-util",
  "serde_json",
+ "tempfile",
  "tokio",
  "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "verbreel-runtime",
  "verbreel-state",
  "verbreel-storage",
 ]
@@ -3162,10 +3166,12 @@ dependencies = [
  "anyhow",
  "rmcp",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "verbreel-runtime",
  "verbreel-state",
  "verbreel-storage",
 ]
@@ -3183,6 +3189,23 @@ dependencies = [
  "verbreel-codec-native",
  "verbreel-ir",
  "wgpu",
+]
+
+[[package]]
+name = "verbreel-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "json-patch",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "verbreel-canon",
+ "verbreel-ir",
+ "verbreel-render",
+ "verbreel-state",
+ "verbreel-storage",
 ]
 
 [[package]]

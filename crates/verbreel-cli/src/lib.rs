@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! verbreel-cli → verbreel-state, verbreel-storage
+//! verbreel-cli/native-render → verbreel-runtime
 //! ```
 //!
 //! ## Lib + bin split
@@ -41,6 +42,8 @@ use std::io::Write;
 use clap::{Parser, Subcommand};
 
 pub mod project;
+#[cfg(feature = "native-render")]
+pub mod render;
 
 /// Top-level `clap` parser for the `verbreel` binary.
 ///
@@ -67,6 +70,9 @@ pub struct Cli {
 pub enum Command {
     /// Project lifecycle commands (`verbreel project ...`).
     Project(ProjectCmd),
+    /// Native render commands (`verbreel render ...`).
+    #[cfg(feature = "native-render")]
+    Render(RenderCmd),
 }
 
 /// `verbreel project ...` argument group.
@@ -85,6 +91,24 @@ pub enum ProjectAction {
     List,
 }
 
+/// `verbreel render ...` argument group.
+#[cfg(feature = "native-render")]
+#[derive(Debug, clap::Args)]
+#[command(arg_required_else_help = true, long_about = None)]
+pub struct RenderCmd {
+    /// Which render-scoped action was invoked.
+    #[command(subcommand)]
+    pub action: RenderAction,
+}
+
+/// Render-scoped actions wired by this crate.
+#[cfg(feature = "native-render")]
+#[derive(Debug, Subcommand)]
+pub enum RenderAction {
+    /// Start a native render job and write an MP4 output.
+    Start(render::RenderStartCmd),
+}
+
 /// Dispatch a parsed [`Cli`] to the appropriate verb wrapper, writing
 /// human-facing output to `out` and returning the process exit code.
 ///
@@ -95,10 +119,45 @@ pub enum ProjectAction {
 ///
 /// Surfaces any error bubbled up by the wrapped verb (verb dispatch,
 /// argument validation, JSON serialization).
+#[cfg(not(feature = "native-render"))]
 pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<i32> {
     match cli.command {
         Command::Project(p) => match p.action {
             ProjectAction::List => project::list(out),
+        },
+    }
+}
+
+/// Dispatch a parsed [`Cli`] with the default process runtime.
+///
+/// # Errors
+///
+/// Surfaces any error bubbled up by the wrapped verb or runtime.
+#[cfg(feature = "native-render")]
+pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<i32> {
+    run_with_runtime(cli, out, &verbreel_runtime::RenderRuntimeConfig::from_env())
+}
+
+/// Dispatch a parsed [`Cli`] with an injected render runtime.
+///
+/// Tests use this to avoid relying on the process current directory or
+/// user-wide projects index.
+///
+/// # Errors
+///
+/// Surfaces any error bubbled up by the wrapped verb or runtime.
+#[cfg(feature = "native-render")]
+pub fn run_with_runtime(
+    cli: Cli,
+    out: &mut dyn Write,
+    runtime: &verbreel_runtime::RenderRuntimeConfig,
+) -> anyhow::Result<i32> {
+    match cli.command {
+        Command::Project(p) => match p.action {
+            ProjectAction::List => project::list(out),
+        },
+        Command::Render(r) => match r.action {
+            RenderAction::Start(args) => render::start(&args, out, runtime),
         },
     }
 }

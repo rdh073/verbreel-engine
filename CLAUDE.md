@@ -23,15 +23,16 @@ verbreel-canon → verbreel-types
 verbreel-events → verbreel-types, verbreel-canon
 verbreel-state  → verbreel-types, verbreel-args, verbreel-events
 verbreel-ir     → verbreel-types
-verbreel-render → verbreel-ir
+verbreel-render → verbreel-ir, verbreel-codec-native
 verbreel-codec-native → verbreel-ir
 verbreel-codec-web    → verbreel-ir  (wasm32-only)
 verbreel-storage → verbreel-types, verbreel-events
 verbreel-ai      → verbreel-types, verbreel-state
-verbreel-cli     → verbreel-state, verbreel-storage
-verbreel-mcp     → verbreel-state, verbreel-storage
-verbreel-http    → verbreel-state, verbreel-storage
-verbreel-wasm    → verbreel-state, verbreel-ir  (wasm32-only)
+verbreel-runtime → verbreel-state, verbreel-storage, verbreel-canon, verbreel-ir, verbreel-render
+verbreel-cli     → verbreel-state, verbreel-storage (+ verbreel-runtime behind native-render)
+verbreel-mcp     → verbreel-state, verbreel-storage (+ verbreel-runtime behind native-render)
+verbreel-http    → verbreel-state, verbreel-storage (+ verbreel-runtime behind native-render)
+verbreel-wasm    → verbreel-state, verbreel-ir, verbreel-codec-web  (wasm32-only)
 ```
 
 No cycles. Never add a dep that would create a cycle.

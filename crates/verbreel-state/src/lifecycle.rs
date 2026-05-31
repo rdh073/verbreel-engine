@@ -730,7 +730,18 @@ impl ProjectStore {
         self.mutate_with_warnings(verb, args, patch, idempotency_key, Vec::new())
     }
 
-    fn mutate_with_warnings(
+    /// Raw mutation path that records caller-supplied event warnings.
+    ///
+    /// Prefer [`Self::mutate_via_verb`] for ordinary verb dispatch so the
+    /// verb-owned patch/data/warnings contract stays centralized. This lower
+    /// level hook is for composition roots that already performed a
+    /// side-effecting runtime operation but still need the resulting successful
+    /// event to follow the §0.8 write-ordering and idempotency rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same failures as [`Self::mutate`].
+    pub fn mutate_with_warnings(
         &mut self,
         verb: &str,
         args: Value,

@@ -40,6 +40,18 @@ fn tools_list_includes_project_list() {
 }
 
 #[test]
+#[cfg(feature = "native-render")]
+fn tools_list_includes_render_start() {
+    let server = VerbreelServer::new();
+    let result = server.tools_list();
+    let names: Vec<&str> = result.tools.iter().map(|t| t.name.as_ref()).collect();
+    assert!(
+        names.contains(&"render.start"),
+        "tools/list must advertise render.start with native-render, got: {names:?}"
+    );
+}
+
+#[test]
 fn tools_list_has_no_next_cursor_at_v1_floor() {
     let server = VerbreelServer::new();
     let result = server.tools_list();
@@ -82,6 +94,46 @@ fn call_tool_value_project_list_returns_v1_envelope() {
         data.get("projects").and_then(Value::as_array).is_some(),
         "envelope must expose `projects` as a JSON array, got: {data}"
     );
+}
+
+#[test]
+#[cfg(feature = "native-render")]
+fn call_tool_value_render_start_delegates_to_runtime() -> anyhow::Result<()> {
+    use tempfile::TempDir;
+    use verbreel_runtime::RenderRuntimeConfig;
+    use verbreel_state::{ProjectCreateArgs, project_create};
+
+    let tmp = TempDir::new()?;
+    let create_data = project_create(&ProjectCreateArgs {
+        name: "mcp-render-project".to_string(),
+        canvas: "64x64".to_string(),
+        fps_num: Some(30),
+        fps_den: Some(1),
+        at: Some(tmp.path().to_path_buf()),
+        activate: false,
+        metadata: serde_json::Map::new(),
+    })?;
+    let server = VerbreelServer::with_runtime(
+        RenderRuntimeConfig::new().with_project_root(&create_data.path),
+    );
+    let err = server
+        .call_tool_value(
+            "render.start",
+            json!({
+                "project_id": create_data.project_id,
+                "preset": "definitely-not-a-preset",
+                "out_path": "exports/out.mp4",
+                "from_tk": 0,
+                "to_tk": 8000,
+                "overwrite": true,
+            }),
+        )
+        .expect_err("runtime should reject preset");
+    assert!(
+        err.to_string().contains("E_RENDER_PRESET_UNKNOWN"),
+        "MCP must surface the runtime error code, got: {err}"
+    );
+    Ok(())
 }
 
 #[test]

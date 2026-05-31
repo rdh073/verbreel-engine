@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! verbreel-mcp → verbreel-state, verbreel-storage
+//! verbreel-mcp/native-render → verbreel-runtime
 //! ```
 //!
 //! ## Lib + bin split
@@ -54,19 +55,36 @@ use serde_json::Value;
 
 pub mod tools;
 
-/// MCP server exposing a curated subset of `verbreel-state` verbs.
-///
-/// Stateless — every `tools/call` synthesises a fresh prior project
-/// inside [`tools::dispatch`]. Project lifecycle over MCP lands in a
-/// later slice once the args registry is further along.
-#[derive(Debug, Clone, Default)]
-pub struct VerbreelServer;
+/// MCP server exposing a curated subset of Verbreel verbs.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "native-render"), derive(Default))]
+pub struct VerbreelServer {
+    #[cfg(feature = "native-render")]
+    render_runtime: verbreel_runtime::RenderRuntimeConfig,
+}
+
+#[cfg(feature = "native-render")]
+impl Default for VerbreelServer {
+    fn default() -> Self {
+        Self {
+            #[cfg(feature = "native-render")]
+            render_runtime: verbreel_runtime::RenderRuntimeConfig::from_env(),
+        }
+    }
+}
 
 impl VerbreelServer {
     /// Construct a new server. Equivalent to `Self::default()`.
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Construct a server with an injected render runtime.
+    #[cfg(feature = "native-render")]
+    #[must_use]
+    pub fn with_runtime(render_runtime: verbreel_runtime::RenderRuntimeConfig) -> Self {
+        Self { render_runtime }
     }
 
     /// Pure helper backing the `tools/list` MCP request.
@@ -89,7 +107,14 @@ impl VerbreelServer {
     ///
     /// Bubbles up an `anyhow::Error` when [`tools::dispatch`] does.
     pub fn call_tool_value(&self, name: &str, arguments: Value) -> anyhow::Result<Value> {
-        tools::dispatch(name, arguments)
+        #[cfg(feature = "native-render")]
+        {
+            tools::dispatch_with_runtime(name, arguments, &self.render_runtime)
+        }
+        #[cfg(not(feature = "native-render"))]
+        {
+            tools::dispatch(name, arguments)
+        }
     }
 }
 
@@ -98,7 +123,7 @@ impl ServerHandler for VerbreelServer {
         let capabilities = ServerCapabilities::builder().enable_tools().build();
         InitializeResult::new(capabilities).with_instructions(
             "Verbreel MCP server — exposes selected verbs from \
-             verbreel-state as MCP tools. v1 floor: project.list only.",
+             verbreel-state and native runtime surfaces as MCP tools.",
         )
     }
 
