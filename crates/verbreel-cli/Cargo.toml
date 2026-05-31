@@ -16,21 +16,7 @@ path = "src/lib.rs"
 name = "verbreel"
 path = "src/main.rs"
 
-[features]
-default = []
-# Forward the live Anthropic planner so `verbreel edit --intent "…"` can
-# turn natural language into a verb plan. Off by default — `edit --plan
-# <file>` and every other subcommand work without it (no network stack).
-claude = ["verbreel-agent/claude"]
-# Native pixel render for `verbreel render ...` (decode→composite→encode
-# via verbreel-runtime). Off by default — heavy GPU/FFmpeg deps.
-native-render = [
-    "dep:verbreel-runtime",
-    "verbreel-runtime/native-render",
-]
-
 [dependencies]
-verbreel-agent = { path = "../verbreel-agent" }
 verbreel-state = { path = "../verbreel-state" }
 verbreel-storage = { path = "../verbreel-storage" }
 verbreel-runtime = { path = "../verbreel-runtime", optional = true }
@@ -40,6 +26,13 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
+
+[features]
+default = []
+native-render = [
+    "dep:verbreel-runtime",
+    "verbreel-runtime/native-render",
+]
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -14,10 +14,7 @@
 use std::io::Write;
 
 use serde_json::json;
-use verbreel_agent::Session;
 use verbreel_state::{ProjectId, default_registry, synthetic_empty_project};
-
-use crate::ProjectCreateCmd;
 
 /// `verbreel project list` — print the `project.list` data envelope.
 ///
@@ -48,47 +45,4 @@ pub fn list(out: &mut dyn Write) -> anyhow::Result<i32> {
     let rendered = serde_json::to_string_pretty(&data)?;
     writeln!(out, "{rendered}")?;
     Ok(0)
-}
-
-/// `verbreel project create <workspace> --name <n> [--canvas WxH] [--fps N/D]`
-/// — create a fresh project on disk under `workspace` and report it.
-///
-/// Routes through [`verbreel_agent::Session::create`] (the §2.1
-/// `project.create` lifecycle), which places the project at
-/// `<workspace>/<name>`.
-///
-/// # Errors
-///
-/// - `--fps` is not `<num>/<den>`;
-/// - creation fails (a project of that name already exists under
-///   `workspace`, bad canvas, IO error).
-pub fn create(out: &mut dyn Write, cmd: &ProjectCreateCmd) -> anyhow::Result<i32> {
-    let fps = cmd.fps.as_deref().map(parse_fps).transpose()?;
-    let session = Session::create(&cmd.workspace, &cmd.name, &cmd.canvas, fps)?;
-    let canvas = &session.project().canvas;
-    writeln!(
-        out,
-        "created project {:?} at {}",
-        cmd.name,
-        session.root().display()
-    )?;
-    writeln!(out, "  id:     {}", session.project_id())?;
-    writeln!(out, "  canvas: {}x{}", canvas.width, canvas.height)?;
-    Ok(0)
-}
-
-/// Parse a `<num>/<den>` frame-rate literal.
-fn parse_fps(s: &str) -> anyhow::Result<(u32, u32)> {
-    let (num, den) = s
-        .split_once('/')
-        .ok_or_else(|| anyhow::anyhow!("--fps must be <num>/<den>, e.g. 30/1"))?;
-    let num = num
-        .trim()
-        .parse()
-        .map_err(|e| anyhow::anyhow!("fps numerator: {e}"))?;
-    let den = den
-        .trim()
-        .parse()
-        .map_err(|e| anyhow::anyhow!("fps denominator: {e}"))?;
-    Ok((num, den))
 }
