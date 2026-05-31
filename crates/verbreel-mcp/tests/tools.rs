@@ -1,157 +1,161 @@
-//! `tools` module — `verb_as_tool`, `dispatch`, `SUPPORTED_VERBS`
-//! coverage. Pure unit-test surface (no rmcp transport, no `tokio`).
+//! `tools` module — `all_tools(&Engine)` catalog + schema passthrough,
+//! and the `object_args` surface arg-shape guard. Pure unit-test surface
+//! (no rmcp transport beyond the `Tool` model).
 
-use serde_json::{Value, json};
-use verbreel_mcp::tools::{SUPPORTED_VERBS, all_tools, dispatch, is_supported, verb_as_tool};
+use serde_json::Value;
+use tempfile::TempDir;
+use verbreel_mcp::tools::{all_tools, object_args};
+use verbreel_state::Engine;
+
+/// Build an Engine over an isolated `TempDir` home, the same way the
+/// server's `with_home` does.
+fn engine() -> (TempDir, Engine) {
+    let home = TempDir::new().expect("tempdir");
+    let eng = Engine::new(home.path());
+    (home, eng)
+}
 
 #[test]
-fn supported_verbs_contains_project_list() {
+fn all_tools_contains_project_list() {
+    let (_home, eng) = engine();
+    let tools = all_tools(&eng);
     assert!(
-        SUPPORTED_VERBS.contains(&"project.list"),
-        "v1 floor must whitelist project.list, got: {SUPPORTED_VERBS:?}"
+        tools.iter().any(|t| t.name.as_ref() == "project.list"),
+        "full surface must advertise project.list"
     );
 }
 
 #[test]
-fn is_supported_accepts_project_list() {
-    assert!(is_supported("project.list"));
-}
-
-#[test]
-fn is_supported_rejects_unknown_verb() {
-    // Use a verb that exists in default_registry but is NOT whitelisted —
-    // catches accidental "default-all" regressions.
-    assert!(!is_supported("project.set_metadata"));
-    assert!(!is_supported("totally.fake.verb"));
-}
-
-#[test]
-fn verb_as_tool_returns_tool_for_whitelisted_verb() {
-    let tool = verb_as_tool("project.list").expect("project.list must yield a Tool");
-    assert_eq!(tool.name.as_ref(), "project.list");
-    assert!(
-        tool.description.as_ref().map(AsRef::as_ref)
-            == Some(
-                "List all known projects. v1 floor returns an empty array — the real catalog index lands in a later slice."
-            ),
-        "description must match the curated copy, got: {:?}",
-        tool.description
-    );
-}
-
-#[test]
-fn verb_as_tool_returns_none_for_non_whitelisted_verb() {
-    assert!(verb_as_tool("project.set_metadata").is_none());
-    assert!(verb_as_tool("totally.fake.verb").is_none());
-}
-
-#[test]
-fn verb_as_tool_input_schema_is_permissive_object() {
-    let tool = verb_as_tool("project.list").unwrap();
+fn project_list_input_schema_is_object() {
+    let (_home, eng) = engine();
+    let tools = all_tools(&eng);
+    let tool = tools
+        .iter()
+        .find(|t| t.name.as_ref() == "project.list")
+        .expect("project.list tool");
     let schema: &serde_json::Map<String, Value> = tool.input_schema.as_ref();
     assert_eq!(
         schema.get("type").and_then(Value::as_str),
         Some("object"),
-        "v1 floor must advertise an object schema, got: {schema:?}"
+        "schema from Engine::schema_for must be an object, got: {schema:?}"
     );
 }
 
 #[test]
-#[cfg(not(feature = "native-render"))]
-fn all_tools_yields_one_entry_at_v1_floor() {
-    let tools = all_tools();
-    assert_eq!(tools.len(), SUPPORTED_VERBS.len());
-    assert_eq!(tools[0].name.as_ref(), "project.list");
-}
-
-#[test]
-#[cfg(feature = "native-render")]
-fn all_tools_includes_native_render_start() {
-    let tools = all_tools();
-    let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
-    assert!(names.contains(&"project.list"));
-    assert!(names.contains(&"render.start"));
-    assert_eq!(tools.len(), SUPPORTED_VERBS.len());
-}
-
-#[test]
-fn dispatch_project_list_returns_data_with_projects_key() {
-    let data = dispatch("project.list", json!({})).expect("dispatch must succeed at v1 floor");
+fn all_tools_len_equals_verb_ids_and_is_full_surface() {
+    let (_home, eng) = engine();
+    let tools = all_tools(&eng);
+    assert_eq!(
+        tools.len(),
+        eng.verb_ids().len(),
+        "one tool per verb id — no whitelist subset"
+    );
     assert!(
-        data.get("projects").is_some(),
-        "v1 envelope must expose `projects` key, got: {data}"
+        tools.len() > 100,
+        "full surface should expose the whole registry, got {}",
+        tools.len()
     );
 }
 
 #[test]
-fn dispatch_project_list_returns_empty_array() {
-    let data = dispatch("project.list", json!({})).unwrap();
-    let arr = data
-        .get("projects")
-        .and_then(Value::as_array)
-        .expect("`projects` must be an array");
+fn tools_list_advertises_full_surface() {
+    let (_home, eng) = engine();
+    let tools = all_tools(&eng);
+    assert_eq!(tools.len(), eng.verb_ids().len());
     assert!(
-        arr.is_empty(),
-        "v1 floor must return empty projects list, got: {data}"
+        tools.len() >= 120,
+        "regression guard against a curated subset, got {}",
+        tools.len()
     );
 }
 
 #[test]
-fn dispatch_accepts_null_arguments_as_empty_object() {
-    let data = dispatch("project.list", Value::Null).expect("Null args must be coerced to {}");
-    assert!(data.get("projects").is_some());
+fn tools_list_is_sorted_and_deterministic() {
+    let (_home, eng) = engine();
+    let names: Vec<String> = all_tools(&eng)
+        .iter()
+        .map(|t| t.name.as_ref().to_string())
+        .collect();
+    assert_eq!(
+        names,
+        eng.verb_ids(),
+        "tool order must equal verb_ids order"
+    );
+
+    // Two independent builds over the same registry are byte-identical.
+    let (_home2, eng2) = engine();
+    let names2: Vec<String> = all_tools(&eng2)
+        .iter()
+        .map(|t| t.name.as_ref().to_string())
+        .collect();
+    assert_eq!(
+        names, names2,
+        "tools/list must be deterministic across builds"
+    );
 }
 
 #[test]
-fn dispatch_rejects_non_object_arguments() {
-    let err =
-        dispatch("project.list", json!([1, 2, 3])).expect_err("array arguments must be rejected");
-    let msg = err.to_string();
+fn tool_name_equals_verb_id_verbatim() {
+    let (_home, eng) = engine();
+    let names: Vec<String> = all_tools(&eng)
+        .iter()
+        .map(|t| t.name.as_ref().to_string())
+        .collect();
+    // Registry verb stays dotted.
+    assert!(names.contains(&"project.list".to_string()));
+    // Meta verbs stay flat — no synthetic `meta.` prefix.
+    for flat in ["help", "schema", "list_capabilities"] {
+        assert!(
+            names.contains(&flat.to_string()),
+            "meta verb {flat} must appear flat, not namespaced"
+        );
+        assert!(
+            !names.iter().any(|n| n == &format!("meta.{flat}")),
+            "must NOT add a synthetic meta.{flat}"
+        );
+    }
+}
+
+#[test]
+fn input_schema_comes_from_engine_schema_for() {
+    let (_home, eng) = engine();
+    let tools = all_tools(&eng);
+    // clip.list has a well-known schema; project.list too — pick one and
+    // assert the tool's input_schema equals schema_for(id) coerced to a map.
+    for id in ["project.list", "clip.list"] {
+        let tool = tools
+            .iter()
+            .find(|t| t.name.as_ref() == id)
+            .unwrap_or_else(|| panic!("{id} tool present"));
+        let from_engine = match eng.schema_for(id) {
+            Value::Object(m) => m,
+            other => panic!("schema_for({id}) must be an object, got {other}"),
+        };
+        let on_tool: &serde_json::Map<String, Value> = tool.input_schema.as_ref();
+        assert_eq!(
+            on_tool, &from_engine,
+            "{id} input_schema must equal Engine::schema_for output verbatim"
+        );
+    }
+}
+
+#[test]
+fn object_args_coerces_null_to_empty_object() {
+    let map = object_args(Value::Null).expect("null coerces to {}");
+    assert!(map.is_empty());
+}
+
+#[test]
+fn object_args_passes_object_through() {
+    let map = object_args(serde_json::json!({ "a": 1 })).expect("object passes through");
+    assert_eq!(map.get("a").and_then(Value::as_i64), Some(1));
+}
+
+#[test]
+fn object_args_rejects_non_object() {
+    let err = object_args(serde_json::json!([1, 2, 3])).expect_err("array must be rejected");
     assert!(
-        msg.contains("must be a JSON object"),
-        "error should explain the shape requirement, got: {msg}"
+        err.to_string().contains("must be a JSON object"),
+        "error should explain the shape requirement, got: {err}"
     );
-}
-
-#[test]
-fn dispatch_rejects_non_whitelisted_verb_even_if_in_registry() {
-    // project.set_metadata IS in default_registry but NOT in SUPPORTED_VERBS;
-    // the whitelist must short-circuit before the registry lookup.
-    let err = dispatch("project.set_metadata", json!({}))
-        .expect_err("non-whitelisted verbs must be rejected");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("not supported by this server"),
-        "error should call out the whitelist, got: {msg}"
-    );
-}
-
-#[test]
-fn dispatch_rejects_unknown_verb() {
-    let err = dispatch("totally.fake.verb", json!({})).expect_err("unknown verbs must be rejected");
-    assert!(err.to_string().contains("not supported by this server"));
-}
-
-#[test]
-fn dispatch_is_deterministic_across_invocations() {
-    // The synthesised ProjectId varies, but project.list's data
-    // envelope must NOT — otherwise the MCP tool would yield divergent
-    // payloads on identical inputs.
-    let a = dispatch("project.list", json!({})).unwrap();
-    let b = dispatch("project.list", json!({})).unwrap();
-    assert_eq!(a, b, "v1 envelope must be stable across runs");
-}
-
-#[test]
-fn dispatch_caller_supplied_project_id_is_preserved() {
-    // The caller-supplied project_id must not be overwritten by the
-    // internal synthesised id — the contract is "only fill in if
-    // missing". Use a real v7 UUID because the engine rejects the nil
-    // UUID via §0.13 invariants.
-    let pid = uuid::Uuid::now_v7();
-    let data = dispatch("project.list", json!({ "project_id": pid }))
-        .expect("dispatch must accept caller-supplied project_id");
-    // Envelope itself is project-agnostic at v1, so just confirm the
-    // call succeeded with the override.
-    assert!(data.get("projects").is_some());
 }

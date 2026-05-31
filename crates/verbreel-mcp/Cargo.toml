@@ -35,8 +35,6 @@ native-render = [
 ]
 
 [dev-dependencies]
-# Used in tests/tools.rs to mint a caller-supplied project_id and
-# confirm dispatch() preserves it (does not overwrite with the
-# internally-synthesised id).
-uuid.workspace = true
+# Tests build an Engine over a TempDir home so each gets an isolated
+# .verbreel/projects-index.
 tempfile.workspace = true
