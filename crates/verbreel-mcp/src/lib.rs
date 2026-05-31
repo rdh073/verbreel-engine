@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! verbreel-mcp → verbreel-state, verbreel-storage
+//! verbreel-mcp/native-render → verbreel-runtime
 //! ```
 //!
 //! ## Lib + bin split
@@ -23,7 +24,7 @@
 //! |--------------|-------------------------------------------------------------------|
 //! | `initialize` | rmcp default — advertises `tools` capability via [`VerbreelServer::get_info`] |
 //! | `tools/list` | Advertises every verb from [`Engine::verb_ids`]                   |
-//! | `tools/call` | Routes every verb through [`Engine::dispatch`]                    |
+//! | `tools/call` | Routes every verb through [`Engine::dispatch`] (`render.start` is intercepted by the native runtime under `native-render`) |
 //!
 //! Both `tools/list` and `tools/call` delegate to async helpers
 //! ([`VerbreelServer::tools_list`], [`VerbreelServer::call_tool_value`])
@@ -39,6 +40,23 @@
 //! fabricates nothing. The Engine owns routing the three project-less
 //! reads (`help` / `schema` / `list_capabilities`) against its own
 //! synthetic prior — the surface injects no id for any verb.
+//!
+//! ## `native-render` — real render.start
+//!
+//! `render.start` is a §11 streaming verb whose native execution
+//! (rsmpeg decode → wgpu composite → libx264 encode) lives in
+//! `verbreel-runtime`, not in the shared Engine: the Engine routes the
+//! in-graph registry `render.start` verb but does not own the ffmpeg
+//! runtime, so dispatching it there only ever hits the v1 floor
+//! (`E_RENDER_FAIL`). Under the `native-render` feature the server holds
+//! an injected [`verbreel_runtime::RenderRuntimeConfig`] and intercepts a
+//! `render.start` `tools/call`, running the real render and wrapping the
+//! outcome (success data, or the runtime's `E_*` failure code) in the
+//! §0.1 [`Envelope`] — exactly as `verbreel-http` does. Without the
+//! feature, `render.start` falls through to [`Engine::dispatch`] and
+//! returns the floor envelope. This mirrors the CLI / HTTP surfaces so
+//! real render is preserved on every surface, per the dep rule's
+//! `+ verbreel-runtime behind native-render`.
 //!
 //! ## Logs go to stderr
 //!
@@ -80,6 +98,12 @@ pub mod tools;
 #[derive(Clone)]
 pub struct VerbreelServer {
     engine: Arc<Mutex<Engine>>,
+    /// Injected native render runtime (§11). Present only under
+    /// `native-render`; intercepts a `render.start` `tools/call` so the
+    /// surface produces real mp4 instead of the Engine's `E_RENDER_FAIL`
+    /// floor. See the module-level `native-render` doc.
+    #[cfg(feature = "native-render")]
+    render_runtime: verbreel_runtime::RenderRuntimeConfig,
 }
 
 impl std::fmt::Debug for VerbreelServer {
@@ -101,10 +125,34 @@ impl VerbreelServer {
     /// Construct a server over an [`Engine`] rooted at `home`. Tests use
     /// this with a `TempDir` so each server gets an isolated projects
     /// index.
+    ///
+    /// Under `native-render` the render runtime is resolved from the
+    /// environment ([`verbreel_runtime::RenderRuntimeConfig::from_env`]),
+    /// matching the HTTP / CLI surfaces.
     #[must_use]
     pub fn with_home(home: impl Into<PathBuf>) -> Self {
         Self {
             engine: Arc::new(Mutex::new(Engine::new(home))),
+            #[cfg(feature = "native-render")]
+            render_runtime: verbreel_runtime::RenderRuntimeConfig::from_env(),
+        }
+    }
+
+    /// Construct a server with an injected render runtime (§11).
+    ///
+    /// The Engine is rooted at `home`; the render runtime is the one the
+    /// caller supplies. Tests point it at a fixture project root (or an
+    /// empty config, to exercise the `E_PROJECT_NOT_FOUND` mapping
+    /// without ffmpeg).
+    #[cfg(feature = "native-render")]
+    #[must_use]
+    pub fn with_render_runtime(
+        home: impl Into<PathBuf>,
+        render_runtime: verbreel_runtime::RenderRuntimeConfig,
+    ) -> Self {
+        Self {
+            engine: Arc::new(Mutex::new(Engine::new(home))),
+            render_runtime,
         }
     }
 
@@ -128,6 +176,12 @@ impl VerbreelServer {
     /// [`Envelope`]. An unknown verb is no longer a surface reject: it
     /// flows to the Engine and comes back as an `E_UNKNOWN_VERB` envelope.
     ///
+    /// Under `native-render`, a `render.start` call is intercepted before
+    /// the Engine: it runs the injected [`verbreel_runtime`] render and
+    /// wraps the outcome in the §0.1 [`Envelope`] (see
+    /// [`Self::render_start_envelope`]). Without the feature it falls
+    /// through to the Engine floor like any other verb.
+    ///
     /// # Errors
     ///
     /// Returns [`tools::ArgsShapeError`] only when `arguments` is neither
@@ -140,11 +194,84 @@ impl VerbreelServer {
         arguments: Value,
     ) -> Result<Envelope, tools::ArgsShapeError> {
         let args = tools::object_args(arguments)?;
+        // render.start native execution lives in verbreel-runtime, not the
+        // shared Engine. Under native-render, intercept it so the surface
+        // produces real mp4; otherwise it falls through to the Engine
+        // (E_RENDER_FAIL floor). Mirrors verbreel-http.
+        #[cfg(feature = "native-render")]
+        if name == "render.start" {
+            return Ok(self.render_start_envelope(Value::Object(args)));
+        }
         // §0.12: MCP passes project_id straight from the client body; the
         // Engine routes project-less reads (help/schema/list_capabilities)
         // against a synthetic prior — the surface never injects an id.
         let mut engine = self.engine.lock().await;
         Ok(engine.dispatch(name, Value::Object(args)))
+    }
+
+    /// Run the native `render.start` through the injected runtime and wrap
+    /// the result in the §0.1 [`Envelope`].
+    ///
+    /// Success → an `ok:true` envelope carrying the runtime's `data` (no
+    /// patch / `event_id` — the native render path records its own event
+    /// in `verbreel-runtime`). Failure → an `ok:false` envelope whose
+    /// `code` is the §0.7 `E_*` mapped from the runtime error and whose
+    /// `message` is the runtime's `Display` string. A `RenderStartArgs`
+    /// deserialize failure is `E_SCHEMA_VIOLATION`. This matches
+    /// `verbreel-http`'s `call_render_start` so render error shapes are
+    /// uniform across surfaces.
+    #[cfg(feature = "native-render")]
+    fn render_start_envelope(&self, args: Value) -> Envelope {
+        let typed: verbreel_state::RenderStartArgs = match serde_json::from_value(args) {
+            Ok(typed) => typed,
+            Err(err) => {
+                return Envelope::Err {
+                    code: "E_SCHEMA_VIOLATION".to_string(),
+                    message: format!("render.start: args deserialize failed: {err}"),
+                    hint: None,
+                    details: None,
+                };
+            }
+        };
+        match self.render_runtime.render_start(&typed) {
+            Ok(data) => Envelope::Ok {
+                data: serde_json::to_value(data).unwrap_or(Value::Null),
+                patch: Value::Array(Vec::new()),
+                warnings: Vec::new(),
+                event_id: String::new(),
+            },
+            // The runtime error Display embeds its E_* code; surface it as
+            // the envelope `code` so clients read a stable code, not just
+            // the human message.
+            Err(err) => Envelope::Err {
+                code: runtime_error_code(&err).to_string(),
+                message: err.to_string(),
+                hint: None,
+                details: None,
+            },
+        }
+    }
+}
+
+/// Map a [`verbreel_runtime::RuntimeError`] to its §0.7 `E_*` code. The
+/// runtime's `Display` already embeds the code in its message; this lifts
+/// it into the structured envelope `code` field. Mirrors the identical
+/// mapper in `verbreel-http` so render error codes are uniform across
+/// surfaces.
+#[cfg(feature = "native-render")]
+fn runtime_error_code(err: &verbreel_runtime::RuntimeError) -> &'static str {
+    use verbreel_runtime::RuntimeError as E;
+    match err {
+        E::ProjectNotFound { .. } => "E_PROJECT_NOT_FOUND",
+        E::RenderPresetUnknown { .. } => "E_RENDER_PRESET_UNKNOWN",
+        E::BadRange { .. } => "E_BAD_RANGE",
+        E::BadTime { .. } => "E_BAD_TIME",
+        E::ArgsIncompatible { .. } => "E_ARGS_INCOMPATIBLE",
+        E::OutPathExists { .. } => "E_OUT_PATH_EXISTS",
+        E::PathEscape { .. } => "E_PATH_ESCAPE",
+        E::RenderEmptyRange => "E_RENDER_EMPTY_RANGE",
+        E::Io { .. } => "E_IO",
+        E::RenderFail { .. } => "E_RENDER_FAIL",
     }
 }
 

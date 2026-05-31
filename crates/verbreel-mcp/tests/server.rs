@@ -40,8 +40,9 @@ async fn tools_list_includes_project_list() {
 
 #[tokio::test]
 async fn tools_list_includes_render_start() {
-    // render.start is now a plain registry verb served by Engine::dispatch
-    // — the native-render apparatus is gone; it must still be advertised.
+    // render.start is a registry verb, so it is always advertised in
+    // tools/list (the native-render interception happens at tools/call,
+    // not in the catalog).
     let (_home, server) = server();
     let result = server.tools_list().await;
     let names: Vec<&str> = result.tools.iter().map(|t| t.name.as_ref()).collect();
@@ -131,10 +132,12 @@ async fn call_tool_value_unknown_verb_yields_e_unknown_verb() {
 }
 
 #[tokio::test]
-async fn call_tool_value_render_start_surfaces_engine_error() {
-    // render flows through Engine::dispatch now. With no open project the
-    // Engine rejects render.start with E_PROJECT_NOT_FOUND — proving the
-    // verb reaches the Engine rather than a deleted runtime path.
+async fn call_tool_value_render_start_surfaces_error_for_unknown_project() {
+    // render.start with an unresolvable project_id must be an err envelope
+    // on EITHER surface path: under native-render the injected runtime
+    // returns E_PROJECT_NOT_FOUND before touching ffmpeg; without the
+    // feature it falls through to the Engine's E_RENDER_FAIL floor. Both
+    // are `Envelope::Err`, so this base-gate test is feature-agnostic.
     let (_home, server) = server();
     let env = server
         .call_tool_value(
@@ -149,7 +152,7 @@ async fn call_tool_value_render_start_surfaces_engine_error() {
         .expect("args are an object");
     assert!(
         matches!(env, Envelope::Err { .. }),
-        "render.start with no open project must be an err envelope, got {env:?}"
+        "render.start with no resolvable project must be an err envelope, got {env:?}"
     );
 }
 
@@ -236,6 +239,68 @@ async fn call_tool_value_project_list_is_deterministic() {
         b.to_json(),
         "project.list envelope must be stable across calls"
     );
+}
+
+/// Under `native-render`, a `render.start` call is intercepted by the
+/// injected runtime (not the Engine floor). With an empty runtime config
+/// rooted at a hermetic home (no projects index), the project cannot be
+/// resolved, so the runtime returns `RuntimeError::ProjectNotFound` BEFORE
+/// any ffmpeg/codec work — exercising the render-error → `E_*` mapping
+/// without a real render. Proves the §0.1 envelope carries the mapped
+/// `E_PROJECT_NOT_FOUND` code, mirroring `verbreel-http`.
+#[cfg(feature = "native-render")]
+#[tokio::test]
+async fn call_tool_value_render_start_maps_runtime_error_to_e_code() {
+    let home = TempDir::new().expect("tempdir");
+    // Empty runtime: no project roots, a hermetic home with no index.
+    // `from_env` would leak the developer's cwd/HOME, so build explicitly.
+    let runtime = verbreel_runtime::RenderRuntimeConfig::new().with_home(home.path());
+    let server = VerbreelServer::with_render_runtime(home.path(), runtime);
+
+    let env = server
+        .call_tool_value(
+            "render.start",
+            json!({
+                "project_id": "0192f000-0000-7000-8000-000000000000",
+                "preset": "youtube-1080p",
+                "out_path": "exports/out.mp4",
+            }),
+        )
+        .await
+        .expect("args are an object");
+
+    let Envelope::Err { code, message, .. } = &env else {
+        panic!("unresolvable project must be an err envelope, got {env:?}");
+    };
+    assert_eq!(
+        code, "E_PROJECT_NOT_FOUND",
+        "runtime error must map to the §0.7 E_* code, got message: {message}"
+    );
+}
+
+/// Under `native-render`, malformed `render.start` args (missing required
+/// `out_path`) fail the `RenderStartArgs` deserialize at the surface and
+/// map to `E_SCHEMA_VIOLATION` — not a runtime call. Mirrors HTTP's
+/// `call_render_start` deserialize arm.
+#[cfg(feature = "native-render")]
+#[tokio::test]
+async fn call_tool_value_render_start_bad_args_maps_to_e_schema_violation() {
+    let home = TempDir::new().expect("tempdir");
+    let runtime = verbreel_runtime::RenderRuntimeConfig::new().with_home(home.path());
+    let server = VerbreelServer::with_render_runtime(home.path(), runtime);
+
+    let env = server
+        .call_tool_value(
+            "render.start",
+            json!({ "project_id": "0192f000-0000-7000-8000-000000000000" }),
+        )
+        .await
+        .expect("args are an object (the verb-level deserialize is the failure)");
+
+    let Envelope::Err { code, .. } = &env else {
+        panic!("missing required args must be an err envelope, got {env:?}");
+    };
+    assert_eq!(code, "E_SCHEMA_VIOLATION");
 }
 
 #[test]
