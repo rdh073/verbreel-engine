@@ -16,6 +16,7 @@ name = "verbreel_mcp"
 path = "src/main.rs"
 
 [dependencies]
+verbreel-agent = { path = "../verbreel-agent" }
 verbreel-state = { path = "../verbreel-state" }
 verbreel-storage = { path = "../verbreel-storage" }
 tokio.workspace = true
@@ -26,7 +27,7 @@ anyhow.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-# Used in tests/tools.rs to mint a caller-supplied project_id and
-# confirm dispatch() preserves it (does not overwrite with the
-# internally-synthesised id).
+# Tests mint caller-supplied project ids and create real on-disk projects
+# (via verbreel-agent Session) to exercise the project-bound dispatch path.
 uuid.workspace = true
+tempfile.workspace = true
