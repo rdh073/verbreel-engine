@@ -215,11 +215,17 @@ impl VerbreelServer {
     /// Success → an `ok:true` envelope carrying the runtime's `data` (no
     /// patch / `event_id` — the native render path records its own event
     /// in `verbreel-runtime`). Failure → an `ok:false` envelope whose
-    /// `code` is the §0.7 `E_*` mapped from the runtime error and whose
-    /// `message` is the runtime's `Display` string. A `RenderStartArgs`
-    /// deserialize failure is `E_SCHEMA_VIOLATION`. This matches
-    /// `verbreel-http`'s `call_render_start` so render error shapes are
-    /// uniform across surfaces.
+    /// `code` is the §0.7 `E_*` from
+    /// [`verbreel_runtime::RuntimeError::code`] and whose `message` is the
+    /// runtime's `Display` string. A `RenderStartArgs` deserialize failure
+    /// is `E_SCHEMA_VIOLATION`; a `data` serialize failure (should never
+    /// happen for the runtime's concrete success type) is `E_INTERNAL`.
+    ///
+    /// The render-error `E_*` code comes from the single shared
+    /// [`verbreel_runtime::RuntimeError::code`] — the one tested source of
+    /// truth in `verbreel-runtime`. Every surface (CLI / HTTP / MCP) calls
+    /// it, so the render-error code surfaced here is uniform across
+    /// surfaces by construction, not by hand-mirrored match arms.
     #[cfg(feature = "native-render")]
     fn render_start_envelope(&self, args: Value) -> Envelope {
         let typed: verbreel_state::RenderStartArgs = match serde_json::from_value(args) {
@@ -234,44 +240,38 @@ impl VerbreelServer {
             }
         };
         match self.render_runtime.render_start(&typed) {
-            Ok(data) => Envelope::Ok {
-                data: serde_json::to_value(data).unwrap_or(Value::Null),
-                patch: Value::Array(Vec::new()),
-                warnings: Vec::new(),
-                event_id: String::new(),
+            // A serialize failure here would silently coerce to
+            // `ok:true{data:null}` under `unwrap_or(Value::Null)` — a
+            // hollow success. Map it to an `E_INTERNAL` err envelope so a
+            // client never reads `ok:true` for a render whose result could
+            // not be encoded.
+            Ok(data) => match serde_json::to_value(&data) {
+                Ok(data) => Envelope::Ok {
+                    data,
+                    patch: Value::Array(Vec::new()),
+                    warnings: Vec::new(),
+                    // TODO(#455): native render records its own event in
+                    // verbreel-runtime; thread the real event_id here.
+                    event_id: String::new(),
+                },
+                Err(err) => Envelope::Err {
+                    code: "E_INTERNAL".to_string(),
+                    message: format!("render.start: result serialize failed: {err}"),
+                    hint: None,
+                    details: None,
+                },
             },
-            // The runtime error Display embeds its E_* code; surface it as
-            // the envelope `code` so clients read a stable code, not just
-            // the human message.
+            // The render-error E_* code is the single shared
+            // `RuntimeError::code()` — the one tested mapper in
+            // verbreel-runtime. Surfacing it here (not a hand-copied match)
+            // is what makes the code uniform across CLI / HTTP / MCP.
             Err(err) => Envelope::Err {
-                code: runtime_error_code(&err).to_string(),
+                code: err.code().to_string(),
                 message: err.to_string(),
                 hint: None,
                 details: None,
             },
         }
-    }
-}
-
-/// Map a [`verbreel_runtime::RuntimeError`] to its §0.7 `E_*` code. The
-/// runtime's `Display` already embeds the code in its message; this lifts
-/// it into the structured envelope `code` field. Mirrors the identical
-/// mapper in `verbreel-http` so render error codes are uniform across
-/// surfaces.
-#[cfg(feature = "native-render")]
-fn runtime_error_code(err: &verbreel_runtime::RuntimeError) -> &'static str {
-    use verbreel_runtime::RuntimeError as E;
-    match err {
-        E::ProjectNotFound { .. } => "E_PROJECT_NOT_FOUND",
-        E::RenderPresetUnknown { .. } => "E_RENDER_PRESET_UNKNOWN",
-        E::BadRange { .. } => "E_BAD_RANGE",
-        E::BadTime { .. } => "E_BAD_TIME",
-        E::ArgsIncompatible { .. } => "E_ARGS_INCOMPATIBLE",
-        E::OutPathExists { .. } => "E_OUT_PATH_EXISTS",
-        E::PathEscape { .. } => "E_PATH_ESCAPE",
-        E::RenderEmptyRange => "E_RENDER_EMPTY_RANGE",
-        E::Io { .. } => "E_IO",
-        E::RenderFail { .. } => "E_RENDER_FAIL",
     }
 }
 
