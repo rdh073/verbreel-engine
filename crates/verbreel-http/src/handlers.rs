@@ -178,8 +178,8 @@ pub async fn call_verb(
 /// Dispatch the native `render.start` through the injected runtime and
 /// wrap the result in the §0.1 envelope.
 ///
-/// Success → an `ok:true` envelope carrying the runtime's `data` (no
-/// patch / `event_id` — the native render path records its own event in
+/// Success → an `ok:true` envelope carrying the runtime's `data` (no engine
+/// patch, but the truthful `event_id` the native render path recorded in
 /// `verbreel-runtime`). Failure → an `ok:false` envelope whose `message`
 /// carries the runtime's error string (which embeds the `E_*` code, e.g.
 /// `E_RENDER_PRESET_UNKNOWN`).
@@ -197,13 +197,10 @@ fn call_render_start(args: &Value, state: &AppState) -> (StatusCode, Json<Value>
     match state.render_runtime().render_start(&typed) {
         Ok(data) => {
             let envelope = Envelope::Ok {
+                event_id: data.event_id.clone(),
                 data: json!(data),
                 patch: json!([]),
                 warnings: vec![],
-                // TODO(#455): thread the truthful event_id recorded by the
-                // native render path in verbreel-runtime through here; `""`
-                // is the §0.1 read-only/dry-run placeholder until then.
-                event_id: String::new(),
             };
             (StatusCode::OK, Json(envelope.to_json()))
         }

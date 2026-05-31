@@ -270,16 +270,21 @@ fn future_success_data_shape_serializes() {
         job_id: "0190b8d3-15e3-7000-bd00-0000feedbeef".to_string(),
         output_path: "exports/done.mp4".to_string(),
         duration_tk: 240_000,
+        event_id: "0190b8d3-15e3-7000-bd00-00000000ev01".to_string(),
     };
     let value = serde_json::to_value(&data).expect("data serializes");
     let obj = value.as_object().expect("data is object");
-    assert_eq!(obj.len(), 3);
+    assert_eq!(obj.len(), 4);
     assert_eq!(
         obj.get("job_id"),
         Some(&json!("0190b8d3-15e3-7000-bd00-0000feedbeef"))
     );
     assert_eq!(obj.get("output_path"), Some(&json!("exports/done.mp4")));
     assert_eq!(obj.get("duration_tk"), Some(&json!(240_000)));
+    assert_eq!(
+        obj.get("event_id"),
+        Some(&json!("0190b8d3-15e3-7000-bd00-00000000ev01"))
+    );
 }
 
 #[test]
@@ -391,6 +396,10 @@ fn reconstruct_recovers_runtime_recorded_result_data() {
         job_id: "0190b8d3-15e3-7000-bd00-000000000099".to_string(),
         output_path: "/tmp/out.mp4".to_string(),
         duration_tk: 120_000,
+        // The recorded event payload never embeds the event's own id (it is
+        // set on the runtime's returned copy post-record), so the round-trip
+        // through the result warning carries the empty default here.
+        event_id: String::new(),
     };
     let data = verb
         .reconstruct(

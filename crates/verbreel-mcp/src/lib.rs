@@ -213,8 +213,8 @@ impl VerbreelServer {
     /// the result in the §0.1 [`Envelope`].
     ///
     /// Success → an `ok:true` envelope carrying the runtime's `data` (no
-    /// patch / `event_id` — the native render path records its own event
-    /// in `verbreel-runtime`). Failure → an `ok:false` envelope whose
+    /// engine patch, but the truthful `event_id` the native render path
+    /// recorded in `verbreel-runtime`). Failure → an `ok:false` envelope whose
     /// `code` is the §0.7 `E_*` from
     /// [`verbreel_runtime::RuntimeError::code`] and whose `message` is the
     /// runtime's `Display` string. A `RenderStartArgs` deserialize failure
@@ -246,13 +246,11 @@ impl VerbreelServer {
             // client never reads `ok:true` for a render whose result could
             // not be encoded.
             Ok(data) => match serde_json::to_value(&data) {
-                Ok(data) => Envelope::Ok {
-                    data,
+                Ok(data_value) => Envelope::Ok {
+                    data: data_value,
                     patch: Value::Array(Vec::new()),
                     warnings: Vec::new(),
-                    // TODO(#455): native render records its own event in
-                    // verbreel-runtime; thread the real event_id here.
-                    event_id: String::new(),
+                    event_id: data.event_id.clone(),
                 },
                 Err(err) => Envelope::Err {
                     code: "E_INTERNAL".to_string(),

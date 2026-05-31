@@ -23,8 +23,9 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use verbreel_ir::{AssetHash, CompositionInput, IrNodeId};
 use verbreel_state::{
-    Clip, LifecycleError, Project, ProjectId, ProjectStore, RenderStartArgs, RenderStartData,
-    RenderVideoCodec, TrackKind, default_fixtures, default_registry, render_start_result_warning,
+    Clip, LifecycleError, MutateOutcome, Project, ProjectId, ProjectStore, RenderStartArgs,
+    RenderStartData, RenderVideoCodec, TrackKind, default_fixtures, default_registry,
+    render_start_result_warning,
 };
 
 /// Runtime configuration for side-effecting native use-cases.
@@ -300,18 +301,22 @@ fn render_start_at_root(
         }
     })?;
 
-    let data = RenderStartData {
+    let mut data = RenderStartData {
         job_id: job_id.to_string(),
         output_path: output_path.display().to_string(),
         duration_tk: to_tk - from_tk,
+        // Empty while recording: the event payload must not embed its own
+        // not-yet-minted id. Set on the returned copy below, post-record.
+        event_id: String::new(),
     };
-    record_render_start_event(
+    let event_id = record_render_start_event(
         &mut store,
         args,
         &data,
         requested_to_tk,
         project.duration_tk.get(),
     )?;
+    data.event_id = event_id;
 
     Ok(data)
 }
@@ -338,7 +343,7 @@ fn record_render_start_event(
     data: &RenderStartData,
     requested_to_tk: i64,
     clamped_to_tk: i64,
-) -> Result<(), RuntimeError> {
+) -> Result<String, RuntimeError> {
     let event_args = serde_json::to_value(args).map_err(|err| RuntimeError::RenderFail {
         detail: format!("serialize render.start event args: {err}"),
     })?;
@@ -348,7 +353,7 @@ fn record_render_start_event(
     }
     warnings.push(render_start_result_warning(data));
 
-    store
+    let outcome = store
         .mutate_with_warnings(
             "render.start",
             event_args,
@@ -357,7 +362,17 @@ fn record_render_start_event(
             warnings,
         )
         .map_err(record_event_error)?;
-    Ok(())
+    // Un-keyed mutate always writes an event, so the only outcome is
+    // `Applied`. Match exhaustively rather than unwrap so a future outcome
+    // variant is a compile error here, not a silent empty id.
+    match outcome {
+        MutateOutcome::Applied { event_id, .. } => Ok(event_id.to_string()),
+        MutateOutcome::Replayed { .. } | MutateOutcome::NoOp { .. } => {
+            Err(RuntimeError::RenderFail {
+                detail: "render.start event record returned a non-Applied outcome".to_string(),
+            })
+        }
+    }
 }
 
 fn range_clamped_warning(requested: i64, clamped_to: i64) -> Value {

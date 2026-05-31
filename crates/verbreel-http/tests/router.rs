@@ -519,3 +519,120 @@ async fn post_render_start_returns_error_envelope_with_code() -> anyhow::Result<
     );
     Ok(())
 }
+
+/// §0.1 (#455): a successful native render records an event, so the §0.1
+/// `Ok` envelope must carry that event's truthful id — never the
+/// read-only/dry-run `""` placeholder — and the envelope `event_id` must
+/// equal the `data.event_id` the runtime threaded through.
+#[tokio::test]
+#[cfg(feature = "native-render")]
+async fn post_render_start_success_envelope_carries_recorded_event_id() -> anyhow::Result<()> {
+    use std::fs;
+
+    use tempfile::TempDir;
+    use verbreel_runtime::RenderRuntimeConfig;
+    use verbreel_state::{
+        AssetImportData, MutateOutcome, ProjectCreateArgs, ProjectStore, default_fixtures,
+        default_registry, project_create,
+    };
+
+    fn outcome_data(outcome: MutateOutcome) -> Value {
+        match outcome {
+            MutateOutcome::Applied { data, .. }
+            | MutateOutcome::Replayed { data, .. }
+            | MutateOutcome::NoOp { data, .. } => data,
+        }
+    }
+
+    const W: u32 = 64;
+    const H: u32 = 64;
+    const DURATION_TK: i64 = 16_000;
+
+    let home = TempDir::new()?;
+    let at = TempDir::new()?;
+    let source_path = at.path().join("source.ppm");
+    let mut ppm = format!("P6\n{W} {H}\n255\n").into_bytes();
+    for y in 0..H {
+        for x in 0..W {
+            ppm.push(u8::try_from(x * 255 / W).unwrap_or(u8::MAX));
+            ppm.push(u8::try_from(y * 255 / H).unwrap_or(u8::MAX));
+            ppm.push(160);
+        }
+    }
+    fs::write(&source_path, ppm)?;
+
+    let create_data = project_create(&ProjectCreateArgs {
+        name: "http-render-success".to_string(),
+        canvas: format!("{W}x{H}"),
+        fps_num: Some(30),
+        fps_den: Some(1),
+        at: Some(at.path().to_path_buf()),
+        activate: false,
+        metadata: serde_json::Map::new(),
+    })?;
+
+    let registry = default_registry();
+    let fixtures = default_fixtures();
+    let mut store = ProjectStore::open_with_registry(&create_data.path, &registry, &fixtures)?;
+    let import: AssetImportData = serde_json::from_value(outcome_data(store.mutate_via_verb(
+        "asset.import",
+        json!({
+            "project_id": create_data.project_id,
+            "paths": [source_path.display().to_string()],
+        }),
+        None,
+    )?))?;
+    let asset_id = import.assets[0]["id"]
+        .as_str()
+        .expect("asset id")
+        .to_string();
+    store.mutate_via_verb(
+        "clip.add",
+        json!({
+            "project_id": create_data.project_id,
+            "asset_id": asset_id,
+            "track": create_data.seeded_track_ids.video.to_string(),
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": DURATION_TK,
+            "name": "card",
+        }),
+        None,
+    )?;
+    store.save()?;
+    // Release the exclusive events.jsonl flock before the runtime reopens
+    // the project to render.
+    drop(store);
+
+    let app = router_with_state(AppState::with_render_runtime(
+        home.path().to_path_buf(),
+        RenderRuntimeConfig::new().with_project_root(&create_data.path),
+    ));
+    let (status, body) = post_json_with_router(
+        app,
+        "/v1/render/start",
+        json!({
+            "project_id": create_data.project_id,
+            "preset": "deterministic",
+            "out_path": "exports/out.mp4",
+            "from_tk": 0,
+            "to_tk": DURATION_TK,
+            "deterministic": true,
+            "overwrite": true,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"].as_bool(), Some(true), "got body: {body}");
+    let event_id = body["event_id"].as_str().expect("envelope event_id");
+    assert!(
+        !event_id.is_empty(),
+        "recorded render must surface a non-empty event_id, got: {body}"
+    );
+    assert_eq!(
+        body["event_id"], body["data"]["event_id"],
+        "envelope event_id must equal data.event_id, got: {body}"
+    );
+    Ok(())
+}
