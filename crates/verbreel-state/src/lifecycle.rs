@@ -1125,6 +1125,37 @@ impl ProjectStore {
         })
     }
 
+    /// Compute a verb's `(patch, data, warnings)` against the current
+    /// in-memory project **without** persisting anything — the §0.5.1
+    /// `dry_run` path.
+    ///
+    /// This is the compute-only half of [`Self::mutate_via_verb`]: it
+    /// runs the verb's [`crate::reconstructor::Verb::compute_patch`]
+    /// (the same code path, including the `asset.import` root-aware
+    /// special case) and returns the result for the caller to surface,
+    /// but writes no event line, mutates no in-memory state, and never
+    /// touches the idempotency index. The patch returned is exactly the
+    /// patch that *would* be applied — the §0.5.1 guarantee.
+    ///
+    /// # Errors
+    ///
+    /// - [`LifecycleError::UnknownVerb`] — verb id not in registry.
+    /// - [`LifecycleError::VerbExecutionFailed`] — the verb's
+    ///   `compute_patch` rejected the args.
+    pub fn compute_via_verb(
+        &self,
+        verb_id: &str,
+        args: &Value,
+    ) -> Result<(json_patch::Patch, Value, Vec<Value>), LifecycleError> {
+        let verb = self
+            .verbs
+            .get(verb_id)
+            .ok_or_else(|| LifecycleError::UnknownVerb {
+                verb_id: verb_id.to_string(),
+            })?;
+        self.compute_verb_patch(verb_id, args, verb.as_ref())
+    }
+
     /// Steps 1-3 of §0.8 write-ordering. Shared between the keyed and
     /// un-keyed [`Self::mutate`] paths. Returns the event id on
     /// success.
