@@ -28,17 +28,25 @@ verbreel-codec-native → verbreel-ir
 verbreel-codec-web    → verbreel-ir  (wasm32-only)
 verbreel-storage → verbreel-types, verbreel-events
 verbreel-ai      → verbreel-types, verbreel-state
-verbreel-cli     → verbreel-state, verbreel-storage
-verbreel-mcp     → verbreel-state, verbreel-storage
-verbreel-http    → verbreel-state, verbreel-storage
+verbreel-agent   → verbreel-state, verbreel-storage, verbreel-args  (+ reqwest under feature "claude")
+verbreel-cli     → verbreel-agent, verbreel-state, verbreel-storage
+verbreel-mcp     → verbreel-agent, verbreel-state, verbreel-storage
+verbreel-http    → verbreel-agent, verbreel-state, verbreel-storage
 verbreel-wasm    → verbreel-state, verbreel-ir  (wasm32-only)
 ```
 
 No cycles. Never add a dep that would create a cycle.
 
+`verbreel-agent` is the Agentic Experience (AX) composition layer: it owns
+the project-store-backed verb `Session`, the capability-discovery catalog, and
+the NL→verb `Planner`. It sits above the kernel and below the surface binaries
+(cli / mcp / http), which dispatch through it. The LLM planner lives here, never
+in `verbreel-state` — network transport is an application concern the kernel
+must not take on.
+
 ## Commit conventions
 `<crate>: <imperative summary>` e.g. `state: implement §0.13 asset-path invariant`
-Areas: types / args / canon / events / state / ir / render / codec / storage / ai / cli / mcp / http / wasm / ci / spec
+Areas: types / args / canon / events / state / ir / render / codec / storage / ai / agent / cli / mcp / http / wasm / ci / spec
 
 ## Do NOT
 - Break the write ordering (§0.8): apply() must write event BEFORE patching in-memory state

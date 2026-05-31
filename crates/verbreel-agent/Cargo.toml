@@ -1,0 +1,38 @@
+[package]
+name = "verbreel-agent"
+description = "Agentic Experience (AX) layer — project-store verb dispatch, capability discovery, and NL→verb planning over the verbreel engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "verbreel_agent"
+
+[features]
+default = []
+# Live Anthropic Messages-API planner. Off by default: the planner logic
+# (prompt build + JSON-plan parse + registry validation) is transport-agnostic
+# and unit-tested against a mock LlmClient, so the default build needs no
+# network stack. Turn on for the standalone `verbreel edit --intent` demo.
+claude = ["dep:reqwest"]
+
+[dependencies]
+# Engine kernel — `ProjectStore` lifecycle + the §0.8 `mutate_via_verb` forward
+# path live here (default `native` feature pulls verbreel-storage transitively).
+verbreel-state = { path = "../verbreel-state" }
+verbreel-storage = { path = "../verbreel-storage" }
+# Per-verb JSON Schemas for the capability catalog (agent discovery surface).
+verbreel-args = { path = "../verbreel-args" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# `json_patch::Patch` is the compute_patch return type; the dispatcher inspects
+# `patch.0.is_empty()` to route read-only verbs around the event log.
+json-patch.workspace = true
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true
