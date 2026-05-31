@@ -36,7 +36,7 @@
 #![cfg(feature = "native")]
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use serde_json::{Value, json};
@@ -380,8 +380,17 @@ impl Engine {
             }
             Err(e) => return open_error_to_envelope(&e),
         }
+        // §2.6: `project.create` appends the id→root entry to the
+        // user-wide projects-index. Without it, a one-shot CLI process
+        // (`create` then a fresh `clip.add <id>` in a new process) has an
+        // empty open-map AND an empty index, so `resolve_root_for_project_id`
+        // returns NotFound and every project-scoped CLI verb is inert.
+        // Long-running surfaces (MCP/HTTP) hold the open-map in-session, so
+        // this only ever bit the CLI — but the index is the documented
+        // durable id→root source of truth, so the engine writes it here.
+        let warnings = self.register_in_index(&data.project_id, &data.path);
         match serialize_or_internal("project.create", "data", &data) {
-            Ok(data_value) => Envelope::ok(data_value, json!([]), Vec::new(), String::new()),
+            Ok(data_value) => Envelope::ok(data_value, json!([]), warnings, String::new()),
             Err(env) => *env,
         }
     }
@@ -394,11 +403,22 @@ impl Engine {
         match project_open::open(&typed) {
             Ok((store, data)) => {
                 let id = store.project().id;
+                // Register the ABSOLUTIZED root the store resolved, NOT the
+                // caller's raw `typed.path`: `project.open` accepts a relative
+                // path (resolved against the caller's cwd by `to_absolute`),
+                // and a relative entry in the durable index would later resolve
+                // against a *different* process's cwd — defeating the
+                // cross-process resolution this registration exists for.
+                // `store.root()` is the absolute path the verb validated.
+                let root = store.root().to_path_buf();
                 self.open.insert(id, store);
+                // §2.6: opening (re-)appends the id→root entry. The resolver
+                // scans newest-first, so an already-indexed project is
+                // shadowed by this fresh append (newest wins) — re-registering
+                // never corrupts the index, it just records the most recent open.
+                let warnings = self.register_in_index(&id, &root);
                 match serialize_or_internal("project.open", "data", &data) {
-                    Ok(data_value) => {
-                        Envelope::ok(data_value, json!([]), Vec::new(), String::new())
-                    }
+                    Ok(data_value) => Envelope::ok(data_value, json!([]), warnings, String::new()),
                     Err(env) => *env,
                 }
             }
@@ -482,6 +502,55 @@ impl Engine {
                 Err(env) => *env,
             },
             Err(e) => forget_error_to_envelope(&e),
+        }
+    }
+
+    /// Register a `(project_id, root)` pair in the user-wide
+    /// projects-index at `<home>/.verbreel/projects-index` (§2.6).
+    ///
+    /// This is the write side of [`Self::resolve_root`]: `create` / `open`
+    /// call it so a later process can turn the client-supplied `project_id`
+    /// back into a root (§0.12). The `home` is an engine-level concern — the
+    /// `project_create` / `project_open` free functions deliberately do not
+    /// know it, so the registration lives here, not in the verbs.
+    ///
+    /// **Index-write failure is non-fatal.** The project is already
+    /// created/opened on disk (and, for `open`, the flock is held and the
+    /// store is in `self.open`), so failing the whole call would leave the
+    /// user with a real on-disk project the API claims does not exist —
+    /// strictly worse than an unindexed-but-open project. We therefore do
+    /// NOT propagate the error: we log it via `tracing::warn!` (operational
+    /// visibility, the crate's recoverable-IO convention) AND return a
+    /// `W_INDEX_WRITE_FAILED` warning so the agent observes that the durable
+    /// index was not updated (next-process resolution of this id will miss
+    /// until a successful re-register). The error is not swallowed silently —
+    /// it surfaces on both channels — it is just not promoted to a fatal.
+    ///
+    /// Returns the envelope `warnings` vector: empty on success, one
+    /// `W_INDEX_WRITE_FAILED` entry on an index-write IO error.
+    fn register_in_index(&self, project_id: &ProjectId, root: &Path) -> Vec<Value> {
+        match verbreel_storage::layout::register_project(&self.home, &project_id.to_string(), root)
+        {
+            Ok(()) => Vec::new(),
+            Err(e) => {
+                tracing::warn!(
+                    project_id = %project_id,
+                    root = %root.display(),
+                    error = %e,
+                    "failed to write projects-index entry; project is usable in-session \
+                     but will not resolve by id in a fresh process until re-registered"
+                );
+                vec![json!({
+                    "code": "W_INDEX_WRITE_FAILED",
+                    "message": format!(
+                        "project created/opened, but writing the projects-index entry failed: {e}"
+                    ),
+                    "details": {
+                        "project_id": project_id.to_string(),
+                        "path": root.display().to_string(),
+                    },
+                })]
+            }
         }
     }
 
