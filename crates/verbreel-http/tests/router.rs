@@ -26,6 +26,25 @@ async fn post_json(uri: &str, body: Value) -> (StatusCode, Value) {
     (status, value)
 }
 
+#[cfg(feature = "native-render")]
+async fn post_json_with_router(
+    router: axum::Router,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let res = router.oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    (status, value)
+}
+
 /// Send a `GET` request to the in-memory router and return
 /// `(status, body)`.
 async fn get_json(uri: &str) -> (StatusCode, Value) {
@@ -49,6 +68,7 @@ async fn healthz_returns_200_with_status_ok() {
 }
 
 #[tokio::test]
+#[cfg(not(feature = "native-render"))]
 async fn list_tools_returns_200_with_project_list_only() {
     let (status, body) = get_json("/tools").await;
     assert_eq!(status, StatusCode::OK);
@@ -61,6 +81,22 @@ async fn list_tools_returns_200_with_project_list_only() {
         "v1 floor must advertise exactly one tool, got: {tools:?}"
     );
     assert_eq!(tools[0]["name"].as_str(), Some("project.list"));
+}
+
+#[tokio::test]
+#[cfg(feature = "native-render")]
+async fn list_tools_returns_200_with_render_start() {
+    let (status, body) = get_json("/tools").await;
+    assert_eq!(status, StatusCode::OK);
+    let tools = body["tools"]
+        .as_array()
+        .expect("response must carry `tools` array");
+    let names: Vec<&str> = tools
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(names.contains(&"project.list"));
+    assert!(names.contains(&"render.start"));
 }
 
 #[tokio::test]
@@ -255,6 +291,51 @@ async fn caller_supplied_project_id_is_threaded_into_prior_state() {
         StatusCode::OK,
         "nil project_id must not silently succeed; got body: {body}"
     );
+}
+
+#[tokio::test]
+#[cfg(feature = "native-render")]
+async fn post_render_start_delegates_to_runtime() -> anyhow::Result<()> {
+    use tempfile::TempDir;
+    use verbreel_http::{AppState, router_with_state};
+    use verbreel_runtime::RenderRuntimeConfig;
+    use verbreel_state::{ProjectCreateArgs, project_create};
+
+    let tmp = TempDir::new()?;
+    let create_data = project_create(&ProjectCreateArgs {
+        name: "http-render-project".to_string(),
+        canvas: "64x64".to_string(),
+        fps_num: Some(30),
+        fps_den: Some(1),
+        at: Some(tmp.path().to_path_buf()),
+        activate: false,
+        metadata: serde_json::Map::new(),
+    })?;
+    let router = router_with_state(AppState::with_render_runtime(
+        RenderRuntimeConfig::new().with_project_root(&create_data.path),
+    ));
+    let (status, body) = post_json_with_router(
+        router,
+        "/tools/render.start",
+        json!({
+            "project_id": create_data.project_id,
+            "preset": "definitely-not-a-preset",
+            "out_path": "exports/out.mp4",
+            "from_tk": 0,
+            "to_tk": 8000,
+            "overwrite": true,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        body["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("E_RENDER_PRESET_UNKNOWN")),
+        "HTTP must surface the runtime error code, got: {body}"
+    );
+    Ok(())
 }
 
 #[tokio::test]

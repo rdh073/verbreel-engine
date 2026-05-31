@@ -15,6 +15,7 @@ fn supported_verbs_contains_project_list() {
 }
 
 #[test]
+#[cfg(not(feature = "native-render"))]
 fn supported_verbs_holds_exactly_one_entry_at_v1_floor() {
     // The slice contract: exactly one verb at v1 floor. Future slices
     // append additively — when that happens, update this number and the
@@ -23,6 +24,15 @@ fn supported_verbs_holds_exactly_one_entry_at_v1_floor() {
         SUPPORTED_VERBS.len(),
         1,
         "expected exactly one whitelisted verb at v1 floor, got: {SUPPORTED_VERBS:?}"
+    );
+}
+
+#[test]
+#[cfg(feature = "native-render")]
+fn supported_verbs_includes_native_render_start() {
+    assert!(
+        SUPPORTED_VERBS.contains(&"render.start"),
+        "native-render must whitelist render.start, got: {SUPPORTED_VERBS:?}"
     );
 }
 

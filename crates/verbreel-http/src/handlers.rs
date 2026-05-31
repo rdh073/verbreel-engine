@@ -36,18 +36,27 @@
 
 use axum::{
     Json,
-    extract::{Path, rejection::JsonRejection},
+    extract::{Path, State, rejection::JsonRejection},
     http::StatusCode,
     response::IntoResponse,
 };
 use serde_json::{Value, json};
+#[cfg(feature = "native-render")]
+use verbreel_state::RenderStartArgs;
 use verbreel_state::{ProjectId, default_registry, synthetic_empty_project};
+
+use crate::AppState;
 
 /// Verbs exposed by this HTTP server at the current slice.
 ///
 /// Adding a verb later is additive: append its name and (if needed)
 /// extend [`describe_verb`].
+#[cfg(not(feature = "native-render"))]
 pub const SUPPORTED_VERBS: &[&str] = &["project.list"];
+
+/// Verbs exposed by this HTTP server when native render is enabled.
+#[cfg(feature = "native-render")]
+pub const SUPPORTED_VERBS: &[&str] = &["project.list", "render.start"];
 
 /// Returns `true` when `verb` is exposed by this HTTP server.
 #[must_use]
@@ -90,9 +99,13 @@ pub async fn list_tools() -> Json<Value> {
 /// Response shape and error mapping are documented in the module-level
 /// doc table above.
 pub async fn call_tool(
+    State(state): State<AppState>,
     Path(verb): Path<String>,
     args: Result<Json<Value>, JsonRejection>,
 ) -> impl IntoResponse {
+    #[cfg(not(feature = "native-render"))]
+    let _ = &state;
+
     if !is_supported(&verb) {
         return (
             StatusCode::NOT_FOUND,
@@ -131,6 +144,11 @@ pub async fn call_tool(
             );
         }
     };
+
+    #[cfg(feature = "native-render")]
+    if verb == "render.start" {
+        return call_render_start(args_obj, &state);
+    }
 
     // project.list is project-agnostic at v1 floor, but the Verb trait
     // still demands a `project_id` to clear its argument shape. When the
@@ -186,6 +204,35 @@ pub async fn call_tool(
     }
 }
 
+#[cfg(feature = "native-render")]
+fn call_render_start(
+    args_obj: serde_json::Map<String, Value>,
+    state: &AppState,
+) -> (StatusCode, Json<Value>) {
+    let typed: RenderStartArgs = match serde_json::from_value(Value::Object(args_obj)) {
+        Ok(typed) => typed,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "bad args",
+                    "detail": format!("render.start: args deserialize failed: {err}"),
+                })),
+            );
+        }
+    };
+    match state.render_runtime().render_start(&typed) {
+        Ok(data) => (StatusCode::OK, Json(json!({ "data": data }))),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": "verb failure",
+                "detail": err.to_string(),
+            })),
+        ),
+    }
+}
+
 /// Static descriptions for the verbs in this slice. New entries get
 /// added when their verb is whitelisted; the default branch keeps the
 /// `GET /tools` response well-formed even if a name is added to
@@ -196,6 +243,7 @@ fn describe_verb(verb: &str) -> &'static str {
             "List all known projects. v1 floor returns an empty array — \
              the real catalog index lands in a later slice."
         }
+        "render.start" => "Start a native render for a project and write the encoded output path.",
         _ => "Verbreel verb (no description provided).",
     }
 }

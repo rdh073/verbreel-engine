@@ -57,10 +57,21 @@ fn verb_as_tool_input_schema_is_permissive_object() {
 }
 
 #[test]
+#[cfg(not(feature = "native-render"))]
 fn all_tools_yields_one_entry_at_v1_floor() {
     let tools = all_tools();
     assert_eq!(tools.len(), SUPPORTED_VERBS.len());
     assert_eq!(tools[0].name.as_ref(), "project.list");
+}
+
+#[test]
+#[cfg(feature = "native-render")]
+fn all_tools_includes_native_render_start() {
+    let tools = all_tools();
+    let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_ref()).collect();
+    assert!(names.contains(&"project.list"));
+    assert!(names.contains(&"render.start"));
+    assert_eq!(tools.len(), SUPPORTED_VERBS.len());
 }
 
 #[test]

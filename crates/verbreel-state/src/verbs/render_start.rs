@@ -17,12 +17,20 @@
 //! `E_RENDER_FAIL` as a runtime-state `Custom` error.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use thiserror::Error;
 use verbreel_types::ProjectId;
 
 use crate::project::Project;
 use crate::reconstructor::{ReconstructError, Verb, VerbError};
+
+/// Event-warning code carrying runtime result data for replay.
+///
+/// The pure `Verb::compute_patch` path cannot mint or observe the runtime
+/// render job id. Native composition roots record successful render events via
+/// `ProjectStore::mutate` with an empty state patch, then stash the missing
+/// result envelope here so the reconstructor remains pure.
+pub const RENDER_START_RESULT_WARNING: &str = "W_RENDER_RESULT_RECORDED";
 
 /// Video codec override accepted by `render.start`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +122,16 @@ pub struct RenderStartData {
     pub duration_tk: i64,
 }
 
+/// Build the event warning used by native runtime surfaces to record result data.
+#[must_use]
+pub fn render_start_result_warning(data: &RenderStartData) -> Value {
+    json!({
+        "code": RENDER_START_RESULT_WARNING,
+        "message": "render.start result recorded for deterministic event replay",
+        "details": data,
+    })
+}
+
 /// Verb-level failures for `render.start`.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RenderStartError {
@@ -187,7 +205,7 @@ impl Verb for RenderStartVerb {
         &self,
         args: &Value,
         _patch: &Value,
-        _warnings: &[Value],
+        warnings: &[Value],
         _post_state: &Project,
     ) -> Result<Value, ReconstructError> {
         let _typed: RenderStartArgs =
@@ -196,6 +214,30 @@ impl Verb for RenderStartVerb {
                 expected: "RenderStartArgs",
             })?;
 
+        if let Some(data) = recorded_result_data(warnings)? {
+            return serde_json::to_value(data).map_err(|err| {
+                ReconstructError::Custom(format!("render.start data envelope failed: {err}"))
+            });
+        }
+
         Ok(Value::Null)
     }
+}
+
+fn recorded_result_data(warnings: &[Value]) -> Result<Option<RenderStartData>, ReconstructError> {
+    let Some(details) = warnings
+        .iter()
+        .find(|warning| {
+            warning.get("code").and_then(Value::as_str) == Some(RENDER_START_RESULT_WARNING)
+        })
+        .and_then(|warning| warning.get("details"))
+    else {
+        return Ok(None);
+    };
+
+    serde_json::from_value(details.clone())
+        .map(Some)
+        .map_err(|err| {
+            ReconstructError::Custom(format!("render.start recorded data invalid: {err}"))
+        })
 }

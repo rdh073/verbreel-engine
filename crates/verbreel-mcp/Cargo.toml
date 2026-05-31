@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 verbreel-state = { path = "../verbreel-state" }
 verbreel-storage = { path = "../verbreel-storage" }
+verbreel-runtime = { path = "../verbreel-runtime", optional = true }
 tokio.workspace = true
 rmcp.workspace = true
 tracing.workspace = true
@@ -25,8 +26,16 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 
+[features]
+default = []
+native-render = [
+    "dep:verbreel-runtime",
+    "verbreel-runtime/native-render",
+]
+
 [dev-dependencies]
 # Used in tests/tools.rs to mint a caller-supplied project_id and
 # confirm dispatch() preserves it (does not overwrite with the
 # internally-synthesised id).
 uuid.workspace = true
+tempfile.workspace = true

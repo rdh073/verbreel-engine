@@ -22,6 +22,8 @@ use std::{borrow::Cow, sync::Arc};
 
 use rmcp::model::{JsonObject, Tool};
 use serde_json::{Value, json};
+#[cfg(feature = "native-render")]
+use verbreel_state::RenderStartArgs;
 use verbreel_state::{ProjectId, default_registry, synthetic_empty_project};
 
 /// Verbs exposed by this MCP server at the current slice.
@@ -29,7 +31,12 @@ use verbreel_state::{ProjectId, default_registry, synthetic_empty_project};
 /// Adding a new verb is purely additive: append its name here, and (if
 /// it needs anything richer than the permissive default schema) extend
 /// [`verb_as_tool`] with a matching arm.
+#[cfg(not(feature = "native-render"))]
 pub const SUPPORTED_VERBS: &[&str] = &["project.list"];
+
+/// Verbs exposed by this MCP server when native render is enabled.
+#[cfg(feature = "native-render")]
+pub const SUPPORTED_VERBS: &[&str] = &["project.list", "render.start"];
 
 /// Returns `true` when `verb` is exposed by this MCP server.
 #[must_use]
@@ -82,6 +89,46 @@ pub fn all_tools() -> Vec<Tool> {
 /// - the verb's `compute_patch` rejects the args (bad shape, invariant
 ///   violation, etc.).
 pub fn dispatch(verb: &str, args: Value) -> anyhow::Result<Value> {
+    #[cfg(feature = "native-render")]
+    {
+        dispatch_with_runtime(
+            verb,
+            args,
+            &verbreel_runtime::RenderRuntimeConfig::from_env(),
+        )
+    }
+    #[cfg(not(feature = "native-render"))]
+    {
+        dispatch_project_list_floor(verb, args)
+    }
+}
+
+/// Route a `tools/call` payload with an injected native render runtime.
+///
+/// # Errors
+///
+/// Bubbles up an `anyhow::Error` when the verb is unsupported, arguments are
+/// malformed, or the runtime rejects the request.
+#[cfg(feature = "native-render")]
+pub fn dispatch_with_runtime(
+    verb: &str,
+    args: Value,
+    runtime: &verbreel_runtime::RenderRuntimeConfig,
+) -> anyhow::Result<Value> {
+    if !is_supported(verb) {
+        return Err(anyhow::anyhow!("verb not supported by this server: {verb}"));
+    }
+    if verb == "render.start" {
+        let args = object_args(args)?;
+        let typed: RenderStartArgs = serde_json::from_value(Value::Object(args))
+            .map_err(|err| anyhow::anyhow!("render.start: args deserialize failed: {err}"))?;
+        let data = runtime.render_start(&typed)?;
+        return serde_json::to_value(data).map_err(Into::into);
+    }
+    dispatch_project_list_floor(verb, args)
+}
+
+fn dispatch_project_list_floor(verb: &str, args: Value) -> anyhow::Result<Value> {
     if !is_supported(verb) {
         return Err(anyhow::anyhow!("verb not supported by this server: {verb}"));
     }
@@ -97,15 +144,7 @@ pub fn dispatch(verb: &str, args: Value) -> anyhow::Result<Value> {
     let project_id = ProjectId::now();
     let prior = synthetic_empty_project(project_id);
 
-    let mut args_obj = match args {
-        Value::Object(map) => map,
-        Value::Null => serde_json::Map::new(),
-        other => {
-            return Err(anyhow::anyhow!(
-                "tool arguments must be a JSON object, got: {other}"
-            ));
-        }
-    };
+    let mut args_obj = object_args(args)?;
     args_obj
         .entry("project_id".to_string())
         .or_insert_with(|| json!(project_id));
@@ -113,6 +152,16 @@ pub fn dispatch(verb: &str, args: Value) -> anyhow::Result<Value> {
 
     let (_patch, data, _warnings) = verb_impl.compute_patch(&prior, &args)?;
     Ok(data)
+}
+
+fn object_args(args: Value) -> anyhow::Result<serde_json::Map<String, Value>> {
+    match args {
+        Value::Object(map) => Ok(map),
+        Value::Null => Ok(serde_json::Map::new()),
+        other => Err(anyhow::anyhow!(
+            "tool arguments must be a JSON object, got: {other}"
+        )),
+    }
 }
 
 /// Permissive `{"type": "object"}` schema used until the args-registry
@@ -134,6 +183,7 @@ fn description_for(verb: &str) -> &'static str {
             "List all known projects. v1 floor returns an empty array — \
              the real catalog index lands in a later slice."
         }
+        "render.start" => "Start a native render for a project and write the encoded output path.",
         _ => "Verbreel verb (no description provided).",
     }
 }

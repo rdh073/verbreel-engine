@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! verbreel-http → verbreel-state, verbreel-storage
+//! verbreel-http/native-render → verbreel-runtime
 //! ```
 //!
 //! ## Lib + bin split
@@ -47,15 +48,53 @@ use axum::{
 
 pub mod handlers;
 
+/// Axum application state.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "native-render"), derive(Default))]
+pub struct AppState {
+    #[cfg(feature = "native-render")]
+    render_runtime: verbreel_runtime::RenderRuntimeConfig,
+}
+
+impl AppState {
+    /// Construct application state with an injected render runtime.
+    #[cfg(feature = "native-render")]
+    #[must_use]
+    pub fn with_render_runtime(render_runtime: verbreel_runtime::RenderRuntimeConfig) -> Self {
+        Self { render_runtime }
+    }
+
+    #[cfg(feature = "native-render")]
+    pub(crate) fn render_runtime(&self) -> &verbreel_runtime::RenderRuntimeConfig {
+        &self.render_runtime
+    }
+}
+
+#[cfg(feature = "native-render")]
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            #[cfg(feature = "native-render")]
+            render_runtime: verbreel_runtime::RenderRuntimeConfig::from_env(),
+        }
+    }
+}
+
 /// Assemble the axum router with every endpoint this crate exposes.
 ///
 /// Pure — no I/O, no async — so unit tests can construct a fresh router
 /// per case and drive it through `tower::ServiceExt::oneshot`.
 pub fn router() -> Router {
+    router_with_state(AppState::default())
+}
+
+/// Assemble the axum router with explicit app state.
+pub fn router_with_state(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(handlers::healthz))
         .route("/tools", get(handlers::list_tools))
         .route("/tools/{verb}", post(handlers::call_tool))
+        .with_state(state)
 }
 
 /// Bind `addr` and serve the [`router`] until the listener errors out.
