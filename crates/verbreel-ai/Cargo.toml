@@ -2,6 +2,7 @@
 name = "verbreel-ai"
 description = "ort runtime, Python sidecar dispatch."
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

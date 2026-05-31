@@ -2,6 +2,7 @@
 name        = "verbreel-events"
 description = "events.jsonl writer/reader + idempotency index, with backend trait (spec §0.8, App. C)."
 version.workspace      = true
+publish.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true

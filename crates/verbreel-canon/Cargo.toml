@@ -2,6 +2,7 @@
 name        = "verbreel-canon"
 description = "RFC 8785 JSON Canonicalization Scheme + project_hash projection (spec §0.5.2)."
 version.workspace      = true
+publish.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
