@@ -2,6 +2,7 @@
 name = "verbreel-ir"
 description = "Composition IR, tick-rate math, cache_hash derivation."
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

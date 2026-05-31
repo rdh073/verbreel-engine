@@ -12,8 +12,8 @@
 //!    through [`verbreel_state::default_registry`] against a synthetic
 //!    empty project and return its `data` envelope. Used when the server
 //!    is not bound to a project; the project-backed path
-//!    ([`crate::VerbreelServer`] with a workspace project) lives in
-//!    `lib.rs` and persists through a [`verbreel_agent::Session`].
+//!    ([`crate::VerbreelServer`] with a workspace project) and the
+//!    `native-render` `render.start` interception live in `lib.rs`.
 
 use std::{borrow::Cow, sync::Arc};
 

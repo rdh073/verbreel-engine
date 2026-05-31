@@ -7,7 +7,7 @@ use verbreel_state::verbs::render_start::compute_patch;
 use verbreel_state::{
     Project, RenderAudioCodec, RenderStartArgs, RenderStartData, RenderStartError, RenderStartVerb,
     RenderVideoCodec, Verb, VerbError, VerbRegistry, default_fixtures, default_registry,
-    validate_reconstructors,
+    render_start_result_warning, validate_reconstructors,
 };
 use verbreel_types::ProjectId;
 
@@ -382,6 +382,26 @@ fn default_fixture_has_empty_patch_warnings_and_null_expected_data() {
     assert_eq!(fixture.patch, json!([]));
     assert!(fixture.warnings.is_empty());
     assert_eq!(fixture.expected_data, Value::Null);
+}
+
+#[test]
+fn reconstruct_recovers_runtime_recorded_result_data() {
+    let verb = RenderStartVerb;
+    let expected = RenderStartData {
+        job_id: "0190b8d3-15e3-7000-bd00-000000000099".to_string(),
+        output_path: "/tmp/out.mp4".to_string(),
+        duration_tk: 120_000,
+    };
+    let data = verb
+        .reconstruct(
+            &args_value(),
+            &json!([]),
+            &[render_start_result_warning(&expected)],
+            &empty_project(),
+        )
+        .expect("recorded runtime warning reconstructs");
+    let actual: RenderStartData = serde_json::from_value(data).expect("data shape");
+    assert_eq!(actual, expected);
 }
 
 #[test]

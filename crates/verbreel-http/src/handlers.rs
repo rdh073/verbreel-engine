@@ -13,6 +13,10 @@
 //!    [`agent_plan`] (feature `claude`) turns an intent into a plan and
 //!    applies it.
 //!
+//! Under the `native-render` feature, `call_tool` routes `render.start`
+//! to [`verbreel_runtime`] for an actual pixel encode against
+//! `<workspace>/<name>`; every other verb takes the Session path.
+//!
 //! ## Path-traversal guard
 //!
 //! Project names arrive in the URL path and are joined onto the
@@ -129,6 +133,8 @@ pub async fn create_project(
 /// Opens `<workspace>/<name>`, runs `verb` through the §0.8 forward path,
 /// saves on a mutation, and returns the verb's `data` envelope plus
 /// metadata. Read-only verbs return their data with no event written.
+/// Under `native-render`, `render.start` is routed to the render runtime
+/// for an actual pixel encode instead of the pure registry verb.
 pub async fn call_tool(
     State(state): State<AppState>,
     Path((name, verb)): Path<(String, String)>,
@@ -141,8 +147,13 @@ pub async fn call_tool(
         Ok(Json(value)) => value,
         Err(rejection) => return bad_request(&rejection.body_text()),
     };
-
     let root = state.workspace.join(&name);
+
+    #[cfg(feature = "native-render")]
+    if verb == "render.start" {
+        return call_render_start(&state, &root, args);
+    }
+
     let mut session = match Session::open(&root) {
         Ok(s) => s,
         Err(e) => return agent_error_response(&e),
@@ -157,6 +168,28 @@ pub async fn call_tool(
             (StatusCode::OK, Json(outcome_json(&outcome))).into_response()
         }
         Err(e) => agent_error_response(&e),
+    }
+}
+
+/// Route `render.start` to [`verbreel_runtime`] for an actual pixel
+/// encode against the project at `root` (feature `native-render`).
+#[cfg(feature = "native-render")]
+fn call_render_start(state: &AppState, root: &std::path::Path, args: Value) -> Response {
+    let typed: verbreel_state::RenderStartArgs = match serde_json::from_value(args) {
+        Ok(typed) => typed,
+        Err(err) => return bad_request(&format!("render.start: args deserialize failed: {err}")),
+    };
+    let runtime = state.render_runtime().clone().with_project_root(root);
+    match runtime.render_start(&typed) {
+        Ok(data) => match serde_json::to_value(&data) {
+            Ok(value) => (
+                StatusCode::OK,
+                Json(json!({ "kind": "rendered", "mutated": true, "data": value })),
+            )
+                .into_response(),
+            Err(err) => internal_error(&err.to_string()),
+        },
+        Err(err) => internal_error(&err.to_string()),
     }
 }
 
@@ -322,6 +355,16 @@ fn bad_request(detail: &str) -> Response {
     (
         StatusCode::BAD_REQUEST,
         Json(json!({ "error": "bad request", "detail": detail })),
+    )
+        .into_response()
+}
+
+/// 500 with a `{ error, detail }` body.
+#[cfg(feature = "native-render")]
+fn internal_error(detail: &str) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": "verb failure", "detail": detail })),
     )
         .into_response()
 }

@@ -709,6 +709,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "examples"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sha2",
+ "verbreel-canon",
+ "verbreel-codec-native",
+ "verbreel-ir",
+ "verbreel-render",
+ "verbreel-state",
+]
+
+[[package]]
 name = "fancy-regex"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3247,7 +3261,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "verbreel-agent"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "json-patch",
  "reqwest",
@@ -3262,7 +3276,7 @@ dependencies = [
 
 [[package]]
 name = "verbreel-ai"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ort",
  "serde",
@@ -3278,7 +3292,7 @@ dependencies = [
 
 [[package]]
 name = "verbreel-args"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "jsonschema",
  "serde",
@@ -3289,7 +3303,7 @@ dependencies = [
 
 [[package]]
 name = "verbreel-canon"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "getrandom 0.4.2",
  "serde",
@@ -3303,7 +3317,7 @@ dependencies = [
 
 [[package]]
 name = "verbreel-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3313,13 +3327,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "verbreel-agent",
+ "verbreel-runtime",
  "verbreel-state",
  "verbreel-storage",
 ]
 
 [[package]]
 name = "verbreel-codec-native"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rsmpeg",
  "serde",
@@ -3333,7 +3348,7 @@ dependencies = [
 
 [[package]]
 name = "verbreel-codec-web"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "js-sys",
  "serde",
@@ -3349,7 +3364,7 @@ dependencies = [
 
 [[package]]
 name = "verbreel-conformance"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "json-patch",
  "serde_json",
@@ -3358,7 +3373,7 @@ dependencies = [
 
 [[package]]
 name = "verbreel-events"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "fs4",
  "getrandom 0.4.2",
@@ -3377,7 +3392,7 @@ dependencies = [
 
 [[package]]
 name = "verbreel-http"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3392,13 +3407,14 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "verbreel-agent",
+ "verbreel-runtime",
  "verbreel-state",
  "verbreel-storage",
 ]
 
 [[package]]
 name = "verbreel-ir"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3409,7 +3425,7 @@ dependencies = [
 
 [[package]]
 name = "verbreel-mcp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "rmcp",
@@ -3420,13 +3436,14 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "verbreel-agent",
+ "verbreel-runtime",
  "verbreel-state",
  "verbreel-storage",
 ]
 
 [[package]]
 name = "verbreel-render"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bytemuck",
  "pollster",
@@ -3440,8 +3457,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "verbreel-runtime"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "json-patch",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "verbreel-canon",
+ "verbreel-ir",
+ "verbreel-render",
+ "verbreel-state",
+ "verbreel-storage",
+]
+
+[[package]]
 name = "verbreel-state"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "fontdb",
  "json-patch",
@@ -3464,7 +3498,7 @@ dependencies = [
 
 [[package]]
 name = "verbreel-storage"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "fs4",
  "parking_lot",
@@ -3480,7 +3514,7 @@ dependencies = [
 
 [[package]]
 name = "verbreel-types"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "getrandom 0.4.2",
  "serde",
@@ -3491,7 +3525,7 @@ dependencies = [
 
 [[package]]
 name = "verbreel-wasm"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",

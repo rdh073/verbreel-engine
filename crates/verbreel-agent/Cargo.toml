@@ -2,6 +2,7 @@
 name = "verbreel-agent"
 description = "Agentic Experience (AX) layer — project-store verb dispatch, capability discovery, and NL→verb planning over the verbreel engine."
 version.workspace = true
+publish.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

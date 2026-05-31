@@ -16,9 +16,7 @@ use verbreel_http::{AppState, router};
 /// `TempDir` must be held for the test's duration.
 fn workspace() -> (tempfile::TempDir, AppState) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let state = AppState {
-        workspace: dir.path().to_path_buf(),
-    };
+    let state = AppState::new(dir.path().to_path_buf());
     (dir, state)
 }
 
@@ -166,4 +164,48 @@ async fn create_rejects_path_traversal_name() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+}
+
+/// Under `native-render`, `render.start` routes to the runtime; an
+/// unknown preset must surface the runtime's typed error code through
+/// HTTP (lightweight — fails at preset validation, no GPU/FFmpeg work).
+#[tokio::test]
+#[cfg(feature = "native-render")]
+async fn render_start_delegates_to_runtime() -> anyhow::Result<()> {
+    use verbreel_runtime::RenderRuntimeConfig;
+    use verbreel_state::{ProjectCreateArgs, project_create};
+
+    let dir = tempfile::tempdir()?;
+    let created = project_create(&ProjectCreateArgs {
+        name: "http-render".to_string(),
+        canvas: "64x64".to_string(),
+        fps_num: Some(30),
+        fps_den: Some(1),
+        at: Some(dir.path().to_path_buf()),
+        activate: false,
+        metadata: serde_json::Map::new(),
+    })?;
+    let state = AppState::with_render_runtime(dir.path().to_path_buf(), RenderRuntimeConfig::new());
+    let (status, body) = send(
+        &state,
+        Method::POST,
+        "/projects/http-render/tools/render.start",
+        Some(json!({
+            "project_id": created.project_id,
+            "preset": "definitely-not-a-preset",
+            "out_path": "exports/out.mp4",
+            "from_tk": 0,
+            "to_tk": 8000,
+            "overwrite": true,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        body["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("E_RENDER_PRESET_UNKNOWN")),
+        "HTTP must surface the runtime error code, got: {body}"
+    );
+    Ok(())
 }

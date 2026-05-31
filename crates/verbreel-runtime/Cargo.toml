@@ -1,0 +1,34 @@
+[package]
+name = "verbreel-runtime"
+description = "Application runtime use-cases for native Verbreel surfaces."
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "verbreel_runtime"
+path = "src/lib.rs"
+
+[features]
+default = []
+native-render = [
+    "verbreel-render/rsmpeg",
+]
+
+[dependencies]
+verbreel-canon = { path = "../verbreel-canon" }
+verbreel-ir = { path = "../verbreel-ir" }
+verbreel-render = { path = "../verbreel-render" }
+verbreel-state = { path = "../verbreel-state" }
+verbreel-storage = { path = "../verbreel-storage" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+json-patch.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+tempfile.workspace = true

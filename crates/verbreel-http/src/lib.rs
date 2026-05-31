@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! verbreel-http → verbreel-agent, verbreel-state, verbreel-storage
+//! verbreel-http/native-render → verbreel-runtime
 //! ```
 //!
 //! ## Lib + bin split
@@ -30,7 +31,9 @@
 //!
 //! Every verb in the engine registry is reachable through `call_tool` —
 //! there is no whitelist. Mutations persist through a real
-//! [`verbreel_agent::Session`] rooted at `<workspace>/<name>`.
+//! [`verbreel_agent::Session`] rooted at `<workspace>/<name>`. Under the
+//! `native-render` feature, `render.start` is routed to
+//! [`verbreel_runtime`] for actual pixel encode (see [`handlers`]).
 //!
 //! ## Logs go to stderr
 //!
@@ -52,19 +55,55 @@ use axum::{
 pub mod handlers;
 
 /// Shared server state: the workspace directory projects live under
-/// (`<workspace>/<name>`).
+/// (`<workspace>/<name>`), plus the native render runtime when the
+/// `native-render` feature is on.
 #[derive(Debug, Clone)]
 pub struct AppState {
     /// Directory holding the server's projects.
     pub workspace: PathBuf,
+    /// Native render runtime (pixel encode for `render.start`).
+    #[cfg(feature = "native-render")]
+    render_runtime: verbreel_runtime::RenderRuntimeConfig,
+}
+
+impl AppState {
+    /// Build state for `workspace`. Under `native-render`, the render
+    /// runtime is taken from the environment.
+    #[must_use]
+    pub fn new(workspace: PathBuf) -> Self {
+        Self {
+            workspace,
+            #[cfg(feature = "native-render")]
+            render_runtime: verbreel_runtime::RenderRuntimeConfig::from_env(),
+        }
+    }
+
+    /// Build state with an explicit render runtime (tests / embedders).
+    #[cfg(feature = "native-render")]
+    #[must_use]
+    pub fn with_render_runtime(
+        workspace: PathBuf,
+        render_runtime: verbreel_runtime::RenderRuntimeConfig,
+    ) -> Self {
+        Self {
+            workspace,
+            render_runtime,
+        }
+    }
+
+    /// Borrow the native render runtime.
+    #[cfg(feature = "native-render")]
+    #[must_use]
+    pub fn render_runtime(&self) -> &verbreel_runtime::RenderRuntimeConfig {
+        &self.render_runtime
+    }
 }
 
 /// Assemble the axum router over `state`.
 ///
 /// Pure — no I/O, no socket — so tests construct a fresh router per case
 /// (with a temp workspace) and drive it through
-/// `tower::ServiceExt::oneshot`. (`Router` is itself `#[must_use]`, so no
-/// attribute here.)
+/// `tower::ServiceExt::oneshot`. (`Router` is itself `#[must_use]`.)
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(handlers::healthz))
@@ -91,7 +130,7 @@ pub fn router(state: AppState) -> Router {
 pub async fn serve(addr: SocketAddr) -> anyhow::Result<()> {
     let workspace = handlers::workspace_from_env();
     tracing::info!("verbreel-http workspace: {}", workspace.display());
-    let state = AppState { workspace };
+    let state = AppState::new(workspace);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("verbreel-http listening on {addr}");
     axum::serve(listener, router(state)).await?;

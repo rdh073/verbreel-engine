@@ -75,3 +75,37 @@ fn project_bound_dispatch_persists_a_mutation() {
         .expect("project.info dispatches");
     assert_eq!(info["name"], "Bound", "info: {info}");
 }
+
+/// Under `native-render`, `render.start` routes to the runtime; an
+/// unknown preset surfaces the runtime's typed error (lightweight —
+/// fails at preset validation, no GPU/FFmpeg work).
+#[test]
+#[cfg(feature = "native-render")]
+fn render_start_routes_to_runtime() {
+    use verbreel_runtime::RenderRuntimeConfig;
+
+    let ws = tempfile::tempdir().expect("tempdir");
+    let (root, project_id) = {
+        let session = verbreel_agent::Session::create(ws.path(), "rdr", "64x64", None)
+            .expect("create project");
+        (session.root().to_path_buf(), session.project_id())
+    };
+    let server = VerbreelServer::with_project_and_runtime(root, RenderRuntimeConfig::new());
+    let err = server
+        .call_tool_value(
+            "render.start",
+            json!({
+                "project_id": project_id,
+                "preset": "definitely-not-a-preset",
+                "out_path": "exports/out.mp4",
+                "from_tk": 0,
+                "to_tk": 8000,
+                "overwrite": true,
+            }),
+        )
+        .expect_err("unknown preset must error");
+    assert!(
+        err.to_string().contains("E_RENDER_PRESET_UNKNOWN"),
+        "expected runtime error code, got: {err}"
+    );
+}

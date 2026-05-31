@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! verbreel-mcp → verbreel-agent, verbreel-state, verbreel-storage
+//! verbreel-mcp/native-render → verbreel-runtime
 //! ```
 //!
 //! ## What an agent gets
@@ -24,6 +25,10 @@
 //! only verbs return real answers; editing verbs surface their own
 //! "nothing to act on" errors). Discovery (`tools/list`) works in both
 //! modes.
+//!
+//! Under the `native-render` feature, `render.start` is routed to
+//! [`verbreel_runtime`] for an actual pixel encode (scoped to the bound
+//! project when one is set).
 //!
 //! ## Lib + bin split
 //!
@@ -64,10 +69,24 @@ pub mod tools;
 ///
 /// Optionally bound to a project root: when `project_root` is `Some`,
 /// `tools/call` mutations persist through a [`Session`]; when `None`, the
-/// server evaluates verbs statelessly.
-#[derive(Debug, Clone, Default)]
+/// server evaluates verbs statelessly. Under `native-render` it also
+/// carries the render runtime for `render.start` pixel encode.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "native-render"), derive(Default))]
 pub struct VerbreelServer {
     project_root: Option<PathBuf>,
+    #[cfg(feature = "native-render")]
+    render_runtime: verbreel_runtime::RenderRuntimeConfig,
+}
+
+#[cfg(feature = "native-render")]
+impl Default for VerbreelServer {
+    fn default() -> Self {
+        Self {
+            project_root: None,
+            render_runtime: verbreel_runtime::RenderRuntimeConfig::from_env(),
+        }
+    }
 }
 
 impl VerbreelServer {
@@ -82,6 +101,22 @@ impl VerbreelServer {
     pub fn with_project(root: PathBuf) -> Self {
         Self {
             project_root: Some(root),
+            #[cfg(feature = "native-render")]
+            render_runtime: verbreel_runtime::RenderRuntimeConfig::from_env(),
+        }
+    }
+
+    /// Construct a server bound to `root` with an explicit render runtime
+    /// (tests / embedders).
+    #[cfg(feature = "native-render")]
+    #[must_use]
+    pub fn with_project_and_runtime(
+        root: PathBuf,
+        render_runtime: verbreel_runtime::RenderRuntimeConfig,
+    ) -> Self {
+        Self {
+            project_root: Some(root),
+            render_runtime,
         }
     }
 
@@ -91,6 +126,8 @@ impl VerbreelServer {
     pub fn from_env() -> Self {
         Self {
             project_root: std::env::var_os("VERBREEL_PROJECT").map(PathBuf::from),
+            #[cfg(feature = "native-render")]
+            render_runtime: verbreel_runtime::RenderRuntimeConfig::from_env(),
         }
     }
 
@@ -105,13 +142,18 @@ impl VerbreelServer {
     ///
     /// Bound: open the project, run the verb through the §0.8 forward
     /// path, save on a mutation, return the verb's `data`. Unbound:
-    /// stateless evaluation via [`tools::dispatch`].
+    /// stateless evaluation via [`tools::dispatch`]. Under
+    /// `native-render`, `render.start` is routed to the render runtime.
     ///
     /// # Errors
     ///
     /// Bubbles up an `anyhow::Error` from the kernel (unknown verb, bad
-    /// args, lifecycle / IO failure).
+    /// args, lifecycle / IO failure) or the render runtime.
     pub fn call_tool_value(&self, name: &str, arguments: Value) -> anyhow::Result<Value> {
+        #[cfg(feature = "native-render")]
+        if name == "render.start" {
+            return self.call_render_start(arguments);
+        }
         match &self.project_root {
             Some(root) => {
                 let mut session = Session::open(root)?;
@@ -123,6 +165,20 @@ impl VerbreelServer {
             }
             None => tools::dispatch(name, arguments),
         }
+    }
+
+    /// Route `render.start` to [`verbreel_runtime`] for an actual pixel
+    /// encode, scoped to the bound project when one is set.
+    #[cfg(feature = "native-render")]
+    fn call_render_start(&self, arguments: Value) -> anyhow::Result<Value> {
+        let typed: verbreel_state::RenderStartArgs = serde_json::from_value(arguments)
+            .map_err(|err| anyhow::anyhow!("render.start: args deserialize failed: {err}"))?;
+        let runtime = match &self.project_root {
+            Some(root) => self.render_runtime.clone().with_project_root(root),
+            None => self.render_runtime.clone(),
+        };
+        let data = runtime.render_start(&typed)?;
+        serde_json::to_value(data).map_err(Into::into)
     }
 }
 

@@ -11,7 +11,7 @@ fn all_tools_exposes_the_full_surface() {
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
     assert!(names.contains(&"project.list"));
     assert!(names.contains(&"clip.trim"));
-    assert!(names.contains(&"render.queue.add"));
+    assert!(names.contains(&"render.start"));
 }
 
 #[test]
