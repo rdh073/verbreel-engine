@@ -948,3 +948,124 @@ fn create_index_write_failure_is_nonfatal_warns() {
         "the project is created + open even though indexing failed"
     );
 }
+
+// ---- Regression: universal args on lifecycle verbs (issue #446) -------
+//
+// The six lifecycle arg structs all carry `#[serde(deny_unknown_fields)]`.
+// `strip_universal_args` used to run only in `dispatch_project_scoped`, so a
+// lifecycle call carrying a §0.5 universal arg (`idempotency_key` / `dry_run`)
+// deserialized straight into the typed struct, hit the deny-unknown gate, and
+// wrongly returned E_SCHEMA_VIOLATION — even though §0.8 designates
+// `project.create` / `.duplicate` as legitimate idempotency_key surfaces.
+// Each assertion below FAILS before the fix (the call 400s) and passes after.
+
+#[test]
+fn create_with_idempotency_key_is_not_schema_violation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+
+    let env = engine.dispatch(
+        "project.create",
+        json!({
+            "name": "idem-create",
+            "canvas": "1080x1920",
+            "at": dir.path(),
+            "idempotency_key": "k",
+        }),
+    );
+    assert!(
+        env.is_ok(),
+        "project.create with idempotency_key must succeed, not 400 E_SCHEMA_VIOLATION: {env:?}"
+    );
+}
+
+#[test]
+fn open_with_universal_args_is_not_schema_violation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "idem-open");
+    engine.dispatch("project.close", json!({ "project_id": id }));
+    let root = dir.path().join("idem-open");
+
+    let env = engine.dispatch(
+        "project.open",
+        json!({ "path": &root, "idempotency_key": "k", "dry_run": false }),
+    );
+    assert!(
+        env.is_ok(),
+        "project.open with universal args must succeed, not E_SCHEMA_VIOLATION: {env:?}"
+    );
+}
+
+#[test]
+fn save_with_universal_args_is_not_schema_violation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "idem-save");
+
+    let env = engine.dispatch(
+        "project.save",
+        json!({ "project_id": id, "idempotency_key": "k", "dry_run": false }),
+    );
+    assert!(
+        env.is_ok(),
+        "project.save with universal args must succeed, not E_SCHEMA_VIOLATION: {env:?}"
+    );
+}
+
+#[test]
+fn close_with_universal_args_is_not_schema_violation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "idem-close");
+
+    let env = engine.dispatch(
+        "project.close",
+        json!({ "project_id": id, "idempotency_key": "k", "dry_run": false }),
+    );
+    assert!(
+        env.is_ok(),
+        "project.close with universal args must succeed, not E_SCHEMA_VIOLATION: {env:?}"
+    );
+}
+
+#[test]
+fn duplicate_with_idempotency_key_is_not_schema_violation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "idem-dup-src");
+    let source_path = dir.path().join("idem-dup-src");
+
+    let env = engine.dispatch(
+        "project.duplicate",
+        json!({
+            "project_id": id,
+            "name": "idem-dup-dst",
+            "source_path": source_path,
+            "idempotency_key": "k",
+        }),
+    );
+    assert!(
+        env.is_ok(),
+        "project.duplicate with idempotency_key must succeed, not E_SCHEMA_VIOLATION: {env:?}"
+    );
+}
+
+#[test]
+fn forget_with_universal_args_is_not_schema_violation() {
+    let dir = TempDir::new().unwrap();
+    let mut engine = Engine::new(dir.path());
+    let id = create_project(&mut engine, &dir, "idem-forget");
+    // forget removes the on-disk root; close first so the flock is released.
+    engine.dispatch("project.close", json!({ "project_id": id }));
+    let root = dir.path().join("idem-forget");
+
+    let env = engine.dispatch(
+        "project.forget",
+        json!({ "path": &root, "idempotency_key": "k", "dry_run": false }),
+    );
+    assert!(
+        env.is_ok(),
+        "project.forget with universal args must succeed, not E_SCHEMA_VIOLATION: {env:?}"
+    );
+}

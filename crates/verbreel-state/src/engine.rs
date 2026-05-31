@@ -327,8 +327,12 @@ impl Engine {
         // `schema.rs` / `list_capabilities.rs`), so the engine injects a
         // synthetic valid UUID to satisfy deserialization. The caller
         // never supplies one.
+        // Defensive: the project-less read arg structs do not yet carry
+        // `deny_unknown_fields`, so a stray universal arg is currently
+        // tolerated — but strip it anyway so the day one of them tightens to
+        // deny-unknown, a keyed/dry-run call here does not start 400ing (§0.5).
         let synthetic_id = ProjectId::now();
-        let args = inject_project_id(args, synthetic_id);
+        let args = inject_project_id(&strip_universal_args(args), synthetic_id);
         let synthetic = crate::synthetic_empty_project(synthetic_id);
         match verb.compute_patch(&synthetic, &args) {
             Ok((patch, data, warnings)) => match serialize_or_internal(verb_id, "patch", &patch) {
@@ -344,6 +348,11 @@ impl Engine {
     // ---------------------------------------------------------------
 
     fn dispatch_lifecycle(&mut self, verb_id: &str, args: &Value) -> Envelope {
+        // Strip the engine-consumed universal args once before any handler
+        // deserializes into its `deny_unknown_fields` arg struct: §0.8
+        // designates project.create/.duplicate as legitimate idempotency_key
+        // surfaces, so a keyed (or dry_run) lifecycle call must not 400.
+        let args = &strip_universal_args(args);
         match verb_id {
             "project.create" => self.handle_create(args),
             "project.open" => self.handle_open(args),
