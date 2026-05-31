@@ -63,7 +63,14 @@ fn reregister_same_id_upserts_in_place() {
     let old = home.path().join("projects/old");
     let new = home.path().join("projects/new");
     register_project(home.path(), ID_A, "alpha", &old, AT).unwrap();
-    register_project(home.path(), ID_A, "alpha-moved", &new, "2025-02-02T00:00:00Z").unwrap();
+    register_project(
+        home.path(),
+        ID_A,
+        "alpha-moved",
+        &new,
+        "2025-02-02T00:00:00Z",
+    )
+    .unwrap();
 
     let resolved = resolve_root_for_project_id(home.path(), ID_A).unwrap();
     assert_eq!(resolved, new, "the latest registration must win");
@@ -97,7 +104,10 @@ fn deregister_removes_entry_and_reports_presence() {
     register_project(home.path(), ID_A, "alpha", Path::new("/tmp/alpha"), AT).unwrap();
     register_project(home.path(), ID_B, "beta", Path::new("/tmp/beta"), AT).unwrap();
 
-    assert!(deregister_project(home.path(), ID_A).unwrap(), "was present");
+    assert!(
+        deregister_project(home.path(), ID_A).unwrap(),
+        "was present"
+    );
     assert!(
         matches!(
             resolve_root_for_project_id(home.path(), ID_A),
@@ -135,10 +145,21 @@ fn prune_stale_removes_entries_whose_path_is_gone() {
     let home = TempDir::new().unwrap();
     let live = TempDir::new().unwrap(); // exists on disk
     register_project(home.path(), ID_A, "alpha", live.path(), AT).unwrap();
-    register_project(home.path(), ID_B, "beta", Path::new("/no/such/path/ever"), AT).unwrap();
+    register_project(
+        home.path(),
+        ID_B,
+        "beta",
+        Path::new("/no/such/path/ever"),
+        AT,
+    )
+    .unwrap();
 
     let removed = prune_stale(home.path()).unwrap();
-    assert_eq!(removed, vec![ID_B.to_string()], "only the stale id is pruned");
+    assert_eq!(
+        removed,
+        vec![ID_B.to_string()],
+        "only the stale id is pruned"
+    );
 
     let index = read_index(home.path()).unwrap();
     assert_eq!(index.len(), 1);

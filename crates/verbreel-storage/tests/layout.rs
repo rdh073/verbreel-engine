@@ -4,7 +4,9 @@
 use std::path::Path;
 
 use tempfile::TempDir;
-use verbreel_storage::layout::{init_project_root, projects_index_path, read_index, register_project};
+use verbreel_storage::layout::{
+    init_project_root, projects_index_path, read_index, register_project,
+};
 
 const AT: &str = "2025-01-01T00:00:00Z";
 
