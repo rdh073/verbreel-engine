@@ -37,7 +37,12 @@ jobs:
 
   render-smoke:
     name: native render smoke
-    runs-on: ubuntu-22.04
+    # ubuntu-24.04, NOT 22.04: the example links rsmpeg, whose rusty_ffmpeg
+    # build script is pinned to the `ffmpeg6` ABI. 22.04's apt libav* is
+    # FFmpeg 4.4 (libavcodec 58), an ABI mismatch that aborts the build with
+    # `avdevice not found!` at the static pkg-config probe. 24.04 ships
+    # FFmpeg 6.1.1 (libavcodec 60) via plain apt, satisfying `ffmpeg6`.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
@@ -49,10 +54,25 @@ jobs:
       - name: Install FFmpeg and software Vulkan prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             pkg-config libclang-dev \
-            libavcodec-dev libavdevice-dev libavformat-dev libavutil-dev libswscale-dev \
+            libavcodec-dev libavformat-dev libavutil-dev \
+            libavdevice-dev libavfilter-dev libswscale-dev \
+            libswresample-dev libpostproc-dev \
             mesa-vulkan-drivers
+      - name: drop Libs.private from FFmpeg .pc files
+        # rusty_ffmpeg probes its hardcoded 7-lib set (incl. libavdevice) with
+        # pkg-config in `--static` mode. Static mode concatenates each .pc's
+        # `Libs.private`, which for libavdevice lists the full capture/render
+        # backend chain (raw1394, jack, SDL2, alsa, GL, pulse, …). Ubuntu ships
+        # libav* as dynamic .so only, so those backend -dev packages are absent
+        # and the probe fails. The .so resolves its own deps, so for a dynamic
+        # link the Libs.private chain is spurious — strip it so the static
+        # probe returns just the FFmpeg libs Ubuntu actually provides.
+        run: |
+          pcdir=$(pkg-config --variable=pcfiledir libavcodec)
+          sudo sed -i '/^Libs.private:/d' \
+            "$pcdir"/lib{avcodec,avformat,avutil,avdevice,avfilter,swscale,swresample,postproc}.pc
       - name: Render example
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -67,7 +87,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-14]
+        # ubuntu-24.04, NOT 22.04: verbreel-cli --features native-render links
+        # rsmpeg through the same `ffmpeg6`-pinned static pkg-config probe the
+        # render-smoke job hits. 22.04's apt libav* is FFmpeg 4.4 (libavcodec
+        # 58), an ABI mismatch; 24.04 ships FFmpeg 6.1.1 (libavcodec 60).
+        os: [ubuntu-24.04, macos-14]
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
@@ -82,14 +106,29 @@ jobs:
           set -euo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update
-            sudo apt-get install -y \
+            sudo apt-get install -y --no-install-recommends \
               pkg-config libclang-dev \
-              libavcodec-dev libavdevice-dev libavformat-dev libavutil-dev libswscale-dev
+              libavcodec-dev libavformat-dev libavutil-dev \
+              libavdevice-dev libavfilter-dev libswscale-dev \
+              libswresample-dev libpostproc-dev
           elif [ "$RUNNER_OS" = "macOS" ]; then
             brew install ffmpeg llvm pkg-config
             echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
             echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
           fi
+      - name: drop Libs.private from FFmpeg .pc files
+        # Same rusty_ffmpeg static-probe issue as render-smoke: the hardcoded
+        # 7-lib `--static` probe concatenates each .pc's Libs.private, which for
+        # libavdevice lists capture/render backends (raw1394, jack, SDL2, alsa,
+        # GL, pulse, …) whose -dev packages aren't installed. Ubuntu ships
+        # libav* as dynamic .so only, so the .so resolves its own deps and the
+        # Libs.private chain is spurious for a dynamic link — strip it. Linux
+        # only; macOS Homebrew ffmpeg installs full deps and needs no strip.
+        if: runner.os == 'Linux'
+        run: |
+          pcdir=$(pkg-config --variable=pcfiledir libavcodec)
+          sudo sed -i '/^Libs.private:/d' \
+            "$pcdir"/lib{avcodec,avformat,avutil,avdevice,avfilter,swscale,swresample,postproc}.pc
       - name: Build CLI
         run: cargo build --release -p verbreel-cli --features native-render
       - name: Package CLI
