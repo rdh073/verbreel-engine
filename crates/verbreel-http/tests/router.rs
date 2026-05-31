@@ -89,13 +89,31 @@ async fn get_v1_lists_all_verb_ids() {
         "discovery must list every engine verb id, got: {names:?}"
     );
 
-    // Sample across nouns plus the five flat meta ids.
+    // Sample across nouns plus the five meta ids. Meta verbs are
+    // advertised in their **routable** dotted form `meta.<id>` (not the
+    // bare flat id the engine registers) so a discovery client splitting
+    // an id on `.` can reconstruct `/v1/meta/<verb>`.
     for expected in [
         "project.list",
         "project.create",
         "clip.add",
         "asset.import",
         "render.start",
+        "meta.help",
+        "meta.schema",
+        "meta.describe",
+        "meta.validate_command",
+        "meta.list_capabilities",
+    ] {
+        assert!(
+            names.contains(&expected),
+            "discovery must contain `{expected}`, got: {names:?}"
+        );
+    }
+
+    // The bare flat ids must NOT leak — every advertised id is routable
+    // as `/v1/<noun>/<verb>`, and a bare `help` has no noun segment.
+    for leaked in [
         "help",
         "schema",
         "describe",
@@ -103,10 +121,40 @@ async fn get_v1_lists_all_verb_ids() {
         "list_capabilities",
     ] {
         assert!(
-            names.contains(&expected),
-            "discovery must contain `{expected}`, got: {names:?}"
+            !names.contains(&leaked),
+            "discovery must advertise `meta.{leaked}`, not the bare flat id `{leaked}`: {names:?}"
         );
     }
+}
+
+/// Closes the discovery→dispatch loop: every meta id `GET /v1` advertises
+/// in dotted form must be reachable at its `POST /v1/meta/<verb>` route.
+/// `meta.help` advertised + `/v1/meta/help` dispatching proves a
+/// discovery client can split the id on `.` and POST it back.
+#[tokio::test]
+async fn discovered_meta_id_is_routable() {
+    let (_status, body) = get_json("/v1").await;
+    let names: Vec<String> = body["verbs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "meta.help"),
+        "discovery must advertise meta.help, got: {names:?}"
+    );
+
+    // Split the advertised id on `.` exactly as a discovery-driven client
+    // would, then POST the reconstructed route.
+    let (noun, verb) = "meta.help".split_once('.').unwrap();
+    let (status, post_body) = post_json(&format!("/v1/{noun}/{verb}"), json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        post_body["ok"].as_bool(),
+        Some(true),
+        "POST /v1/meta/help (rebuilt from the advertised id) must dispatch: {post_body}"
+    );
 }
 
 #[tokio::test]

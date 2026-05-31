@@ -52,19 +52,49 @@ pub async fn healthz() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
-/// `GET /v1` — discovery: the sorted verb-id list the held engine
-/// reports via [`Engine::verb_ids`].
+/// `GET /v1` — discovery: the verb-id list the held engine reports via
+/// [`Engine::verb_ids`], projected to the **routable** form.
 ///
-/// Shape: `{ "verbs": ["asset.import", "clip.add", "help", …] }`.
+/// Shape: `{ "verbs": ["asset.import", "clip.add", "meta.help", …] }`.
+///
+/// The five meta verbs (`help`, `schema`, `describe`,
+/// `validate_command`, `list_capabilities`) are registered with **flat
+/// ids** (no noun dot), but they are only reachable at
+/// `POST /v1/meta/<verb>` — [`call_verb`] strips the `meta.` segment
+/// back to the flat id before dispatch. Advertising the bare flat id
+/// here would break a discovery-driven client that splits an id on `.`
+/// to reconstruct `/v1/<noun>/<verb>`: it would get a single segment
+/// and have no noun to build the route. So discovery emits the **dotted
+/// routable form** `meta.<id>` for every flat id — the exact inverse of
+/// the [`call_verb`] flat-meta translation — keeping every advertised id
+/// mechanically mappable to its POST route. A no-dot id is, by
+/// construction, a meta verb (verified: only the five meta verbs
+/// register a flat id), so the projection is registration-driven, not a
+/// hardcoded list that can drift.
+///
 /// `verb_ids()` already returns a sorted `Vec<String>` (FROZEN PR1
-/// contract), so no re-sort happens here.
+/// contract); prefixing `meta.` preserves that order (the flat ids sort
+/// into the same relative positions among themselves, and all gain the
+/// same `meta.` prefix), but we re-sort defensively so the output stays
+/// sorted regardless of how the projection reshuffles ids relative to
+/// the dotted general verbs.
 ///
 /// [`Engine::verb_ids`]: verbreel_state::Engine::verb_ids
 pub async fn list_verbs(State(state): State<AppState>) -> Json<Value> {
-    let verbs = {
+    let mut verbs: Vec<String> = {
         let engine = state.engine.lock().await;
         engine.verb_ids()
-    };
+    }
+    .into_iter()
+    .map(|id| {
+        if id.contains('.') {
+            id
+        } else {
+            format!("meta.{id}")
+        }
+    })
+    .collect();
+    verbs.sort_unstable();
     Json(json!({ "verbs": verbs }))
 }
 
@@ -132,6 +162,13 @@ pub async fn call_verb(
 
     let envelope = {
         let mut engine = state.engine.lock().await;
+        // TODO: `dispatch` does synchronous blocking fs I/O (event-log
+        // append, project.json write) while holding the async mutex on
+        // the tokio worker thread. Move it onto `tokio::task::spawn_blocking`
+        // (the engine handle is already `Arc<Mutex<…>>`, so a clone can
+        // cross the spawn boundary) so a slow disk does not stall the
+        // reactor. Deferred: needs the `Engine` to be `Send + 'static`
+        // across the spawn and is a perf concern, not a correctness one.
         engine.dispatch(&verb_id, args)
     };
     let status = http_status_for(&envelope);
@@ -237,4 +274,84 @@ fn bad_args(detail: impl Into<String>) -> (StatusCode, Json<Value>) {
         StatusCode::BAD_REQUEST,
         Json(json!({ "error": "bad args", "detail": detail.into() })),
     )
+}
+
+#[cfg(all(test, feature = "native-render"))]
+mod runtime_error_code_tests {
+    use super::runtime_error_code;
+    use verbreel_runtime::RuntimeError as E;
+
+    /// Every [`RuntimeError`] variant maps to its §0.7 `E_*` code. This
+    /// pins the whole `runtime_error_code` table — a typo in any arm
+    /// (e.g. `E_BAD_RANGE` → `E_BADRANGE`) is a silent contract break
+    /// that only one variant being exercised end-to-end would never
+    /// catch. Constructed directly: no ffmpeg, no render run needed.
+    #[test]
+    fn each_variant_maps_to_its_code() {
+        let cases: [(E, &str); 10] = [
+            (
+                E::ProjectNotFound {
+                    project_id: "p".to_string(),
+                },
+                "E_PROJECT_NOT_FOUND",
+            ),
+            (
+                E::RenderPresetUnknown {
+                    preset: "p".to_string(),
+                },
+                "E_RENDER_PRESET_UNKNOWN",
+            ),
+            (
+                E::BadRange {
+                    detail: "d".to_string(),
+                },
+                "E_BAD_RANGE",
+            ),
+            (
+                E::BadTime {
+                    detail: "d".to_string(),
+                },
+                "E_BAD_TIME",
+            ),
+            (
+                E::ArgsIncompatible {
+                    detail: "d".to_string(),
+                },
+                "E_ARGS_INCOMPATIBLE",
+            ),
+            (
+                E::OutPathExists {
+                    path: "p".to_string(),
+                },
+                "E_OUT_PATH_EXISTS",
+            ),
+            (
+                E::PathEscape {
+                    path: "p".to_string(),
+                },
+                "E_PATH_ESCAPE",
+            ),
+            (E::RenderEmptyRange, "E_RENDER_EMPTY_RANGE"),
+            (
+                E::Io {
+                    detail: "d".to_string(),
+                },
+                "E_IO",
+            ),
+            (
+                E::RenderFail {
+                    detail: "d".to_string(),
+                },
+                "E_RENDER_FAIL",
+            ),
+        ];
+
+        for (variant, expected) in &cases {
+            assert_eq!(
+                runtime_error_code(variant),
+                *expected,
+                "RuntimeError {variant:?} must map to {expected}"
+            );
+        }
+    }
 }
