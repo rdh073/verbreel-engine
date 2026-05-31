@@ -37,9 +37,11 @@
 #![warn(clippy::pedantic)]
 
 use std::io::Write;
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+pub mod agent;
 pub mod project;
 
 /// Top-level `clap` parser for the `verbreel` binary.
@@ -66,6 +68,54 @@ pub struct Cli {
 pub enum Command {
     /// Project lifecycle commands (`verbreel project ...`).
     Project(ProjectCmd),
+    /// Print the engine capability catalog (agent discovery surface).
+    Caps(CapsCmd),
+    /// Apply one verb to a project (`verbreel run <root> <verb>`).
+    Run(RunCmd),
+    /// Plan + apply an editing intent (`verbreel edit <root> ...`).
+    Edit(EditCmd),
+}
+
+/// `verbreel caps` — dump the capability catalog.
+#[derive(Debug, clap::Args)]
+pub struct CapsCmd {
+    /// Print a compact human view grouped by domain instead of the full
+    /// JSON catalog.
+    #[arg(long)]
+    pub by_domain: bool,
+}
+
+/// `verbreel run <root> <verb>` — apply one verb to a project.
+#[derive(Debug, clap::Args)]
+pub struct RunCmd {
+    /// Project root (`<root>/project.json`).
+    pub root: PathBuf,
+    /// Verb id, e.g. `clip.trim`.
+    pub verb: String,
+    /// Verb args as a JSON object. `project_id` is injected when omitted.
+    #[arg(long)]
+    pub args: Option<String>,
+    /// §0.8 idempotency key — a repeat call with the same key + args is
+    /// deduplicated (replayed) instead of re-applied.
+    #[arg(long)]
+    pub key: Option<String>,
+}
+
+/// `verbreel edit <root>` — plan an intent into verbs and apply them.
+#[derive(Debug, clap::Args)]
+pub struct EditCmd {
+    /// Project root to edit.
+    pub root: PathBuf,
+    /// Natural-language editing goal (Claude planner; needs the `claude`
+    /// build feature + `ANTHROPIC_API_KEY`).
+    #[arg(long, conflicts_with = "plan")]
+    pub intent: Option<String>,
+    /// A ready-made JSON plan file (works in every build; no LLM).
+    #[arg(long, conflicts_with = "intent")]
+    pub plan: Option<PathBuf>,
+    /// Print the plan without applying it.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// `verbreel project ...` argument group.
@@ -82,6 +132,24 @@ pub struct ProjectCmd {
 pub enum ProjectAction {
     /// List all known projects (v1 floor — emits an empty array).
     List,
+    /// Create a fresh project on disk (`verbreel project create ...`).
+    Create(ProjectCreateCmd),
+}
+
+/// `verbreel project create <workspace> --name <n>` — create a project.
+#[derive(Debug, clap::Args)]
+pub struct ProjectCreateCmd {
+    /// Workspace directory; the project is created at `<workspace>/<name>`.
+    pub workspace: PathBuf,
+    /// Project display name (also the created directory name).
+    #[arg(long)]
+    pub name: String,
+    /// Canvas size as `<W>x<H>`.
+    #[arg(long, default_value = "1920x1080")]
+    pub canvas: String,
+    /// Frame rate as `<num>/<den>` (default 30/1).
+    #[arg(long)]
+    pub fps: Option<String>,
 }
 
 /// Dispatch a parsed [`Cli`] to the appropriate verb wrapper, writing
@@ -98,7 +166,17 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> anyhow::Result<i32> {
     match cli.command {
         Command::Project(p) => match p.action {
             ProjectAction::List => project::list(out),
+            ProjectAction::Create(c) => project::create(out, &c),
         },
+        Command::Caps(c) => agent::caps(out, c.by_domain),
+        Command::Run(r) => agent::run(out, &r.root, &r.verb, r.args.as_deref(), r.key),
+        Command::Edit(e) => agent::edit(
+            out,
+            &e.root,
+            e.intent.as_deref(),
+            e.plan.as_deref(),
+            e.dry_run,
+        ),
     }
 }
 

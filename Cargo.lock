@@ -3308,9 +3308,11 @@ dependencies = [
  "anyhow",
  "clap",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "verbreel-agent",
  "verbreel-state",
  "verbreel-storage",
 ]
