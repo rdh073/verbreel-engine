@@ -24,7 +24,7 @@ verbreel-ir = { path = "../verbreel-ir" }
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-rsmpeg = { version = "0.14.2", default-features = false, features = ["ffmpeg6", "link_system_ffmpeg"], optional = true }
+rsmpeg = { version = "0.18.0", default-features = false, features = ["ffmpeg6", "link_system_ffmpeg"], optional = true }
 tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
