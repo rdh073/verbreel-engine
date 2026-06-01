@@ -274,6 +274,9 @@ fn run_render_start(
         job_id: job_id.to_string(),
         output_path: output_path.display().to_string(),
         duration_tk: to_tk - from_tk,
+        // Example drives JobRegistry directly, recording no render.start event,
+        // so there is no event id to correlate — empty per §0.1 (no-event path).
+        event_id: String::new(),
     })
 }
 
