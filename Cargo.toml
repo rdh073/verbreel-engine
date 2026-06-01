@@ -89,7 +89,7 @@ jsonschema    = { version = "0.46", default-features = false }
 # matches the schema patterns in `spec/project-schema.json` `$defs/Sha256`
 # / `$defs/AssetPath` / `$defs/AssetRef`. Last-checked: regex 1.12.3.
 regex         = { version = "1" }
-unicode-segmentation = { version = "1.12" }
+unicode-segmentation = { version = "1.13" }
 
 # HTTP server
 axum          = { version = "0.8", features = ["ws", "macros"] }
