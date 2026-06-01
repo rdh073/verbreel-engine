@@ -173,7 +173,7 @@ jobs:
             echo "::error::${GITHUB_REF_NAME} must be an annotated tag"
             exit 1
           fi
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: verbreel-cli-*
           path: dist
