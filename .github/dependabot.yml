@@ -34,6 +34,15 @@ updates:
     labels:
       - "dependencies"
       - "rust"
+    ignore:
+      # rsmpeg pins the FFmpeg ABI by version: 0.14.x = ffmpeg6, 0.18.x =
+      # ffmpeg.8.0. The Phase-1 spike is deliberately on FFmpeg 6.x (Ubuntu
+      # 24.04 plain apt, no PPA/source build), and codec-native selects the
+      # `ffmpeg6` feature. Bumping past 0.14.x needs a CI FFmpeg-8 upgrade +
+      # codec-native API migration — its own slice, not an auto-merge.
+      # See closed PR #471. Re-allow once FFmpeg 8 migration is tracked.
+      - dependency-name: "rsmpeg"
+        versions: [">=0.15.0"]
     # Group routine bumps so it's not 30 PRs/week.
     # Major bumps stay separate (one PR each, easier to review).
     groups:
