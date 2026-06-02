@@ -187,6 +187,38 @@ fn compute_patch_setting_one_key_does_not_touch_other_keys() {
 }
 
 #[test]
+fn compute_patch_matte_refine_param_merge_round_trips() {
+    // matte_refine flows through the generic param-merge + §0.13 caps path
+    // unchanged: set_param merges new leaves and updates existing ones,
+    // including the nested light_wrap object, with no per-kind code.
+    let prior = project_with_effect(
+        "matte_refine",
+        map(&[
+            ("despill", json!(0.2)),
+            ("feather_px", json!(1.0)),
+            ("light_wrap", json!({ "intensity": 0.0, "radius": 4.0 })),
+        ]),
+    );
+    let args = args_with(map(&[
+        ("despill", json!(0.7)),
+        ("feather_px", json!(3.5)),
+        ("light_wrap", json!({ "intensity": 0.5, "radius": 8.0 })),
+    ]));
+
+    let (patch, warnings, data) = compute_patch(&prior, &args).expect("happy path");
+    let post = apply_patch(&prior, patch);
+
+    assert!(warnings.is_empty());
+    assert_eq!(effect_params(&post), &data.params);
+    assert_eq!(effect_params(&post)["despill"], json!(0.7));
+    assert_eq!(effect_params(&post)["feather_px"], json!(3.5));
+    assert_eq!(
+        effect_params(&post)["light_wrap"],
+        json!({ "intensity": 0.5, "radius": 8.0 })
+    );
+}
+
+#[test]
 fn compute_patch_missing_effect_returns_not_found() {
     let prior = project_with_effect("eq", Map::new());
     let mut args = args_with(map(&[("gain", json!(2.0))]));

@@ -359,6 +359,39 @@ fn compute_patch_relight_param_keyframe_appends() {
 }
 
 #[test]
+fn compute_patch_matte_refine_param_keyframe_appends() {
+    // matte_refine params are keyframable the moment the kind is registered:
+    // keyframe.add accepts effects[<uuid>].params.<leaf> generically with
+    // per-kind leaf validation deferred (keyframe_add.rs §0.13).
+    let mut extra = serde_json::Map::new();
+    extra.insert(
+        "effects".to_string(),
+        json!([{
+            "id": EFFECT_ID,
+            "kind": "matte_refine",
+            "enabled": true,
+            "params": { "feather_px": 0.0 },
+        }]),
+    );
+    let prior = project_with_clip(extra);
+    let args = base_args(
+        &format!("effects[{EFFECT_ID}].params.feather_px"),
+        json!(2.0),
+    );
+
+    let (patch, warnings, _data) =
+        compute_patch(&prior, &args).expect("matte_refine param keyframe accepted");
+
+    assert!(warnings.is_empty());
+    let value = patch_value(&patch);
+    assert_eq!(
+        value["property"],
+        format!("effects[{EFFECT_ID}].params.feather_px")
+    );
+    assert_eq!(value["value"], 2.0);
+}
+
+#[test]
 fn compute_patch_mask_property_when_clip_has_no_mask_is_bad_property() {
     let prior = project();
     let args = base_args("mask.feather_px", json!(1.0));
