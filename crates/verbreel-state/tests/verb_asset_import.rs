@@ -567,6 +567,398 @@ fn mutate_via_verb_rejects_corrupt_existing_cas_object() {
     );
 }
 
+// --- media-kind classification (§3.1) ---------------------------------------
+
+/// Build a minimal but structurally valid ISO-BMFF box: `[u32 size][type
+/// (4 bytes)][body]`, big-endian size covering header + body.
+#[cfg(feature = "native")]
+fn iso_box(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    let size = u32::try_from(8 + body.len()).expect("box fits u32");
+    let mut out = size.to_be_bytes().to_vec();
+    out.extend_from_slice(kind);
+    out.extend_from_slice(body);
+    out
+}
+
+/// A minimal single-video-track ISO-BMFF (`.mp4`) fixture with real,
+/// parseable `width`/`height`/`timescale`/`duration`/`sample_count`.
+/// `avc1` (h264), 640x360, timescale 24000, duration 48000 (= 2.0s),
+/// sample_count 48 → fps 48*24000/48000 = 24000/48000 → 24fps.
+#[cfg(feature = "native")]
+fn minimal_mp4(width: u16, height: u16, timescale: u32, duration: u32, samples: u32) -> Vec<u8> {
+    // ftyp box: major brand `isom`, minor 0, compatible `isom`.
+    let ftyp = iso_box(b"ftyp", b"isom\x00\x00\x00\x00isom");
+
+    // hdlr: version/flags(4) + pre_defined(4) + handler_type "vide" + 12
+    // reserved + 1 null name byte.
+    let mut hdlr_body = vec![0u8; 8];
+    hdlr_body.extend_from_slice(b"vide");
+    hdlr_body.extend_from_slice(&[0u8; 12]);
+    hdlr_body.push(0);
+    let hdlr = iso_box(b"hdlr", &hdlr_body);
+
+    // mdhd v0: version/flags(4) + creation(4) + modification(4) +
+    // timescale(4) + duration(4) + language(2) + pre_defined(2).
+    let mut mdhd_body = vec![0u8; 4];
+    mdhd_body.extend_from_slice(&0u32.to_be_bytes());
+    mdhd_body.extend_from_slice(&0u32.to_be_bytes());
+    mdhd_body.extend_from_slice(&timescale.to_be_bytes());
+    mdhd_body.extend_from_slice(&duration.to_be_bytes());
+    mdhd_body.extend_from_slice(&[0u8; 4]);
+    let mdhd = iso_box(b"mdhd", &mdhd_body);
+
+    // VisualSampleEntry body: 6 reserved + 2 data_ref_index + 16
+    // pre_defined/reserved + width(2) + height(2), padded so width/height
+    // sit at body offsets 24/26 → entry offsets 32/34.
+    let mut avc1_body = vec![0u8; 6 + 2 + 16];
+    avc1_body.extend_from_slice(&width.to_be_bytes());
+    avc1_body.extend_from_slice(&height.to_be_bytes());
+    let avc1 = iso_box(b"avc1", &avc1_body);
+    // stsd: version/flags(4) + entry_count(4) + sample entry.
+    let mut stsd_body = vec![0u8; 4];
+    stsd_body.extend_from_slice(&1u32.to_be_bytes());
+    stsd_body.extend_from_slice(&avc1);
+    let stsd = iso_box(b"stsd", &stsd_body);
+
+    // stsz: version/flags(4) + sample_size(4, 0 = variable) + count(4).
+    let mut stsz_body = vec![0u8; 4];
+    stsz_body.extend_from_slice(&0u32.to_be_bytes());
+    stsz_body.extend_from_slice(&samples.to_be_bytes());
+    let stsz = iso_box(b"stsz", &stsz_body);
+
+    let mut stbl_body = Vec::new();
+    stbl_body.extend_from_slice(&stsd);
+    stbl_body.extend_from_slice(&stsz);
+    let stbl = iso_box(b"stbl", &stbl_body);
+    let minf = iso_box(b"minf", &stbl);
+
+    let mut mdia_body = Vec::new();
+    mdia_body.extend_from_slice(&hdlr);
+    mdia_body.extend_from_slice(&mdhd);
+    mdia_body.extend_from_slice(&minf);
+    let mdia = iso_box(b"mdia", &mdia_body);
+    let trak = iso_box(b"trak", &mdia);
+    let moov = iso_box(b"moov", &trak);
+
+    let mut out = ftyp;
+    out.extend_from_slice(&moov);
+    out
+}
+
+/// Build an ISO-BMFF box using the 64-bit extended size form (`size ==
+/// 1`, real size in the 8 bytes after the type). Large `mdat` boxes on
+/// phone captures routinely use this encoding, so the sibling walk must
+/// skip it rather than abort.
+#[cfg(feature = "native")]
+fn iso_box_64bit(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    let total = 16u64 + u64::try_from(body.len()).expect("body fits u64");
+    let mut out = 1u32.to_be_bytes().to_vec(); // size == 1 → 64-bit form
+    out.extend_from_slice(kind);
+    out.extend_from_slice(&total.to_be_bytes()); // 64-bit largesize
+    out.extend_from_slice(body);
+    out
+}
+
+/// Same payload as [`minimal_mp4`] but with a 64-bit-sized `mdat` box
+/// inserted between `ftyp` and `moov` (the real-world layout for large
+/// captures). The walk must skip the extended-size `mdat` and still
+/// reach `moov`.
+#[cfg(feature = "native")]
+fn mp4_with_leading_64bit_mdat(
+    width: u16,
+    height: u16,
+    timescale: u32,
+    duration: u32,
+    samples: u32,
+) -> Vec<u8> {
+    let full = minimal_mp4(width, height, timescale, duration, samples);
+    // Split the canonical fixture at the `moov` box (right after `ftyp`).
+    let moov_pos = full
+        .windows(4)
+        .position(|w| w == b"moov")
+        .expect("fixture contains a moov box");
+    let ftyp_end = moov_pos - 4; // moov size field precedes its type.
+    let mdat = iso_box_64bit(b"mdat", &[0u8; 32]);
+
+    let mut out = full[..ftyp_end].to_vec();
+    out.extend_from_slice(&mdat);
+    out.extend_from_slice(&full[ftyp_end..]);
+    out
+}
+
+/// A minimal canonical RIFF/WAVE fixture: PCM, `channels` channels,
+/// `sample_rate` Hz, 16-bit, with `frames` sample frames of zeroed data.
+#[cfg(feature = "native")]
+fn minimal_wav(channels: u16, sample_rate: u32, frames: u32) -> Vec<u8> {
+    let bits = 16u16;
+    let block_align = channels * (bits / 8);
+    let data_len = frames * u32::from(block_align);
+
+    let mut fmt = Vec::new();
+    fmt.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    fmt.extend_from_slice(&channels.to_le_bytes());
+    fmt.extend_from_slice(&sample_rate.to_le_bytes());
+    fmt.extend_from_slice(&(sample_rate * u32::from(block_align)).to_le_bytes());
+    fmt.extend_from_slice(&block_align.to_le_bytes());
+    fmt.extend_from_slice(&bits.to_le_bytes());
+
+    let mut body = Vec::new();
+    body.extend_from_slice(b"WAVE");
+    body.extend_from_slice(b"fmt ");
+    body.extend_from_slice(&u32::try_from(fmt.len()).unwrap().to_le_bytes());
+    body.extend_from_slice(&fmt);
+    body.extend_from_slice(b"data");
+    body.extend_from_slice(&data_len.to_le_bytes());
+    body.extend(std::iter::repeat_n(0u8, data_len as usize));
+
+    let mut out = b"RIFF".to_vec();
+    out.extend_from_slice(&u32::try_from(body.len()).unwrap().to_le_bytes());
+    out.extend_from_slice(&body);
+    out
+}
+
+#[cfg(feature = "native")]
+fn import_single(dir: &std::path::Path, filename: &str, bytes: &[u8]) -> Value {
+    let source = dir.join(filename);
+    std::fs::write(&source, bytes).expect("write source file");
+
+    let mut store = ProjectStore::create_with_registry(
+        dir,
+        empty_project(),
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .expect("create_with_registry succeeds");
+
+    let outcome = store
+        .mutate_via_verb(
+            "asset.import",
+            json!({"project_id": FIXTURE_PROJECT_ID, "paths": [source.to_string_lossy()]}),
+            None,
+        )
+        .expect("asset.import non-empty should succeed on native route");
+
+    let MutateOutcome::Applied { data, .. } = outcome else {
+        panic!("expected Applied outcome for non-empty asset.import");
+    };
+    let data: AssetImportData =
+        serde_json::from_value(data).expect("asset.import data deserializes");
+    data.assets.into_iter().next().expect("one imported asset")
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_mp4_import_records_video_asset_not_subtitle() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    // 640x360, timescale 24000, duration 48000 (2.0s), 48 samples (24fps).
+    let mp4 = minimal_mp4(640, 360, 24_000, 48_000, 48);
+    let imported = import_single(dir.path(), "clip.mp4", &mp4);
+    let obj = imported.as_object().expect("asset object");
+
+    // The regression: an imported mp4 must be `video`, NOT `subtitle`.
+    assert_eq!(
+        obj.get("kind").and_then(Value::as_str),
+        Some("video"),
+        "imported mp4 must classify as video, not subtitle"
+    );
+    let meta = obj.get("metadata").expect("metadata");
+    assert_eq!(meta.get("width").and_then(Value::as_u64), Some(640));
+    assert_eq!(meta.get("height").and_then(Value::as_u64), Some(360));
+    assert_eq!(
+        meta.get("video_codec").and_then(Value::as_str),
+        Some("h264")
+    );
+    // duration_tk = 48000 * 240000 / 24000 = 480000.
+    assert_eq!(
+        meta.get("duration_tk").and_then(Value::as_i64),
+        Some(480_000)
+    );
+    // fps = samples*timescale / duration = 48*24000 / 48000 = 24/1,
+    // gcd-reduced (the stored rational is the reduced form, which both
+    // avoids u32 overflow on long/high-timescale media and reads sanely).
+    assert_eq!(meta.get("fps_num").and_then(Value::as_u64), Some(24));
+    assert_eq!(meta.get("fps_den").and_then(Value::as_u64), Some(1));
+    // Every schema-`minimum: 1` field is >= 1 — no fabricated placeholder.
+    for field in ["width", "height", "fps_num", "fps_den", "duration_tk"] {
+        assert!(
+            meta.get(field).and_then(Value::as_i64).unwrap_or(0) >= 1,
+            "video metadata `{field}` must satisfy schema minimum: 1"
+        );
+    }
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_long_high_timescale_mp4_still_classifies_as_video() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    // ~2-hour clip at timescale 90000 (a very common container timescale)
+    // at 30fps: samples = 30 * 7200 = 216000, duration = 7200 * 90000 =
+    // 648_000_000. The UNREDUCED fps product samples*timescale =
+    // 216000 * 90000 = 1.944e10 overflows u32, and duration also overflows
+    // u32 — before the gcd-reduce + infallible-degrade fix, both
+    // `u32::try_from(..).ok()?` failed, `probe_video` returned None, and
+    // the file fell through to the subtitle fallback (re-triggering
+    // E_ASSET_KIND_UNROUTABLE on clip.add). fps must reduce to 30/1.
+    let samples = 30u32 * 7200;
+    let duration = 7200u32 * 90000; // 648_000_000, fits u32 here on purpose
+    let mp4 = minimal_mp4(1920, 1080, 90_000, duration, samples);
+    let imported = import_single(dir.path(), "long.mp4", &mp4);
+    let obj = imported.as_object().expect("asset object");
+
+    assert_eq!(
+        obj.get("kind").and_then(Value::as_str),
+        Some("video"),
+        "a long high-timescale mp4 must still classify as video, not subtitle"
+    );
+    let meta = obj.get("metadata").expect("metadata");
+    // 216000*90000 / 648000000 = 30/1, gcd-reduced (unreduced numerator
+    // 1.944e10 > u32::MAX, so this only fits after reduction).
+    assert_eq!(meta.get("fps_num").and_then(Value::as_u64), Some(30));
+    assert_eq!(meta.get("fps_den").and_then(Value::as_u64), Some(1));
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_mp4_with_64bit_mdat_before_moov_still_classifies_as_video() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    // Real-world layout: a 64-bit-sized (`size == 1`) `mdat` precedes
+    // `moov`. Before the find_box skip-don't-abort fix, the extended-size
+    // box aborted the top-level walk, `probe_video` returned None, and the
+    // file fell through to the subtitle fallback — the exact bug this PR
+    // exists to kill, reintroduced for a common input class.
+    let mp4 = mp4_with_leading_64bit_mdat(640, 360, 24_000, 48_000, 48);
+    let imported = import_single(dir.path(), "phone.mp4", &mp4);
+    let obj = imported.as_object().expect("asset object");
+
+    assert_eq!(
+        obj.get("kind").and_then(Value::as_str),
+        Some("video"),
+        "mp4 with a 64-bit-sized mdat before moov must still classify as video"
+    );
+    let meta = obj.get("metadata").expect("metadata");
+    assert_eq!(meta.get("width").and_then(Value::as_u64), Some(640));
+    assert_eq!(meta.get("height").and_then(Value::as_u64), Some(360));
+    assert_eq!(
+        meta.get("video_codec").and_then(Value::as_str),
+        Some("h264")
+    );
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_wav_import_records_audio_asset() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    // 2 channels, 48000 Hz, 96000 frames = 2.0s.
+    let wav = minimal_wav(2, 48_000, 96_000);
+    let imported = import_single(dir.path(), "track.wav", &wav);
+    let obj = imported.as_object().expect("asset object");
+
+    assert_eq!(obj.get("kind").and_then(Value::as_str), Some("audio"));
+    let meta = obj.get("metadata").expect("metadata");
+    assert_eq!(meta.get("audio_channels").and_then(Value::as_u64), Some(2));
+    assert_eq!(
+        meta.get("audio_sample_rate_hz").and_then(Value::as_u64),
+        Some(48_000)
+    );
+    // duration_tk = 96000 * 240000 / 48000 = 480000.
+    assert_eq!(
+        meta.get("duration_tk").and_then(Value::as_i64),
+        Some(480_000)
+    );
+    for field in ["duration_tk", "audio_channels", "audio_sample_rate_hz"] {
+        assert!(
+            meta.get(field).and_then(Value::as_i64).unwrap_or(0) >= 1,
+            "audio metadata `{field}` must satisfy schema minimum: 1"
+        );
+    }
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_png_import_records_image_asset() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    // PNG signature + IHDR length(13) + "IHDR" + width(4)=16 + height(4)=9.
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&13u32.to_be_bytes());
+    png.extend_from_slice(b"IHDR");
+    png.extend_from_slice(&16u32.to_be_bytes());
+    png.extend_from_slice(&9u32.to_be_bytes());
+    png.extend_from_slice(&[8, 6, 0, 0, 0]); // bit depth, color type, etc.
+
+    let imported = import_single(dir.path(), "frame.png", &png);
+    let obj = imported.as_object().expect("asset object");
+    assert_eq!(obj.get("kind").and_then(Value::as_str), Some("image"));
+    let meta = obj.get("metadata").expect("metadata");
+    assert_eq!(meta.get("width").and_then(Value::as_u64), Some(16));
+    assert_eq!(meta.get("height").and_then(Value::as_u64), Some(9));
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_gif_import_records_image_asset() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    // GIF89a header + logical screen descriptor: LE width(2)=12, height(2)=7,
+    // then packed/bg/aspect bytes. gif_dimensions is a production path
+    // (build_asset_for_import → image_dimensions → ...or_else(gif_dimensions))
+    // that previously had no test fixture.
+    let mut gif = b"GIF89a".to_vec();
+    gif.extend_from_slice(&12u16.to_le_bytes());
+    gif.extend_from_slice(&7u16.to_le_bytes());
+    gif.extend_from_slice(&[0u8, 0, 0]); // packed fields, bg color, aspect
+
+    let imported = import_single(dir.path(), "anim.gif", &gif);
+    let obj = imported.as_object().expect("asset object");
+    assert_eq!(obj.get("kind").and_then(Value::as_str), Some("image"));
+    let meta = obj.get("metadata").expect("metadata");
+    assert_eq!(meta.get("width").and_then(Value::as_u64), Some(12));
+    assert_eq!(meta.get("height").and_then(Value::as_u64), Some(7));
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_srt_import_still_records_subtitle_asset() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    let srt = b"1\n00:00:00,000 --> 00:00:01,000\nhello\n";
+    let imported = import_single(dir.path(), "subs.srt", srt);
+    let obj = imported.as_object().expect("asset object");
+    // §3.1: subtitle imports remain SubtitleAsset (archival-only).
+    assert_eq!(obj.get("kind").and_then(Value::as_str), Some("subtitle"));
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_garbage_takes_explicit_subtitle_fallback() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    // Unrecognized bytes with an `.mp4` extension: an extension is never
+    // trusted on its own (the `ftyp` magic is absent), so this is NOT a
+    // video — it degrades to the documented archival subtitle fallback,
+    // proving the catch-all is not silently broadened to video.
+    let garbage = b"this is not any known container format at all";
+    let imported = import_single(dir.path(), "fake.mp4", garbage);
+    let obj = imported.as_object().expect("asset object");
+    assert_eq!(
+        obj.get("kind").and_then(Value::as_str),
+        Some("subtitle"),
+        "unrecognized bytes must take the explicit archival fallback, not become a fake video"
+    );
+}
+
 // --- data shape lock --------------------------------------------------------
 
 #[test]

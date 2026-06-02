@@ -13,9 +13,12 @@ use thiserror::Error;
 use verbreel_types::ProjectId;
 
 #[cfg(feature = "native")]
-use crate::asset::{Asset, ImageAsset, SubtitleAsset};
+use crate::asset::{Asset, AudioAsset, ImageAsset, SubtitleAsset, VideoAsset};
 #[cfg(feature = "native")]
-use crate::asset_meta::{FileFingerprint, ImageAssetMetadata, SubtitleAssetMetadata};
+use crate::asset_meta::{
+    AudioAssetMetadata, FileFingerprint, ImageAssetMetadata, SubtitleAssetMetadata,
+    VideoAssetMetadata,
+};
 #[cfg(feature = "native")]
 use crate::newtypes::{AssetPath, Sha256};
 use std::collections::HashMap;
@@ -33,6 +36,8 @@ use verbreel_storage::cas::key_for_bytes;
 use verbreel_storage::fs::atomic_write_bytes;
 #[cfg(feature = "native")]
 use verbreel_types::AssetId;
+#[cfg(feature = "native")]
+use verbreel_types::Tick;
 
 /// Whether a verb's compute path may fire persistent side effects.
 ///
@@ -222,13 +227,27 @@ fn fingerprint_for(path: &Path) -> Result<FileFingerprint, AssetImportError> {
     })
 }
 
+/// The shared fields every `Asset` variant carries: validated hash,
+/// validated content-addressed path, original filename, import time, and
+/// the file fingerprint. Built once per import so the four variant
+/// builders don't each re-run the same newtype validation + filename
+/// extraction (DRY: this boilerplate was duplicated per builder).
 #[cfg(feature = "native")]
-fn build_subtitle_asset(
+struct AssetCommon {
+    id: AssetId,
+    hash: Sha256,
+    path: AssetPath,
+    original_filename: String,
+    imported_at: Timestamp,
+    fingerprint: FileFingerprint,
+}
+
+#[cfg(feature = "native")]
+fn build_common(
     source_path: &Path,
     sha256_hex: &str,
     cas_rel_path: &str,
-    ext: &str,
-) -> Result<Asset, AssetImportError> {
+) -> Result<AssetCommon, AssetImportError> {
     let hash =
         Sha256::new(sha256_hex.to_string()).map_err(|e| AssetImportError::InconsistentPatch {
             detail: e.to_string(),
@@ -239,8 +258,7 @@ fn build_subtitle_asset(
         }
     })?;
     let fingerprint = fingerprint_for(source_path)?;
-
-    Ok(Asset::Subtitle(SubtitleAsset {
+    Ok(AssetCommon {
         id: AssetId::now(),
         hash,
         path,
@@ -253,11 +271,29 @@ fn build_subtitle_asset(
         // is validated RFC 3339, not a raw string literal.
         imported_at: Timestamp::parse("1970-01-01T00:00:00Z")
             .expect("epoch literal is valid RFC 3339"),
+        fingerprint,
+    })
+}
+
+#[cfg(feature = "native")]
+fn build_subtitle_asset(
+    source_path: &Path,
+    sha256_hex: &str,
+    cas_rel_path: &str,
+    ext: &str,
+) -> Result<Asset, AssetImportError> {
+    let c = build_common(source_path, sha256_hex, cas_rel_path)?;
+    Ok(Asset::Subtitle(SubtitleAsset {
+        id: c.id,
+        hash: c.hash,
+        path: c.path,
+        original_filename: c.original_filename,
+        imported_at: c.imported_at,
         metadata: SubtitleAssetMetadata {
             container: ext.to_string(),
             language: None,
             segment_count: None,
-            fingerprint,
+            fingerprint: c.fingerprint,
         },
     }))
 }
@@ -271,27 +307,13 @@ fn build_image_asset(
     width: u32,
     height: u32,
 ) -> Result<Asset, AssetImportError> {
-    let hash =
-        Sha256::new(sha256_hex.to_string()).map_err(|e| AssetImportError::InconsistentPatch {
-            detail: e.to_string(),
-        })?;
-    let path = AssetPath::new(cas_rel_path.to_string()).map_err(|e| {
-        AssetImportError::InconsistentPatch {
-            detail: e.to_string(),
-        }
-    })?;
-    let fingerprint = fingerprint_for(source_path)?;
-
+    let c = build_common(source_path, sha256_hex, cas_rel_path)?;
     Ok(Asset::Image(ImageAsset {
-        id: AssetId::now(),
-        hash,
-        path,
-        original_filename: source_path.file_name().map_or_else(
-            || source_path.display().to_string(),
-            |n| n.to_string_lossy().to_string(),
-        ),
-        imported_at: Timestamp::parse("1970-01-01T00:00:00Z")
-            .expect("epoch literal is valid RFC 3339"),
+        id: c.id,
+        hash: c.hash,
+        path: c.path,
+        original_filename: c.original_filename,
+        imported_at: c.imported_at,
         metadata: ImageAssetMetadata {
             width,
             height,
@@ -299,11 +321,91 @@ fn build_image_asset(
             has_alpha: Some(false),
             color_space: Some("srgb".to_string()),
             rotation_deg: None,
-            fingerprint,
+            fingerprint: c.fingerprint,
         },
     }))
 }
 
+#[cfg(feature = "native")]
+fn build_video_asset(
+    source_path: &Path,
+    sha256_hex: &str,
+    cas_rel_path: &str,
+    ext: &str,
+    probe: &VideoProbe,
+) -> Result<Asset, AssetImportError> {
+    let c = build_common(source_path, sha256_hex, cas_rel_path)?;
+    Ok(Asset::Video(VideoAsset {
+        id: c.id,
+        hash: c.hash,
+        path: c.path,
+        original_filename: c.original_filename,
+        imported_at: c.imported_at,
+        metadata: VideoAssetMetadata {
+            duration_tk: Tick::new(probe.duration_tk),
+            width: probe.width,
+            height: probe.height,
+            fps_num: probe.fps_num,
+            fps_den: probe.fps_den,
+            video_codec: probe.video_codec.clone(),
+            audio_codec: None,
+            audio_channels: None,
+            audio_sample_rate_hz: None,
+            bitrate_bps: None,
+            color_space: None,
+            color_primaries: None,
+            container: ext.to_string(),
+            has_alpha: None,
+            rotation_deg: None,
+            fingerprint: c.fingerprint,
+        },
+    }))
+}
+
+#[cfg(feature = "native")]
+fn build_audio_asset(
+    source_path: &Path,
+    sha256_hex: &str,
+    cas_rel_path: &str,
+    ext: &str,
+    probe: &AudioProbe,
+) -> Result<Asset, AssetImportError> {
+    let c = build_common(source_path, sha256_hex, cas_rel_path)?;
+    Ok(Asset::Audio(AudioAsset {
+        id: c.id,
+        hash: c.hash,
+        path: c.path,
+        original_filename: c.original_filename,
+        imported_at: c.imported_at,
+        metadata: AudioAssetMetadata {
+            duration_tk: Tick::new(probe.duration_tk),
+            audio_codec: probe.audio_codec.clone(),
+            audio_channels: probe.audio_channels,
+            audio_sample_rate_hz: probe.audio_sample_rate_hz,
+            bitrate_bps: None,
+            container: ext.to_string(),
+            fingerprint: c.fingerprint,
+        },
+    }))
+}
+
+/// Classify an import by inspecting its content (magic bytes) and route
+/// to the matching `Asset` variant.
+///
+/// Invariant restored here (§3.1): an imported file's `Asset` kind
+/// reflects its actual media type — video → `Asset::Video`, audio →
+/// `Asset::Audio`, image → `Asset::Image`, subtitle → `Asset::Subtitle`.
+/// Previously only PPM was recognized as an image and **every** other
+/// extension (`.mp4`, `.wav`, ...) fell through to the subtitle
+/// catch-all, so an imported video became a `SubtitleAsset` and
+/// `clip.add` then rejected it with `E_ASSET_KIND_UNROUTABLE` (§5.1).
+///
+/// Classification is magic-byte first (the extension is never trusted on
+/// its own — exactly like the existing PPM `P6` check). Subtitle is the
+/// documented archival fallback for unrecognized bytes (§3.1 subtitle
+/// callout): kind detection cannot fail the import, it degrades to an
+/// archival `SubtitleAsset` rather than inventing a kind or fabricating
+/// metadata.
 #[cfg(feature = "native")]
 fn build_asset_for_import(
     source_path: &Path,
@@ -312,13 +414,368 @@ fn build_asset_for_import(
     cas_rel_path: &str,
     ext: &str,
 ) -> Result<Asset, AssetImportError> {
-    if ext == "ppm"
-        && let Some((width, height)) = ppm_p6_dimensions(bytes)
-    {
+    if let Some((width, height)) = image_dimensions(bytes, ext) {
         return build_image_asset(source_path, sha256_hex, cas_rel_path, ext, width, height);
     }
-
+    if let Some(probe) = probe_video(bytes) {
+        return build_video_asset(source_path, sha256_hex, cas_rel_path, ext, &probe);
+    }
+    if let Some(probe) = probe_audio(bytes) {
+        return build_audio_asset(source_path, sha256_hex, cas_rel_path, ext, &probe);
+    }
     build_subtitle_asset(source_path, sha256_hex, cas_rel_path, ext)
+}
+
+/// Probed image dimensions, magic-byte first. Covers PPM (the existing
+/// path) plus PNG and GIF — formats whose `width`/`height` (both schema
+/// `minimum: 1`) are readable from a fixed header offset with no decode.
+#[cfg(feature = "native")]
+fn image_dimensions(bytes: &[u8], ext: &str) -> Option<(u32, u32)> {
+    if ext == "ppm"
+        && let Some(dims) = ppm_p6_dimensions(bytes)
+    {
+        return Some(dims);
+    }
+    png_dimensions(bytes).or_else(|| gif_dimensions(bytes))
+}
+
+/// PNG dimensions from the IHDR chunk. The 8-byte signature is followed
+/// by a 4-byte length, the `IHDR` tag, then big-endian `width`/`height`.
+#[cfg(feature = "native")]
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    const SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if bytes.get(..8)? != SIG || bytes.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
+    let height = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+    (width >= 1 && height >= 1).then_some((width, height))
+}
+
+/// GIF dimensions from the logical screen descriptor (little-endian
+/// `width`/`height` immediately after the `GIF87a`/`GIF89a` header).
+#[cfg(feature = "native")]
+fn gif_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let header = bytes.get(..6)?;
+    if header != b"GIF87a" && header != b"GIF89a" {
+        return None;
+    }
+    let width = u32::from(u16::from_le_bytes(bytes.get(6..8)?.try_into().ok()?));
+    let height = u32::from(u16::from_le_bytes(bytes.get(8..10)?.try_into().ok()?));
+    (width >= 1 && height >= 1).then_some((width, height))
+}
+
+/// Real probed video metadata from an in-process container header parse.
+///
+/// The §3.1 probe is documented as ffprobe, but the crate-dependency
+/// rule (`CLAUDE.md`) keeps `verbreel-state` off the codec/FFmpeg crates,
+/// so this is a minimal header parser mirroring the PPM precedent — it
+/// reads the values the schema marks `minimum: 1`, never fabricates them.
+#[cfg(feature = "native")]
+struct VideoProbe {
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+    duration_tk: i64,
+    video_codec: String,
+}
+
+/// Real probed audio metadata. Same in-process-parse rationale as
+/// [`VideoProbe`].
+#[cfg(feature = "native")]
+struct AudioProbe {
+    duration_tk: i64,
+    audio_codec: String,
+    audio_channels: u32,
+    audio_sample_rate_hz: u32,
+}
+
+/// Convert a `media_duration / timescale` pair into engine ticks
+/// (240,000 Hz), clamped to the schema `minimum: 1`.
+#[cfg(feature = "native")]
+fn ticks_from_duration(duration_units: u64, timescale: u32) -> Option<i64> {
+    if timescale == 0 {
+        return None;
+    }
+    let tk = u128::from(duration_units).checked_mul(u128::from(verbreel_types::TICK_RATE_HZ))?
+        / u128::from(timescale);
+    Some(i64::try_from(tk).ok()?.max(1))
+}
+
+/// Probe an ISO-BMFF (`.mp4` / `.mov`) container for the first video
+/// track's real dimensions, frame rate and duration. Returns `None` for
+/// anything that is not a confirmed ISO-BMFF video — the dispatch then
+/// falls through to audio/subtitle, never minting a fake video record.
+#[cfg(feature = "native")]
+fn probe_video(bytes: &[u8]) -> Option<VideoProbe> {
+    // ISO-BMFF marker: `ftyp` box type at offset 4. The container magic,
+    // like the PPM `P6` token, is the gate before any field is trusted.
+    if bytes.get(4..8)? != b"ftyp" {
+        return None;
+    }
+    let moov = find_box(bytes, *b"moov")?;
+    let trak = find_video_trak(moov)?;
+    let mdia = find_box(trak, *b"mdia")?;
+    let mdhd = find_box(mdia, *b"mdhd")?;
+    let (timescale, media_duration) = parse_mdhd(mdhd)?;
+
+    let minf = find_box(mdia, *b"minf")?;
+    let stbl = find_box(minf, *b"stbl")?;
+    let stsd = find_box(stbl, *b"stsd")?;
+    let (width, height, codec) = parse_stsd_video(stsd)?;
+
+    let sample_count = find_box(stbl, *b"stsz")
+        .and_then(parse_stsz_count)
+        .unwrap_or(0);
+    let (fps_num, fps_den) = video_fps(sample_count, timescale, media_duration);
+    let duration_tk = ticks_from_duration(media_duration, timescale)?;
+
+    Some(VideoProbe {
+        width,
+        height,
+        fps_num,
+        fps_den,
+        duration_tk,
+        video_codec: codec,
+    })
+}
+
+/// Compute the video frame rate `(fps_num, fps_den)` from `sample_count *
+/// timescale / media_duration`, the exact rational the container yields —
+/// no float, no rounding to a "nice" rate.
+///
+/// fps is *non-essential* metadata: the file has already been positively
+/// identified as video (valid `ftyp` + `vide` handler + `stsd`
+/// dimensions) before this is called. So this is **infallible** — it
+/// degrades to `1/1` (one frame per duration unit, schema-honest, not a
+/// fabricated 30fps lie) when sample timing is absent OR when the raw
+/// product would overflow `u32`. Letting an fps-representation failure
+/// abort the probe would drop the file to the subtitle fallback and
+/// re-trigger `E_ASSET_KIND_UNROUTABLE` on `clip.add` — the exact bug
+/// this surface exists to eliminate — so it must never `?`-out here.
+///
+/// The fraction is reduced by gcd before the `u32` fit, which both stores
+/// a sane rate (`1152000/48000` → `24/1`) and avoids the overflow in the
+/// common case (a 2-hour clip at timescale 90000 has `sample_count *
+/// timescale` far past `u32::MAX` unreduced, but a tidy ratio reduced).
+#[cfg(feature = "native")]
+fn video_fps(sample_count: u32, timescale: u32, media_duration: u64) -> (u32, u32) {
+    if sample_count < 1 || media_duration < 1 {
+        return (1, 1);
+    }
+    let num = u64::from(sample_count) * u64::from(timescale);
+    let den = media_duration;
+    let g = gcd(num, den).max(1);
+    let (num, den) = (num / g, den / g);
+    match (u32::try_from(num), u32::try_from(den)) {
+        (Ok(n), Ok(d)) if n >= 1 && d >= 1 => (n, d),
+        // Reduced ratio still doesn't fit u32 (pathological timescale):
+        // degrade honestly rather than abort classification of a
+        // confirmed video.
+        _ => (1, 1),
+    }
+}
+
+#[cfg(feature = "native")]
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// One ISO-BMFF box parsed from a sibling walk: its 4-byte type, where
+/// its body begins (after the 8- or 16-byte header), and where the box —
+/// and thus the next sibling — ends.
+#[cfg(feature = "native")]
+struct BoxSpan {
+    kind: [u8; 4],
+    body_start: usize,
+    box_end: usize,
+}
+
+/// Decode the box header at `offset`. Handles the three ISO-BMFF size
+/// encodings: a normal 32-bit size, `size == 0` ("to end of data"), and
+/// `size == 1` (64-bit extended size in the 8 bytes after the type).
+/// Returns `None` only when the header itself is malformed/truncated so
+/// the *whole* walk should stop — a single oversized or extended box is
+/// reported with its real `box_end` so the caller can **skip** it and
+/// keep scanning later siblings (e.g. a 64-bit `mdat` preceding `moov`).
+#[cfg(feature = "native")]
+fn parse_box_header(data: &[u8], offset: usize) -> Option<BoxSpan> {
+    let size = u32::from_be_bytes(data.get(offset..offset + 4)?.try_into().ok()?) as usize;
+    let kind: [u8; 4] = data.get(offset + 4..offset + 8)?.try_into().ok()?;
+    let (header_len, box_size) = if size == 1 {
+        // 64-bit extended size occupies bytes offset+8..offset+16.
+        let large = u64::from_be_bytes(data.get(offset + 8..offset + 16)?.try_into().ok()?);
+        (16usize, usize::try_from(large).ok()?)
+    } else {
+        (8usize, size)
+    };
+    let body_start = offset.checked_add(header_len)?;
+    let box_end = if size == 0 {
+        data.len()
+    } else {
+        offset.checked_add(box_size)?
+    };
+    if box_end < body_start || box_end > data.len() {
+        return None;
+    }
+    Some(BoxSpan {
+        kind,
+        body_start,
+        box_end,
+    })
+}
+
+/// Walk the immediate child boxes of an ISO-BMFF box body, returning the
+/// **body** (header stripped) of the first child whose 4-byte type
+/// matches `want`. Boxes are `[u32 size][u8;4 type][body]`, big-endian.
+/// A box using the 64-bit extended size (`size == 1`, common on large
+/// `mdat`) is skipped rather than aborting the scan, so a later `moov`
+/// sibling is still found.
+#[cfg(feature = "native")]
+fn find_box(data: &[u8], want: [u8; 4]) -> Option<&[u8]> {
+    let mut offset = 0usize;
+    while offset + 8 <= data.len() {
+        let span = parse_box_header(data, offset)?;
+        if span.kind == want {
+            return data.get(span.body_start..span.box_end);
+        }
+        offset = span.box_end;
+    }
+    None
+}
+
+/// Find the first `trak` box under `moov` whose `mdia/hdlr` handler type
+/// is `vide` (a video track), returning the `trak` body.
+#[cfg(feature = "native")]
+fn find_video_trak(moov: &[u8]) -> Option<&[u8]> {
+    let mut offset = 0usize;
+    while offset + 8 <= moov.len() {
+        let span = parse_box_header(moov, offset)?;
+        if span.kind == *b"trak"
+            && let Some(trak) = moov.get(span.body_start..span.box_end)
+            && trak_is_video(trak)
+        {
+            return Some(trak);
+        }
+        offset = span.box_end;
+    }
+    None
+}
+
+#[cfg(feature = "native")]
+fn trak_is_video(trak: &[u8]) -> bool {
+    find_box(trak, *b"mdia")
+        .and_then(|mdia| find_box(mdia, *b"hdlr"))
+        // hdlr layout: version(1) flags(3) pre_defined(4) handler_type(4).
+        .and_then(|hdlr| hdlr.get(8..12))
+        == Some(b"vide".as_slice())
+}
+
+/// Parse an `mdhd` box → `(timescale, duration)`. Version 0 uses 32-bit
+/// fields, version 1 uses 64-bit. Layout after the 1-byte version +
+/// 3-byte flags: creation, modification, timescale, duration.
+#[cfg(feature = "native")]
+fn parse_mdhd(mdhd: &[u8]) -> Option<(u32, u64)> {
+    let version = *mdhd.first()?;
+    if version == 1 {
+        let timescale = u32::from_be_bytes(mdhd.get(20..24)?.try_into().ok()?);
+        let duration = u64::from_be_bytes(mdhd.get(24..32)?.try_into().ok()?);
+        Some((timescale, duration))
+    } else {
+        let timescale = u32::from_be_bytes(mdhd.get(12..16)?.try_into().ok()?);
+        let duration = u64::from(u32::from_be_bytes(mdhd.get(16..20)?.try_into().ok()?));
+        Some((timescale, duration))
+    }
+}
+
+/// Parse the first sample entry of an `stsd` box → `(width, height,
+/// codec)`. After `version(1)`/`flags(3)`/`entry_count(4)` comes the sample
+/// entry: `[u32 size][u8;4 format][...]` where a visual sample entry
+/// carries 16-bit `width`/`height` at a fixed offset (ISO/IEC 14496-12).
+#[cfg(feature = "native")]
+fn parse_stsd_video(stsd: &[u8]) -> Option<(u32, u32, String)> {
+    let entry = stsd.get(8..)?;
+    let format = entry.get(4..8)?;
+    let codec = codec_for_fourcc(format);
+    // VisualSampleEntry: 8 (box header) + 6 reserved + 2 data_ref_index
+    // + 16 predefined/reserved = 32, then 16-bit width, 16-bit height.
+    let width = u32::from(u16::from_be_bytes(entry.get(32..34)?.try_into().ok()?));
+    let height = u32::from(u16::from_be_bytes(entry.get(34..36)?.try_into().ok()?));
+    (width >= 1 && height >= 1).then_some((width, height, codec))
+}
+
+#[cfg(feature = "native")]
+fn codec_for_fourcc(format: &[u8]) -> String {
+    match format {
+        b"avc1" | b"avc3" => "h264".to_string(),
+        b"hev1" | b"hvc1" => "hevc".to_string(),
+        b"av01" => "av1".to_string(),
+        b"vp09" => "vp9".to_string(),
+        other => String::from_utf8_lossy(other)
+            .trim_end_matches('\0')
+            .to_string(),
+    }
+}
+
+/// Parse an `stsz` box → sample count (the field after version/flags +
+/// `sample_size`).
+#[cfg(feature = "native")]
+fn parse_stsz_count(stsz: &[u8]) -> Option<u32> {
+    Some(u32::from_be_bytes(stsz.get(8..12)?.try_into().ok()?))
+}
+
+/// Probe an audio container. Covers canonical RIFF/WAVE — the
+/// `fmt `/`data` chunk pair yields real `channels`, `sample_rate` and a
+/// `duration` derived from the data-chunk byte length, all schema
+/// `minimum: 1`. Returns `None` for non-WAVE bytes.
+#[cfg(feature = "native")]
+fn probe_audio(bytes: &[u8]) -> Option<AudioProbe> {
+    if bytes.get(..4)? != b"RIFF" || bytes.get(8..12)? != b"WAVE" {
+        return None;
+    }
+    let body = bytes.get(12..)?;
+    let fmt = find_riff_chunk(body, *b"fmt ")?;
+    let channels = u32::from(u16::from_le_bytes(fmt.get(2..4)?.try_into().ok()?));
+    let sample_rate = u32::from_le_bytes(fmt.get(4..8)?.try_into().ok()?);
+    let bits_per_sample = u32::from(u16::from_le_bytes(fmt.get(14..16)?.try_into().ok()?));
+    if channels < 1 || sample_rate < 1 || bits_per_sample < 1 {
+        return None;
+    }
+    let data = find_riff_chunk(body, *b"data")?;
+    let bytes_per_frame = channels.checked_mul(bits_per_sample / 8)?.max(1);
+    let frames = u64::try_from(data.len()).ok()? / u64::from(bytes_per_frame);
+    let duration_tk = ticks_from_duration(frames, sample_rate)?;
+    Some(AudioProbe {
+        duration_tk,
+        audio_codec: "pcm".to_string(),
+        audio_channels: channels,
+        audio_sample_rate_hz: sample_rate,
+    })
+}
+
+/// Find a RIFF chunk body by 4-byte id. Chunks are `[u8;4 id][u32_le
+/// size][body]`, with bodies padded to even length.
+#[cfg(feature = "native")]
+fn find_riff_chunk(data: &[u8], want: [u8; 4]) -> Option<&[u8]> {
+    let mut offset = 0usize;
+    while offset + 8 <= data.len() {
+        let id = data.get(offset..offset + 4)?;
+        let size = u32::from_le_bytes(data.get(offset + 4..offset + 8)?.try_into().ok()?) as usize;
+        let body_start = offset + 8;
+        let body_end = body_start.checked_add(size)?;
+        if body_end > data.len() {
+            return None;
+        }
+        if id == want {
+            return data.get(body_start..body_end);
+        }
+        offset = body_end + (size & 1);
+    }
+    None
 }
 
 #[cfg(feature = "native")]
