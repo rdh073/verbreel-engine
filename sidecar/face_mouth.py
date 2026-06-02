@@ -43,9 +43,12 @@ _LIP_BOTTOM = 14
 _LIP_LEFT_CORNER = 78
 _LIP_RIGHT_CORNER = 308
 
-# Ticks-per-second for project time (matches engine §0 tick convention:
-# 1 tick == 1 ms). One tick per millisecond keeps frame timestamps exact.
-_TICKS_PER_SECOND = 1000
+# Ticks-per-second for project time. The engine fixes the tick rate at
+# 240,000 Hz (spec §0.2 / verbreel_types::TICK_RATE_HZ) — the LCM of common
+# video framerates, so 24/25/29.97/30/50/59.94/60 all land on integer ticks.
+# Every `*_tk` field in the engine is a tick at this rate; emitting any other
+# rate would make the frozen #474 wire contract 240x off.
+_TICKS_PER_SECOND = 240000
 
 
 def _fail(detail):
