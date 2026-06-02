@@ -69,6 +69,10 @@ pub struct ProviderRegistry {
     /// Face-perception algorithms (issue #474 — `face_mouth` auto-director
     /// floor: `MediaPipe` Face Mesh + MAR + `IoU` identity tracking).
     pub face_perception_algorithms: Vec<ProviderEntry>,
+    /// Subject-segmentation algorithms (issue #476 — green-screen-free
+    /// per-frame alpha matte: `MediaPipe` Selfie / `RVM` / `MODNet` /
+    /// `BiRefNet`).
+    pub segmentation_algorithms: Vec<ProviderEntry>,
 }
 
 impl ProviderRegistry {
@@ -99,6 +103,10 @@ impl ProviderRegistry {
                 "face_mouth",
                 "MediaPipe Face Mesh + MAR (Python sidecar)",
             )],
+            segmentation_algorithms: vec![ProviderEntry::sidecar(
+                "segment",
+                "MediaPipe Selfie / RVM / MODNet / BiRefNet matting (Python sidecar)",
+            )],
         }
     }
 }
@@ -125,6 +133,10 @@ mod tests {
         assert!(
             !reg.face_perception_algorithms.is_empty(),
             "face-perception algorithms class must be non-empty"
+        );
+        assert!(
+            !reg.segmentation_algorithms.is_empty(),
+            "segmentation algorithms class must be non-empty"
         );
     }
 
@@ -159,6 +171,17 @@ mod tests {
             .find(|e| e.id == "face_mouth")
             .expect("face_mouth must be advertised as a face-perception algorithm");
         assert!(face_mouth.sidecar, "face_mouth runs via the Python sidecar");
+    }
+
+    #[test]
+    fn segment_is_a_sidecar_segmentation_algorithm() {
+        let reg = ProviderRegistry::v1();
+        let segment = reg
+            .segmentation_algorithms
+            .iter()
+            .find(|e| e.id == "segment")
+            .expect("segment must be advertised as a segmentation algorithm");
+        assert!(segment.sidecar, "segment runs via the Python sidecar");
     }
 
     #[test]

@@ -172,6 +172,7 @@ pub mod render_queue_status;
 pub mod render_start;
 pub mod render_status;
 pub mod schema;
+pub mod segment;
 pub mod stock_describe;
 pub mod stock_import;
 pub mod stock_list_providers;

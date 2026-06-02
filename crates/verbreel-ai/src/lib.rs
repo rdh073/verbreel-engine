@@ -40,7 +40,9 @@ pub mod registry;
 pub mod session;
 pub mod sidecar;
 
-pub use adapters::{Backend, run_audio_analysis, run_face_mouth, run_stt, run_tracker};
+pub use adapters::{
+    Backend, run_audio_analysis, run_face_mouth, run_segment, run_stt, run_tracker,
+};
 pub use capability::Capability;
 pub use error::AiError;
 pub use execution_provider::{
@@ -51,6 +53,9 @@ pub use model::{ModelCacheKey, ModelId, ModelVersion};
 pub use provider::{Provider, run};
 pub use registry::{ProviderEntry, ProviderRegistry};
 pub use sidecar::{SidecarRequest, SidecarResponse, run_sidecar};
+// Canonical matte-reference result struct owned by `verbreel-state` (issue
+// #476); re-exported here so a composition root reads it off the adapter.
+pub use verbreel_state::SegmentMatteRef;
 
 #[cfg(feature = "ort")]
 pub use session::OrtSession;

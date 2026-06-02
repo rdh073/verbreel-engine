@@ -429,6 +429,9 @@ pub use verbs::render_status::{
 pub use verbs::schema::{
     SchemaArgs, SchemaData, SchemaError as SchemaVerbError, SchemaTarget, SchemaVerb,
 };
+// `segment` is a decode-only result model (issue #476), not a registered
+// verb — no Args/Data/Error/Verb tuple, just the matte-reference structs.
+pub use verbs::segment::{SegmentMatteFrame, SegmentMatteRef};
 pub use verbs::stock_describe::{
     StockDescribeArgs, StockDescribeData, StockDescribeError, StockDescribeVerb,
 };
