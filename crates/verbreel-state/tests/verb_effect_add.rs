@@ -704,6 +704,69 @@ fn compute_patch_adds_relight_neutral_default_is_no_op() {
     round_trip_kind("relight", params);
 }
 
+fn matte_refine_params() -> Map<String, Value> {
+    map(&[
+        ("despill", json!(0.6)),
+        ("erode_px", json!(1.5)),
+        ("dilate_px", json!(0.5)),
+        ("feather_px", json!(2.0)),
+        ("light_wrap", json!({ "intensity": 0.4, "radius": 8.0 })),
+    ])
+}
+
+#[test]
+fn compute_patch_adds_matte_refine_and_round_trips() {
+    let prior = project_with_text_clip(false, false, Vec::new());
+    let params = matte_refine_params();
+    let args = EffectAddArgs {
+        params: Some(params.clone()),
+        ..args("matte_refine")
+    };
+
+    let (patch, _warnings, data) =
+        compute_patch(&prior, &args).expect("matte_refine params accepted");
+    let post = apply_patch(&prior, patch);
+    let effect = &post.tracks[0].clips[0].effects[0];
+    assert_eq!(effect.id, data.effect_id);
+    assert_eq!(effect.kind.to_string(), "matte_refine");
+    assert_eq!(effect.params["despill"], json!(0.6));
+    assert_eq!(effect.params["feather_px"], json!(2.0));
+    assert_eq!(
+        effect.params["light_wrap"],
+        json!({ "intensity": 0.4, "radius": 8.0 })
+    );
+
+    round_trip_kind("matte_refine", params);
+}
+
+#[test]
+fn compute_patch_adds_matte_refine_neutral_default_is_no_op() {
+    // Identity/neutral default: all-zero params is a pass-through of the
+    // incoming alpha. The params bag is stored opaquely and byte-stable.
+    let prior = project_with_text_clip(false, false, Vec::new());
+    let params = map(&[
+        ("despill", json!(0.0)),
+        ("erode_px", json!(0.0)),
+        ("dilate_px", json!(0.0)),
+        ("feather_px", json!(0.0)),
+        ("light_wrap", json!({ "intensity": 0.0, "radius": 0.0 })),
+    ]);
+    let args = EffectAddArgs {
+        params: Some(params.clone()),
+        ..args("matte_refine")
+    };
+
+    let (patch, _warnings, data) =
+        compute_patch(&prior, &args).expect("neutral matte_refine accepted");
+    let post = apply_patch(&prior, patch);
+    let effect = &post.tracks[0].clips[0].effects[0];
+    assert_eq!(effect.id, data.effect_id);
+    assert_eq!(effect.kind.to_string(), "matte_refine");
+    assert_eq!(effect.params, params);
+
+    round_trip_kind("matte_refine", params);
+}
+
 #[test]
 fn reconstruct_from_default_fixture() {
     let fixture = default_fixtures()

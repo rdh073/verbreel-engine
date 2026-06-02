@@ -37,7 +37,7 @@ fn compute_patch_without_filter_returns_all_effects() {
 
     assert_eq!(patch, json!([]));
     assert!(warnings.is_empty());
-    assert_eq!(data.effects.len(), 17);
+    assert_eq!(data.effects.len(), 18);
 }
 
 #[test]
@@ -62,6 +62,7 @@ fn compute_patch_with_video_filter() {
             "curves",
             "hsl",
             "lut",
+            "matte_refine",
             "relight"
         ]
     );
@@ -282,7 +283,7 @@ fn verb_routes_through_mutate_via_verb() {
 
     let data: EffectListAvailableData =
         serde_json::from_value(data).expect("effect.list_available data deserializes");
-    assert_eq!(data.effects.len(), 17);
+    assert_eq!(data.effects.len(), 18);
 }
 
 #[test]

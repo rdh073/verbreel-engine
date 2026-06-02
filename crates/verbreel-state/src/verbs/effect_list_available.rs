@@ -14,11 +14,11 @@
 //! ## Engine-additive kinds beyond the spec's v1.0 set.
 //!
 //! This engine build curates additional video kinds not in the spec's
-//! verbatim v1.0 list above: `curves` and `hsl` (issue #478), and `relight`
-//! (issue #480). They are addable via `effect.add` and settable via
-//! `effect.set_param` like any other unmanaged kind. The §6.5 list is a
-//! build-curated catalog, not a frozen spec constant, so growing it is
-//! in-bounds.
+//! verbatim v1.0 list above: `curves` and `hsl` (issue #478), `relight`
+//! (issue #480), and `matte_refine` (issue #477). They are addable via
+//! `effect.add` and settable via `effect.set_param` like any other unmanaged
+//! kind. The §6.5 list is a build-curated catalog, not a frozen spec
+//! constant, so growing it is in-bounds.
 //!
 //! ## Render-time evaluation is NOT shipped in this slice.
 //!
@@ -91,7 +91,36 @@
 //! relighting are explicit follow-ups (issue #480 Scope-OUT) that need a
 //! geometry sidecar — out of scope for this parametric, native-first kind.
 //!
-//! All three engine-additive kinds are keyframable via the existing
+//! ### `matte_refine` param shape (neutral default) — evaluation deferred
+//!
+//! Free-form params (not schema-validated here — the engine enforces only
+//! the generic §0.13 caps, not per-kind leaf schemas). Shape:
+//!
+//! - `despill`: key-color spill suppression strength `>= 0.0` (`0.0` = off).
+//! - `erode_px` (a.k.a. choke): pull the matte edge inward, in pixels
+//!   `>= 0.0`.
+//! - `dilate_px`: grow the matte edge outward, in pixels `>= 0.0`.
+//! - `feather_px`: gaussian softening of the matte edge, in pixels `>= 0.0`
+//!   (named after `ClipMask::feather_px`, the existing alpha-edge precedent).
+//! - `light_wrap`: `{ "intensity": f, "radius": f }` of `>= 0.0` deltas —
+//!   bleed background light onto the subject edge for natural compositing.
+//! - Intended evaluation contract (NOT implemented in this slice; lands
+//!   with the Spike S1 shader stage): `matte_refine` consumes the clip's
+//!   *current* alpha — the alpha produced by an earlier `chroma_key` or a
+//!   segmentation matte in the same `effects` array — and refines it
+//!   (despill → erode → dilate → feather → light-wrap), composited back over
+//!   the source. Per §0.13 the `effects` array is ordered, so `matte_refine`
+//!   must be placed AFTER the keying / segmentation effect it refines; it is
+//!   additive and never re-keys (`chroma_key`'s signature/params are
+//!   unchanged). Deterministic — no ML, no learned edge modeling.
+//! - Neutral default: all-zero params (or an empty/absent params bag) is an
+//!   identity no-op — the incoming alpha is passed through unchanged.
+//!
+//! Learned/AI edge modeling (segmentation owns matte quality) and
+//! interactive brush Restore/Erase are explicit follow-ups (issue #477
+//! Scope-OUT) — out of scope for this parametric, native-first kind.
+//!
+//! All four engine-additive kinds are keyframable via the existing
 //! dotted-path leaf mechanism; curve control points carry the indexed-path
 //! v1 limitation noted in `keyframe.add` (§0.13), matching every other
 //! effect param.
@@ -167,8 +196,8 @@ pub enum EffectListAvailableError {
 /// Static bundled effect kinds.
 ///
 /// Holds the spec's verbatim §6.5 v1.0 set plus this engine build's
-/// additive video kinds (`curves`, `hsl`, `relight`); see the module
-/// header.
+/// additive video kinds (`curves`, `hsl`, `relight`, `matte_refine`); see
+/// the module header.
 ///
 /// ## Returns
 ///
@@ -185,6 +214,7 @@ pub const V1_EFFECT_KINDS: &[&str] = &[
     "eq",
     "hsl",
     "lut",
+    "matte_refine",
     "relight",
     "reverb",
     "time_stretch",
@@ -243,6 +273,12 @@ const BUNDLED_EFFECTS: &[(&str, &str, &str, &str)] = &[
         "video",
         "3D LUT color grading.",
         "EffectParams.lut@1",
+    ),
+    (
+        "matte_refine",
+        "video",
+        "Deterministic matte refinement of the clip's current alpha (post chroma_key / segmentation, per §0.13 effect order): despill + erode_px/dilate_px + feather_px + light_wrap; identity = zero params no-op.",
+        "EffectParams.matte_refine@1",
     ),
     (
         "relight",
