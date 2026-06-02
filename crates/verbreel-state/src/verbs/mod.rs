@@ -125,6 +125,7 @@ pub mod effect_set_param;
 pub mod effect_toggle;
 pub mod face_mouth;
 pub mod font_list;
+pub mod gen_image;
 pub mod help;
 pub mod keyframe_add;
 pub mod keyframe_list;

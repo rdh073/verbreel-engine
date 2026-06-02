@@ -291,6 +291,9 @@ pub use verbs::face_mouth::{FaceBBoxSample, FaceMouthTrace, FaceTrace, MouthOpen
 pub use verbs::font_list::{
     FontFamilyEntry, FontListArgs, FontListData, FontListError, FontListVerb,
 };
+// `gen_image` is a decode-only result model (issue #482), not a registered
+// verb — no Args/Data/Error/Verb tuple, just the generation result struct.
+pub use verbs::gen_image::GenImageData;
 pub use verbs::help::{HelpArgs, HelpData, HelpError, HelpVerb, VerbDoc};
 pub use verbs::keyframe_list::{
     KeyframeListArgs, KeyframeListData, KeyframeListError, KeyframeListVerb,

@@ -73,6 +73,10 @@ pub struct ProviderRegistry {
     /// per-frame alpha matte: `MediaPipe` Selfie / `RVM` / `MODNet` /
     /// `BiRefNet`).
     pub segmentation_algorithms: Vec<ProviderEntry>,
+    /// Generative text-to-image algorithms (issue #482 — replacement-
+    /// background generation: operator-installed SDXL / Flux-class or
+    /// API-backed diffusion). The engine ships no weights and pins no vendor.
+    pub generation_algorithms: Vec<ProviderEntry>,
 }
 
 impl ProviderRegistry {
@@ -107,6 +111,10 @@ impl ProviderRegistry {
                 "segment",
                 "MediaPipe Selfie / RVM / MODNet / BiRefNet matting (Python sidecar)",
             )],
+            generation_algorithms: vec![ProviderEntry::sidecar(
+                "gen_image",
+                "operator-installed SDXL / Flux-class diffusion (Python sidecar)",
+            )],
         }
     }
 }
@@ -137,6 +145,10 @@ mod tests {
         assert!(
             !reg.segmentation_algorithms.is_empty(),
             "segmentation algorithms class must be non-empty"
+        );
+        assert!(
+            !reg.generation_algorithms.is_empty(),
+            "generation algorithms class must be non-empty"
         );
     }
 
@@ -182,6 +194,17 @@ mod tests {
             .find(|e| e.id == "segment")
             .expect("segment must be advertised as a segmentation algorithm");
         assert!(segment.sidecar, "segment runs via the Python sidecar");
+    }
+
+    #[test]
+    fn gen_image_is_a_sidecar_generation_algorithm() {
+        let reg = ProviderRegistry::v1();
+        let entry = reg
+            .generation_algorithms
+            .iter()
+            .find(|e| e.id == "gen_image")
+            .expect("gen_image must be advertised as a generation algorithm");
+        assert!(entry.sidecar, "gen_image runs via the Python sidecar");
     }
 
     #[test]
