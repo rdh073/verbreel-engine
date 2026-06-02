@@ -30,6 +30,7 @@
 //! `HashMap` would be wrong here (CLAUDE.md ordered-key rule).
 
 use serde::{Deserialize, Serialize};
+use verbreel_types::Tick;
 
 /// Per-tracked-face perception traces returned by the `face_mouth` sidecar.
 ///
@@ -56,11 +57,14 @@ pub struct FaceTrace {
 /// One bounding-box sample at a project-time tick.
 ///
 /// Pixel coordinates are integers to match the wire example
-/// (`x:120, y:80, w:300, h:300`); ticks use the engine-wide `i64` type.
+/// (`x:120, y:80, w:300, h:300`); `t_tk` is a [`Tick`] at the engine-wide
+/// 240,000 Hz rate ([`TICK_RATE_HZ`](verbreel_types::TICK_RATE_HZ)).
+/// `Tick` is `#[serde(transparent)]`, so it stays a bare JSON number on the
+/// wire — the type only pins the rate expectation at the boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FaceBBoxSample {
-    /// Project-time tick of this sample.
-    pub t_tk: i64,
+    /// Project-time tick of this sample (240,000 Hz).
+    pub t_tk: Tick,
     /// Bounding-box left edge in pixels.
     pub x: i64,
     /// Bounding-box top edge in pixels.
@@ -72,10 +76,13 @@ pub struct FaceBBoxSample {
 }
 
 /// One Mouth-Aspect-Ratio sample at a project-time tick.
+///
+/// `t_tk` is a [`Tick`] at the engine-wide 240,000 Hz rate; it serializes as
+/// a bare JSON number via `#[serde(transparent)]`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MouthOpenSample {
-    /// Project-time tick of this sample.
-    pub t_tk: i64,
+    /// Project-time tick of this sample (240,000 Hz).
+    pub t_tk: Tick,
     /// Mouth Aspect Ratio: `vertical_lip_gap / horizontal_lip_width`.
     pub mar: f64,
 }
@@ -89,13 +96,16 @@ mod tests {
             faces: vec![FaceTrace {
                 speaker_id: "f0".to_string(),
                 bbox_trace: vec![FaceBBoxSample {
-                    t_tk: 0,
+                    t_tk: Tick::new(0),
                     x: 120,
                     y: 80,
                     w: 300,
                     h: 300,
                 }],
-                mouth_open_trace: vec![MouthOpenSample { t_tk: 0, mar: 0.04 }],
+                mouth_open_trace: vec![MouthOpenSample {
+                    t_tk: Tick::new(0),
+                    mar: 0.04,
+                }],
             }],
         }
     }

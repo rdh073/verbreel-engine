@@ -171,10 +171,12 @@ pub fn run_audio_analysis(
 /// auto-reframe) and a `mouth_open_trace` (Mouth Aspect Ratio, for
 /// downstream active-speaker inference). `analysis_id` is forwarded into the
 /// sidecar params so the sidecar owns the cache identity (same contract as
-/// `tracker_id` for [`run_tracker`]); `max_faces` and `sample_fps` are the
-/// per-call tuning knobs from the wire contract. The `ort` arm is a loud,
-/// gated error path — `MediaPipe` Face Mesh has no shipped `ort` backbone, so
-/// it never fabricates a trace.
+/// `tracker_id` for [`run_tracker`]); `video_path` names the source clip the
+/// sidecar decodes (required by the #474 wire contract — the reference
+/// sidecar hard-fails without it); `max_faces` and `sample_fps` are the
+/// per-call tuning knobs. The `ort` arm is a loud, gated error path —
+/// `MediaPipe` Face Mesh has no shipped `ort` backbone, so it never
+/// fabricates a trace.
 ///
 /// # Errors
 ///
@@ -185,6 +187,7 @@ pub fn run_face_mouth(
     cache_key: &ModelCacheKey,
     backend: &Backend,
     analysis_id: &str,
+    video_path: &str,
     max_faces: u32,
     sample_fps: u32,
 ) -> Result<FaceMouthTrace, AiError> {
@@ -207,6 +210,7 @@ pub fn run_face_mouth(
                 "face_mouth",
                 json!({
                     "analysis_id": analysis_id,
+                    "video_path": video_path,
                     "max_faces": max_faces,
                     "sample_fps": sample_fps,
                 }),
@@ -288,7 +292,7 @@ mod tests {
     use crate::model::{ModelId, ModelVersion};
     use std::io::Write as _;
     use verbreel_state::AudioAnalysisTargetKind;
-    use verbreel_types::AssetHash;
+    use verbreel_types::{AssetHash, Tick};
 
     const ASSET: &str = "aa11bb22cc33dd44ee55ff66001122334455667788990011223344556677889900";
 
@@ -418,15 +422,19 @@ print(json.dumps({"op": "stt", "result": {"unexpected": True}}))
 
     #[test]
     fn sidecar_face_mouth_decodes_canonical_struct_via_real_python() {
-        // Stub child ignores stdin and prints a FIXED face_mouth payload —
-        // no mediapipe required. Guards the "face_mouth" op string + struct
-        // type against copy-paste drift from the stt/tracker/audio arms.
+        // Stub child validates the REQUEST contract (op == face_mouth, params
+        // carry the required video_path) then prints a FIXED face_mouth
+        // payload — no mediapipe required. The request-side assert keeps the
+        // adapter and the reference sidecar from silently drifting apart
+        // (the reference sidecar hard-fails without params.video_path).
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("face_mouth.py");
         let mut f = std::fs::File::create(&script).unwrap();
         f.write_all(
             br#"import sys, json
-json.loads(sys.stdin.readline())
+req = json.loads(sys.stdin.readline())
+assert req["op"] == "face_mouth", req["op"]
+assert req["params"]["video_path"] == "assets/aa/sha.mp4", req["params"]
 print(json.dumps({"op": "face_mouth", "result": {"faces": [
     {"speaker_id": "f0",
      "bbox_trace": [{"t_tk": 0, "x": 120, "y": 80, "w": 300, "h": 300}],
@@ -441,12 +449,13 @@ print(json.dumps({"op": "face_mouth", "result": {"faces": [
             program: "/usr/bin/python3".to_string(),
             args: vec![script.to_str().unwrap().to_string()],
         };
-        let data = run_face_mouth(&key, &backend, "an-1", 4, 15).expect("face_mouth round-trip");
+        let data = run_face_mouth(&key, &backend, "an-1", "assets/aa/sha.mp4", 4, 15)
+            .expect("face_mouth round-trip");
         assert_eq!(data.faces.len(), 1);
         let face = &data.faces[0];
         assert_eq!(face.speaker_id, "f0");
         assert_eq!(face.bbox_trace.len(), 1);
-        assert_eq!(face.bbox_trace[0].t_tk, 0);
+        assert_eq!(face.bbox_trace[0].t_tk, Tick::new(0));
         assert_eq!(face.bbox_trace[0].x, 120);
         assert_eq!(face.bbox_trace[0].w, 300);
         assert_eq!(face.mouth_open_trace.len(), 1);
@@ -471,7 +480,7 @@ print(json.dumps({"op": "face_mouth", "result": {"unexpected": True}}))
             program: "/usr/bin/python3".to_string(),
             args: vec![script.to_str().unwrap().to_string()],
         };
-        let err = run_face_mouth(&key, &backend, "an-1", 4, 15).unwrap_err();
+        let err = run_face_mouth(&key, &backend, "an-1", "assets/aa/sha.mp4", 4, 15).unwrap_err();
         assert!(
             matches!(err, AiError::SidecarProtocol { .. }),
             "got {err:?}"
@@ -485,7 +494,7 @@ print(json.dumps({"op": "face_mouth", "result": {"unexpected": True}}))
             program: "/nonexistent/python-binary".to_string(),
             args: vec![],
         };
-        let err = run_face_mouth(&key, &backend, "an-1", 4, 15).unwrap_err();
+        let err = run_face_mouth(&key, &backend, "an-1", "assets/aa/sha.mp4", 4, 15).unwrap_err();
         assert!(
             matches!(err, AiError::SidecarLaunchFailed { .. }),
             "got {err:?}"
@@ -499,7 +508,7 @@ print(json.dumps({"op": "face_mouth", "result": {"unexpected": True}}))
             program: "/usr/bin/python3".to_string(),
             args: vec!["-c".to_string(), "import sys; sys.exit(3)".to_string()],
         };
-        let err = run_face_mouth(&key, &backend, "an-1", 4, 15).unwrap_err();
+        let err = run_face_mouth(&key, &backend, "an-1", "assets/aa/sha.mp4", 4, 15).unwrap_err();
         assert!(matches!(err, AiError::ProcessExited { .. }), "got {err:?}");
     }
 
@@ -509,7 +518,7 @@ print(json.dumps({"op": "face_mouth", "result": {"unexpected": True}}))
         let backend = Backend::Ort {
             model_path: std::path::PathBuf::from("/nonexistent/model.onnx"),
         };
-        let err = run_face_mouth(&key, &backend, "an-1", 4, 15).unwrap_err();
+        let err = run_face_mouth(&key, &backend, "an-1", "assets/aa/sha.mp4", 4, 15).unwrap_err();
         assert!(
             matches!(err, AiError::ModelLoadFailed { .. }),
             "got {err:?}"
