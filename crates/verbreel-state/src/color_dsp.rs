@@ -10,9 +10,11 @@
 //! decode and per-pixel reduction therefore happen in a separate runtime
 //! concern; this module operates only on the *already-reduced* per-frame
 //! statistics (per-channel mean/std and black/white percentiles) that
-//! arrive as verb args. Given identical statistics the output params are
-//! byte-identical across runs and platforms — the issue's determinism
-//! requirement is satisfied at the statistics boundary.
+//! arrive as verb args. Given identical statistics the emitted (rounded)
+//! params are reproducible across runs and platforms — the issue's
+//! determinism requirement is satisfied at the statistics boundary. See
+//! the "Emitted params" section below for why the rounding, not the
+//! transcendentals, is what guarantees cross-platform reproducibility.
 //!
 //! ## Color-space chain
 //!
@@ -44,14 +46,36 @@
 //! - `tint`: green/magenta balance in `[-1, 1]` (positive = more
 //!   magenta: lift red+blue, cut green). 0 = no change.
 //!
-//! All emitted values are rounded to [`PARAM_DECIMALS`] decimal places
-//! before serialization so the canonical-JSON hash is stable regardless
-//! of `f64` round-off in the last bit.
+//! `brightness`, `temperature`, and `tint` are clamped to `[-1, 1]` and
+//! `contrast`/`saturation` to `[0, 4]` ([`GradeParams::clamped`]) before
+//! rounding, so a legal-but-extreme frame (e.g. a near-zero channel mean,
+//! which makes the unbounded gray-world gain blow up) cannot mint a param
+//! outside its documented domain.
+//!
+//! All emitted values are then rounded to [`PARAM_DECIMALS`] decimal
+//! places before serialization. `auto_color`'s grade is pure `+−×÷` and
+//! is bit-stable across platforms on its own; `color_match` routes means
+//! through Oklab (`powf`/`cbrt`), whose last bit is not guaranteed
+//! identical across libm implementations — the 6-decimal rounding is what
+//! makes the *emitted* grade reproducible across platforms, not the
+//! transcendentals themselves.
 
 /// Number of decimal places every emitted param is rounded to before it
 /// is written into the effect's params map. Keeps the canonical-JSON
 /// hash stable against `f64` last-bit round-off.
 pub const PARAM_DECIMALS: i32 = 6;
+
+/// Inclusive bound on the additive/balance params (`brightness`,
+/// `temperature`, `tint`): their documented domain is `[-1, 1]`.
+const BALANCE_LIMIT: f64 = 1.0;
+
+/// Upper bound on the multiplicative gain params (`contrast`,
+/// `saturation`). Identity is `1.0`; gray-world gains derived from a
+/// near-zero channel mean (a legal `[0, 1]` input) are unbounded, so the
+/// emitted grade is capped at a strong-but-sane `4.0` (4× correction) and
+/// floored at `0.0`. Keeps the emitted grade inside a documented domain
+/// rather than letting an extreme input mint a 39× gain.
+const GAIN_MAX: f64 = 4.0;
 
 /// Rec.709 luma weight for the red channel.
 const LUMA_R: f64 = 0.2126;
@@ -110,6 +134,26 @@ impl GradeParams {
             saturation: 1.0,
             temperature: 0.0,
             tint: 0.0,
+        }
+    }
+
+    /// Clamp every field to its documented domain so a legal-but-extreme
+    /// frame (e.g. a near-zero channel mean, which makes the gray-world
+    /// gain blow up) cannot mint a param outside its contract.
+    ///
+    /// - `brightness` / `temperature` / `tint` → `[-1, 1]`.
+    /// - `contrast` / `saturation` → `[0, GAIN_MAX]` (identity `1.0`).
+    ///
+    /// Identity values (`0` / `1`) are interior to every bound, so an
+    /// already-neutral frame is unaffected.
+    #[must_use]
+    pub fn clamped(self) -> Self {
+        Self {
+            brightness: self.brightness.clamp(-BALANCE_LIMIT, BALANCE_LIMIT),
+            contrast: self.contrast.clamp(0.0, GAIN_MAX),
+            saturation: self.saturation.clamp(0.0, GAIN_MAX),
+            temperature: self.temperature.clamp(-BALANCE_LIMIT, BALANCE_LIMIT),
+            tint: self.tint.clamp(-BALANCE_LIMIT, BALANCE_LIMIT),
         }
     }
 
@@ -303,6 +347,7 @@ pub fn auto_color_grade(stats: &ChannelStats) -> GradeParams {
         temperature,
         tint,
     }
+    .clamped()
     .rounded()
 }
 
@@ -387,6 +432,7 @@ pub fn color_match_grade(reference: &ChannelStats, target: &ChannelStats) -> Gra
         temperature,
         tint,
     }
+    .clamped()
     .rounded()
 }
 
@@ -467,6 +513,42 @@ mod tests {
         assert!(approx(grade.saturation, id.saturation, 1e-6));
         assert!(approx(grade.temperature, id.temperature, 1e-6));
         assert!(approx(grade.tint, id.tint, 1e-6));
+    }
+
+    #[test]
+    fn auto_color_clamps_extreme_gray_world_gain() {
+        // A near-zero red mean is a legal [0,1] input but drives the
+        // gray-world red gain to ~39, which would push temperature/tint
+        // far past their documented [-1, 1] domain. The clamp must keep
+        // every emitted param inside its contract.
+        let stats = ChannelStats {
+            mean_r: 0.01,
+            mean_g: 0.5,
+            mean_b: 0.5,
+            std_r: 0.2,
+            std_g: 0.2,
+            std_b: 0.2,
+            black_point: 0.0,
+            white_point: 1.0,
+        };
+        let grade = auto_color_grade(&stats);
+        assert!(
+            (-1.0..=1.0).contains(&grade.brightness),
+            "{}",
+            grade.brightness
+        );
+        assert!(
+            (-1.0..=1.0).contains(&grade.temperature),
+            "{}",
+            grade.temperature
+        );
+        assert!((-1.0..=1.0).contains(&grade.tint), "{}", grade.tint);
+        assert!((0.0..=4.0).contains(&grade.contrast), "{}", grade.contrast);
+        assert!(
+            (0.0..=4.0).contains(&grade.saturation),
+            "{}",
+            grade.saturation
+        );
     }
 
     #[test]

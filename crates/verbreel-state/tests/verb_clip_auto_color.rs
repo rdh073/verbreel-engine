@@ -237,6 +237,30 @@ fn out_of_range_stat_is_bad_range() {
 }
 
 #[test]
+fn inverted_levels_is_bad_range() {
+    // The only cross-field invariant in `validate_stats`: white_point must
+    // not be below black_point. Both values are individually in [0, 1], so
+    // this branch is the one `out_of_range_stat_is_bad_range` never reaches.
+    let prior = project_with_clip(false, false);
+    let bad = ClipAutoColorArgs {
+        black_point: 0.8,
+        white_point: 0.2,
+        ..args(&format!("clip:{CLIP_A}"))
+    };
+    let err = compute_patch(&prior, &bad).expect_err("reject");
+    assert!(
+        matches!(
+            err,
+            ClipAutoColorError::BadRange {
+                field: "white_point",
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
 fn default_fixtures_round_trip_through_reconstructors() {
     validate_reconstructors(&default_registry(), &default_fixtures())
         .expect("default fixtures (incl. clip.auto_color) round-trip");
