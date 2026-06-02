@@ -209,6 +209,11 @@ pub use verbs::clip_auto_color::{
     ClipAutoColorArgs, ClipAutoColorData, ClipAutoColorError, ClipAutoColorVerb,
     W_AUTO_COLOR_ENVELOPE_CODE,
 };
+pub use verbs::clip_auto_reframe::{
+    ClipAutoReframeArgs, ClipAutoReframeData, ClipAutoReframeError, ClipAutoReframeVerb,
+    DEFAULT_MIN_HOLD_TK, DEFAULT_REKEY_THRESHOLD_PX, DEFAULT_SMOOTHING_WINDOW, ReframeSmoothing,
+    SubjectSample, TargetAspect, W_AUTO_REFRAME_ENVELOPE_CODE,
+};
 pub use verbs::clip_color_match::{
     ClipColorMatchArgs, ClipColorMatchData, ClipColorMatchError, ClipColorMatchVerb, FrameStats,
     W_COLOR_MATCH_ENVELOPE_CODE,

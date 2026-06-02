@@ -15,6 +15,22 @@ This repo: ~/playground/verbreel/
 - Content-addressed assets: `assets/<aa>/<sha256>.<ext>` — never copy without hashing first
 - Canonical JSON for hashing: `verbreel_canon::jcs::canonicalize()` — never `serde_json::to_string()`
 
+## Non-spec additive verbs
+These verbs are NOT in the published spec (`verbreel-spec`); their wire
+surface is defined in-repo by the module doc comment + tests. Treat the
+module as the source of truth, not the spec, and keep them additive.
+- `clip.auto_reframe` (issue #481, `crates/verbreel-state/src/verbs/clip_auto_reframe.rs`):
+  pure composition verb. Args `{ project_id, target: "clip:<uuid>",
+  target_aspect: {num,den}, subject_trace: [{time_tk,cx,cy}], smoothing?:
+  {window,min_hold_tk,rekey_threshold_px} }`. Emits `transform.scale_x`/
+  `scale_y` (constant cover-zoom, keyed once) + `transform.x`/`y` (pan)
+  keyframes keeping the subject centered. The subject trace arrives inline
+  (NOT from a trace cache / `verbreel-ai`) — same v1-floor boundary as
+  `tracker.apply`. Off-canvas samples are clamped per-axis to
+  `[0,width)x[0,height)` and emit `W_TRACKER_OUT_OF_BOUNDS` (reused from
+  §18.3). Smoothing + min-hold hysteresis are deterministic (fixed-order
+  f64), so keyframe values are JCS-byte-stable.
+
 ## Crate dependency rule
 ```
 verbreel-types → (no internal deps)
