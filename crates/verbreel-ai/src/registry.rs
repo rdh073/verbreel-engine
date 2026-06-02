@@ -1,7 +1,8 @@
 //! Provider registry — the parallel capability surface for AI inference.
 //!
-//! Reports the three algorithm classes the inference runtime can serve:
-//! tracker algorithms, caption (STT) models, and audio-analysis algorithms.
+//! Reports the algorithm classes the inference runtime can serve: tracker
+//! algorithms, caption (STT) models, audio-analysis algorithms, and
+//! face-perception algorithms (the `face_mouth` auto-director floor).
 //!
 //! ## Why this is a *parallel* surface, not the `list_capabilities` verb
 //!
@@ -56,7 +57,7 @@ impl ProviderEntry {
     }
 }
 
-/// The three algorithm classes the inference runtime serves.
+/// The algorithm classes the inference runtime serves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderRegistry {
     /// Tracker algorithms (Research 04 §3 — `MixFormerV2-S` / `YuNet` / LK).
@@ -65,6 +66,9 @@ pub struct ProviderRegistry {
     pub caption_models: Vec<ProviderEntry>,
     /// Audio-analysis algorithms (Research 04 §5 — onset / tempo / `BeatNet`).
     pub audio_analysis_algorithms: Vec<ProviderEntry>,
+    /// Face-perception algorithms (issue #474 — `face_mouth` auto-director
+    /// floor: `MediaPipe` Face Mesh + MAR + `IoU` identity tracking).
+    pub face_perception_algorithms: Vec<ProviderEntry>,
 }
 
 impl ProviderRegistry {
@@ -91,6 +95,10 @@ impl ProviderRegistry {
                 ProviderEntry::native("tempo", "autocorrelation tempo + phase-lock (DSP)"),
                 ProviderEntry::sidecar("beatnet", "BeatNet CRNN (Python sidecar)"),
             ],
+            face_perception_algorithms: vec![ProviderEntry::sidecar(
+                "face_mouth",
+                "MediaPipe Face Mesh + MAR (Python sidecar)",
+            )],
         }
     }
 }
@@ -100,7 +108,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reports_all_three_algorithm_classes() {
+    fn reports_all_algorithm_classes() {
         let reg = ProviderRegistry::v1();
         assert!(
             !reg.tracker_algorithms.is_empty(),
@@ -113,6 +121,10 @@ mod tests {
         assert!(
             !reg.audio_analysis_algorithms.is_empty(),
             "audio-analysis algorithms class must be non-empty"
+        );
+        assert!(
+            !reg.face_perception_algorithms.is_empty(),
+            "face-perception algorithms class must be non-empty"
         );
     }
 
@@ -136,6 +148,17 @@ mod tests {
             .find(|e| e.id == "whisper")
             .expect("whisper must be advertised as a caption model");
         assert!(whisper.sidecar, "whisper runs via the Python sidecar");
+    }
+
+    #[test]
+    fn face_mouth_is_a_sidecar_face_perception_algorithm() {
+        let reg = ProviderRegistry::v1();
+        let face_mouth = reg
+            .face_perception_algorithms
+            .iter()
+            .find(|e| e.id == "face_mouth")
+            .expect("face_mouth must be advertised as a face-perception algorithm");
+        assert!(face_mouth.sidecar, "face_mouth runs via the Python sidecar");
     }
 
     #[test]

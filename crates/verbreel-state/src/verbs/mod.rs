@@ -120,6 +120,7 @@ pub mod effect_remove;
 pub mod effect_reorder;
 pub mod effect_set_param;
 pub mod effect_toggle;
+pub mod face_mouth;
 pub mod font_list;
 pub mod help;
 pub mod keyframe_add;

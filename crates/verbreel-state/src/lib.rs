@@ -276,6 +276,9 @@ pub use verbs::effect_set_param::{
 pub use verbs::effect_toggle::{
     EffectToggleArgs, EffectToggleData, EffectToggleError, EffectToggleVerb,
 };
+// `face_mouth` is a decode-only result model (issue #474), not a registered
+// verb — no Args/Data/Error/Verb tuple, just the trace structs.
+pub use verbs::face_mouth::{FaceBBoxSample, FaceMouthTrace, FaceTrace, MouthOpenSample};
 pub use verbs::font_list::{
     FontFamilyEntry, FontListArgs, FontListData, FontListError, FontListVerb,
 };
