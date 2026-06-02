@@ -381,6 +381,7 @@ pub use verbs::project_set_metadata::{
 // (a per-entry struct shipped earlier in the meta arc). Both types stay
 // reachable; the schema-verb error keeps its in-module spec-aligned
 // name.
+pub use verbs::face_mouth::{FaceBBoxSample, FaceMouthTrace, FaceTrace, MouthOpenSample};
 pub use verbs::render_cancel::{
     RenderCancelArgs, RenderCancelData, RenderCancelError, RenderCancelVerb,
 };

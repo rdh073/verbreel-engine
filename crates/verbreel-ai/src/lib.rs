@@ -40,7 +40,7 @@ pub mod registry;
 pub mod session;
 pub mod sidecar;
 
-pub use adapters::{Backend, run_audio_analysis, run_stt, run_tracker};
+pub use adapters::{Backend, run_audio_analysis, run_face_mouth, run_stt, run_tracker};
 pub use capability::Capability;
 pub use error::AiError;
 pub use execution_provider::{
