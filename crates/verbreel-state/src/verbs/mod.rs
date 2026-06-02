@@ -91,6 +91,8 @@ pub mod caption_export;
 pub mod caption_translate;
 pub use caption_burn_off::*;
 pub mod clip_add;
+pub mod clip_auto_color;
+pub mod clip_color_match;
 pub mod clip_delete;
 pub mod clip_duplicate;
 pub mod clip_list;
@@ -109,6 +111,7 @@ pub mod clip_set_volume;
 pub mod clip_split;
 pub mod clip_trim;
 pub mod clip_unlink;
+pub mod color_grade;
 pub mod compound_create;
 pub mod compound_edit_in_place;
 pub mod compound_expand;
@@ -462,6 +465,16 @@ pub fn default_registry() -> VerbRegistry {
         "ClipAddVerb is the fifty-sixth registration in \
              default_registry(); cannot collide with prior verbs",
     );
+    registry
+        .register(Arc::new(clip_auto_color::ClipAutoColorVerb))
+        .expect(
+            "ClipAutoColorVerb registration in default_registry() cannot collide with prior verbs",
+        );
+    registry
+        .register(Arc::new(clip_color_match::ClipColorMatchVerb))
+        .expect(
+            "ClipColorMatchVerb registration in default_registry() cannot collide with prior verbs",
+        );
     registry
         .register(Arc::new(clip_delete::ClipDeleteVerb))
         .expect(
@@ -1030,6 +1043,8 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_split_fixture(),
         clip_trim_fixture(),
         clip_add_fixture(),
+        clip_auto_color_fixture(),
+        clip_color_match_fixture(),
         clip_delete_fixture(),
         clip_duplicate_fixture(),
         clip_list_fixture(),
@@ -3589,6 +3604,165 @@ fn effect_toggle_fixture() -> RecordedEvent {
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings: vec![],
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `clip.auto_color` fixture used by
+/// [`default_fixtures`].
+///
+/// Starts from a synthetic project with one clip and runs auto-color on a
+/// mildly blue-cast, slightly low-contrast frame so the reconstructor
+/// gate exercises a non-identity grade.
+fn clip_auto_color_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa471",
+        "kind": "text",
+        "name": "Text 1",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb471",
+            "name": "Clip 1",
+            "asset_id": "00000000-0000-0000-0000-000000000000",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+            "text": {
+                "content": "Hello",
+                "font_family": "Arial",
+                "font_size_px": 24,
+            },
+            "effects": [],
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+
+    let args = clip_auto_color::ClipAutoColorArgs {
+        project_id,
+        target: "clip:01900000-0000-7000-8000-0000000bb471".to_string(),
+        mean_r: 0.40,
+        mean_g: 0.45,
+        mean_b: 0.55,
+        std_r: 0.18,
+        std_g: 0.18,
+        std_b: 0.18,
+        black_point: 0.05,
+        white_point: 0.90,
+    };
+
+    let (patch_value, warnings, _data) = clip_auto_color::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.auto_color patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.auto_color fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.auto_color fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_auto_color::data_envelope_from_warnings(&warnings)
+            .expect("clip.auto_color fixture expected_data"),
+    )
+    .expect("clip.auto_color fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.auto_color".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `clip.color_match` fixture used by
+/// [`default_fixtures`].
+///
+/// Matches a warm reference onto a cool target so the reconstructor gate
+/// exercises a non-identity Reinhard transfer.
+fn clip_color_match_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa472",
+        "kind": "text",
+        "name": "Text 1",
+        "locked": false,
+        "clips": [{
+            "id": "01900000-0000-7000-8000-0000000bb472",
+            "name": "Clip 1",
+            "asset_id": "00000000-0000-0000-0000-000000000000",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+            "text": {
+                "content": "Hello",
+                "font_family": "Arial",
+                "font_size_px": 24,
+            },
+            "effects": [],
+        }],
+    });
+
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+
+    let stats = |r: f64, g: f64, b: f64, sr: f64, sg: f64, sb: f64| clip_color_match::FrameStats {
+        mean_r: r,
+        mean_g: g,
+        mean_b: b,
+        std_r: sr,
+        std_g: sg,
+        std_b: sb,
+        black_point: 0.02,
+        white_point: 0.98,
+    };
+
+    let args = clip_color_match::ClipColorMatchArgs {
+        project_id,
+        target: "clip:01900000-0000-7000-8000-0000000bb472".to_string(),
+        reference: "frame:01900000-0000-7000-8000-0000000bb472@120000".to_string(),
+        reference_stats: stats(0.60, 0.50, 0.35, 0.22, 0.20, 0.16),
+        target_stats: stats(0.35, 0.45, 0.60, 0.12, 0.14, 0.18),
+    };
+
+    let (patch_value, warnings, _data) = clip_color_match::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.color_match patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.color_match fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.color_match fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_color_match::data_envelope_from_warnings(&warnings)
+            .expect("clip.color_match fixture expected_data"),
+    )
+    .expect("clip.color_match fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.color_match".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
         post_state,
         expected_data,
     }
@@ -7781,6 +7955,8 @@ mod tests {
                 "caption.export",
                 "caption.translate",
                 "clip.add",
+                "clip.auto_color",
+                "clip.color_match",
                 "clip.delete",
                 "clip.duplicate",
                 "clip.list",
