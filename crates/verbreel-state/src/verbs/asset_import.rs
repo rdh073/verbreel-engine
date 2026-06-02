@@ -528,29 +528,61 @@ fn probe_video(bytes: &[u8]) -> Option<VideoProbe> {
     let sample_count = find_box(stbl, *b"stsz")
         .and_then(parse_stsz_count)
         .unwrap_or(0);
-    // fps = sample_count * timescale / media_duration, the exact rational
-    // the container yields — no float, no rounding to a "nice" rate.
-    // Falls back to 1/1 only when sample timing is absent, which still
-    // satisfies the schema `minimum: 1` honestly (one frame per duration
-    // unit) rather than fabricating a 30fps lie.
-    let (fps_num, fps_den) = if sample_count >= 1 && media_duration >= 1 {
-        (
-            u32::try_from(u64::from(sample_count).checked_mul(u64::from(timescale))?).ok()?,
-            u32::try_from(media_duration).ok()?,
-        )
-    } else {
-        (1, 1)
-    };
+    let (fps_num, fps_den) = video_fps(sample_count, timescale, media_duration);
     let duration_tk = ticks_from_duration(media_duration, timescale)?;
 
     Some(VideoProbe {
         width,
         height,
-        fps_num: fps_num.max(1),
-        fps_den: fps_den.max(1),
+        fps_num,
+        fps_den,
         duration_tk,
         video_codec: codec,
     })
+}
+
+/// Compute the video frame rate `(fps_num, fps_den)` from `sample_count *
+/// timescale / media_duration`, the exact rational the container yields —
+/// no float, no rounding to a "nice" rate.
+///
+/// fps is *non-essential* metadata: the file has already been positively
+/// identified as video (valid `ftyp` + `vide` handler + `stsd`
+/// dimensions) before this is called. So this is **infallible** — it
+/// degrades to `1/1` (one frame per duration unit, schema-honest, not a
+/// fabricated 30fps lie) when sample timing is absent OR when the raw
+/// product would overflow `u32`. Letting an fps-representation failure
+/// abort the probe would drop the file to the subtitle fallback and
+/// re-trigger `E_ASSET_KIND_UNROUTABLE` on `clip.add` — the exact bug
+/// this surface exists to eliminate — so it must never `?`-out here.
+///
+/// The fraction is reduced by gcd before the `u32` fit, which both stores
+/// a sane rate (`1152000/48000` → `24/1`) and avoids the overflow in the
+/// common case (a 2-hour clip at timescale 90000 has `sample_count *
+/// timescale` far past `u32::MAX` unreduced, but a tidy ratio reduced).
+#[cfg(feature = "native")]
+fn video_fps(sample_count: u32, timescale: u32, media_duration: u64) -> (u32, u32) {
+    if sample_count < 1 || media_duration < 1 {
+        return (1, 1);
+    }
+    let num = u64::from(sample_count) * u64::from(timescale);
+    let den = media_duration;
+    let g = gcd(num, den).max(1);
+    let (num, den) = (num / g, den / g);
+    match (u32::try_from(num), u32::try_from(den)) {
+        (Ok(n), Ok(d)) if n >= 1 && d >= 1 => (n, d),
+        // Reduced ratio still doesn't fit u32 (pathological timescale):
+        // degrade honestly rather than abort classification of a
+        // confirmed video.
+        _ => (1, 1),
+    }
+}
+
+#[cfg(feature = "native")]
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }
 
 /// One ISO-BMFF box parsed from a sibling walk: its 4-byte type, where

@@ -775,9 +775,11 @@ fn mutate_via_verb_mp4_import_records_video_asset_not_subtitle() {
         meta.get("duration_tk").and_then(Value::as_i64),
         Some(480_000)
     );
-    // fps = samples*timescale / duration = 48*24000 / 48000.
-    assert_eq!(meta.get("fps_num").and_then(Value::as_u64), Some(1_152_000));
-    assert_eq!(meta.get("fps_den").and_then(Value::as_u64), Some(48_000));
+    // fps = samples*timescale / duration = 48*24000 / 48000 = 24/1,
+    // gcd-reduced (the stored rational is the reduced form, which both
+    // avoids u32 overflow on long/high-timescale media and reads sanely).
+    assert_eq!(meta.get("fps_num").and_then(Value::as_u64), Some(24));
+    assert_eq!(meta.get("fps_den").and_then(Value::as_u64), Some(1));
     // Every schema-`minimum: 1` field is >= 1 — no fabricated placeholder.
     for field in ["width", "height", "fps_num", "fps_den", "duration_tk"] {
         assert!(
@@ -785,6 +787,38 @@ fn mutate_via_verb_mp4_import_records_video_asset_not_subtitle() {
             "video metadata `{field}` must satisfy schema minimum: 1"
         );
     }
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_long_high_timescale_mp4_still_classifies_as_video() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    // ~2-hour clip at timescale 90000 (a very common container timescale)
+    // at 30fps: samples = 30 * 7200 = 216000, duration = 7200 * 90000 =
+    // 648_000_000. The UNREDUCED fps product samples*timescale =
+    // 216000 * 90000 = 1.944e10 overflows u32, and duration also overflows
+    // u32 — before the gcd-reduce + infallible-degrade fix, both
+    // `u32::try_from(..).ok()?` failed, `probe_video` returned None, and
+    // the file fell through to the subtitle fallback (re-triggering
+    // E_ASSET_KIND_UNROUTABLE on clip.add). fps must reduce to 30/1.
+    let samples = 30u32 * 7200;
+    let duration = 7200u32 * 90000; // 648_000_000, fits u32 here on purpose
+    let mp4 = minimal_mp4(1920, 1080, 90_000, duration, samples);
+    let imported = import_single(dir.path(), "long.mp4", &mp4);
+    let obj = imported.as_object().expect("asset object");
+
+    assert_eq!(
+        obj.get("kind").and_then(Value::as_str),
+        Some("video"),
+        "a long high-timescale mp4 must still classify as video, not subtitle"
+    );
+    let meta = obj.get("metadata").expect("metadata");
+    // 216000*90000 / 648000000 = 30/1, gcd-reduced (unreduced numerator
+    // 1.944e10 > u32::MAX, so this only fits after reduction).
+    assert_eq!(meta.get("fps_num").and_then(Value::as_u64), Some(30));
+    assert_eq!(meta.get("fps_den").and_then(Value::as_u64), Some(1));
 }
 
 #[cfg(feature = "native")]
