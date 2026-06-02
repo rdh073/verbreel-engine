@@ -346,8 +346,19 @@ fn rejects_unqualified_and_missing_and_locked() {
         }]
     };
 
-    // Unqualified selector -> E_BAD_SELECTOR.
+    // E_BAD_SELECTOR has three distinct branches; cover each.
+    // (a) Unqualified selector (missing `:` separator).
     let err = compute_patch(&prior, &args(CLIP_A, trace())).expect_err("bare selector");
+    assert!(matches!(err, ClipAutoReframeError::BadSelector { .. }));
+
+    // (b) Known-but-wrong prefix (`track:<uuid>` is well-formed but not a clip).
+    let err = compute_patch(&prior, &args(&format!("track:{CLIP_A}"), trace()))
+        .expect_err("wrong selector prefix");
+    assert!(matches!(err, ClipAutoReframeError::BadSelector { .. }));
+
+    // (c) Correct prefix, malformed body (not a UUIDv7 — body parse fails).
+    let err =
+        compute_patch(&prior, &args("clip:not-a-uuid", trace())).expect_err("malformed clip body");
     assert!(matches!(err, ClipAutoReframeError::BadSelector { .. }));
 
     // Missing clip -> E_NOT_FOUND.

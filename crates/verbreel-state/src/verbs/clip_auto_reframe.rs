@@ -12,6 +12,26 @@
 //! track — the existing renderer already plays back `transform.*`
 //! keyframes, so no render/codec change is required.
 //!
+//! ## Pan model (falsifiable assumption — pin with a render-parity test)
+//!
+//! The pan translation is derived under an **origin-scale** model: the fit
+//! zoom maps a canvas point `p -> fit_scale * p`, so landing the subject at
+//! the canvas center needs `transform.{x,y} = center - fit_scale * subject`.
+//! This matches the spec's documented placement contract for
+//! `tracker.apply` / `W_TRACKER_OUT_OF_BOUNDS` (spec/commands/tracker.md
+//! §18.3), where `transform.x` directly positions the clip's transform
+//! anchor in canvas space with a constant additive offset and *no*
+//! pivot-correction term. It does NOT independently re-derive the renderer's
+//! affine composition, which lives in `verbreel-render` and is out of this
+//! crate's dependency scope (CLAUDE.md crate-graph rule). If the renderer
+//! pivots the fit zoom about the clip-center anchor (`Transform.anchor_*`
+//! defaults `0.5`) rather than the origin, the centered offset would instead
+//! be `fit_scale * (center - subject)`. When `verbreel-render` lands the
+//! transform composition, add a render-side parity test asserting the
+//! *composed* transform places the subject at canvas center; that test —
+//! not this crate — is the authority on the pivot, and will catch a model
+//! mismatch deterministically.
+//!
 //! ## Why there is no `crop` field
 //!
 //! [`crate::clip::Clip`] has no `crop` field; recomposition is expressed
@@ -45,12 +65,28 @@
 //! `target` MUST be the qualified `clip:<UUIDv7>` form (spec §0.4). A bare
 //! or unknown-prefix selector is rejected with `E_BAD_SELECTOR`; a missing
 //! clip with `E_NOT_FOUND`; a locked clip or parent track with `E_LOCKED`.
-//! When a sample's subject center falls outside the canvas
+//! When a sample's *smoothed* subject center (the moving average that
+//! drives the pan, not the raw `cx`/`cy`) falls outside the canvas
 //! `[0, width) x [0, height)` rectangle the center is clamped per-axis and
 //! `W_TRACKER_OUT_OF_BOUNDS` is emitted carrying
 //! `details.clamped_sample_count` and `details.bound`, reusing the
 //! `tracker.apply` clamp semantics (spec/commands/tracker.md §18.3,
 //! appendix-b-warnings `W_TRACKER_OUT_OF_BOUNDS`).
+//!
+//! ## Precondition: clean `transform.*` keyframe track
+//!
+//! The verb *appends* `transform.scale_x` / `scale_y` / `x` / `y`
+//! keyframes (`add /.../keyframes/-`); it does not clear or reconcile
+//! pre-existing `transform.*` keyframes on the target clip. The emitted
+//! plan is therefore correct only for a clip whose `transform.*` track is
+//! empty (the natural state for a freshly-imported clip being reframed).
+//! If the clip already carries `transform.*` keyframes, the new plan
+//! composes with the old one and the reframe is wrong; a pre-existing
+//! keyframe at an identical `(property, time_tk)` is additionally rejected
+//! by `apply`. Clearing an existing track first is out of this slice's
+//! "compose existing primitives" scope (issue #481 Scope-OUT) — an agent
+//! that needs to re-reframe a clip removes the stale `transform.*`
+//! keyframes before calling this verb.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -385,9 +421,14 @@ fn reframe_samples(
         let avg_horizontal = mean(trace[lo..=idx].iter().map(|s| s.cx));
         let avg_vertical = mean(trace[lo..=idx].iter().map(|s| s.cy));
 
-        // Per-axis clamp of the (smoothed) crop-window center. A sample is
-        // counted as clamped when its raw center lies outside the half-open
-        // canvas bound on either axis.
+        // Per-axis clamp of the smoothed crop-window center. A sample is
+        // counted as clamped when its *smoothed* center (`avg_*`, the moving
+        // average that actually drives the pan) lies outside the half-open
+        // canvas bound on either axis — not its raw `cx`/`cy`. With
+        // `window == 1` the average equals the raw sample, so the two are
+        // identical; with `window > 1` smoothing can pull an off-canvas raw
+        // sample back in-bounds, and such a sample is then neither clamped
+        // nor counted, by design — the pan only ever reads the average.
         let clamp_horizontal = avg_horizontal.clamp(0.0, max_x);
         let clamp_vertical = avg_vertical.clamp(0.0, max_y);
         let was_clamped = avg_horizontal < 0.0
