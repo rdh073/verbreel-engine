@@ -645,6 +645,47 @@ fn minimal_mp4(width: u16, height: u16, timescale: u32, duration: u32, samples: 
     out
 }
 
+/// Build an ISO-BMFF box using the 64-bit extended size form (`size ==
+/// 1`, real size in the 8 bytes after the type). Large `mdat` boxes on
+/// phone captures routinely use this encoding, so the sibling walk must
+/// skip it rather than abort.
+#[cfg(feature = "native")]
+fn iso_box_64bit(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    let total = 16u64 + u64::try_from(body.len()).expect("body fits u64");
+    let mut out = 1u32.to_be_bytes().to_vec(); // size == 1 → 64-bit form
+    out.extend_from_slice(kind);
+    out.extend_from_slice(&total.to_be_bytes()); // 64-bit largesize
+    out.extend_from_slice(body);
+    out
+}
+
+/// Same payload as [`minimal_mp4`] but with a 64-bit-sized `mdat` box
+/// inserted between `ftyp` and `moov` (the real-world layout for large
+/// captures). The walk must skip the extended-size `mdat` and still
+/// reach `moov`.
+#[cfg(feature = "native")]
+fn mp4_with_leading_64bit_mdat(
+    width: u16,
+    height: u16,
+    timescale: u32,
+    duration: u32,
+    samples: u32,
+) -> Vec<u8> {
+    let full = minimal_mp4(width, height, timescale, duration, samples);
+    // Split the canonical fixture at the `moov` box (right after `ftyp`).
+    let moov_pos = full
+        .windows(4)
+        .position(|w| w == b"moov")
+        .expect("fixture contains a moov box");
+    let ftyp_end = moov_pos - 4; // moov size field precedes its type.
+    let mdat = iso_box_64bit(b"mdat", &[0u8; 32]);
+
+    let mut out = full[..ftyp_end].to_vec();
+    out.extend_from_slice(&mdat);
+    out.extend_from_slice(&full[ftyp_end..]);
+    out
+}
+
 /// A minimal canonical RIFF/WAVE fixture: PCM, `channels` channels,
 /// `sample_rate` Hz, 16-bit, with `frames` sample frames of zeroed data.
 #[cfg(feature = "native")]
@@ -744,6 +785,35 @@ fn mutate_via_verb_mp4_import_records_video_asset_not_subtitle() {
             "video metadata `{field}` must satisfy schema minimum: 1"
         );
     }
+}
+
+#[cfg(feature = "native")]
+#[test]
+fn mutate_via_verb_mp4_with_64bit_mdat_before_moov_still_classifies_as_video() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    // Real-world layout: a 64-bit-sized (`size == 1`) `mdat` precedes
+    // `moov`. Before the find_box skip-don't-abort fix, the extended-size
+    // box aborted the top-level walk, `probe_video` returned None, and the
+    // file fell through to the subtitle fallback — the exact bug this PR
+    // exists to kill, reintroduced for a common input class.
+    let mp4 = mp4_with_leading_64bit_mdat(640, 360, 24_000, 48_000, 48);
+    let imported = import_single(dir.path(), "phone.mp4", &mp4);
+    let obj = imported.as_object().expect("asset object");
+
+    assert_eq!(
+        obj.get("kind").and_then(Value::as_str),
+        Some("video"),
+        "mp4 with a 64-bit-sized mdat before moov must still classify as video"
+    );
+    let meta = obj.get("metadata").expect("metadata");
+    assert_eq!(meta.get("width").and_then(Value::as_u64), Some(640));
+    assert_eq!(meta.get("height").and_then(Value::as_u64), Some(360));
+    assert_eq!(
+        meta.get("video_codec").and_then(Value::as_str),
+        Some("h264")
+    );
 }
 
 #[cfg(feature = "native")]

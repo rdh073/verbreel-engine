@@ -553,25 +553,65 @@ fn probe_video(bytes: &[u8]) -> Option<VideoProbe> {
     })
 }
 
+/// One ISO-BMFF box parsed from a sibling walk: its 4-byte type, where
+/// its body begins (after the 8- or 16-byte header), and where the box —
+/// and thus the next sibling — ends.
+#[cfg(feature = "native")]
+struct BoxSpan {
+    kind: [u8; 4],
+    body_start: usize,
+    box_end: usize,
+}
+
+/// Decode the box header at `offset`. Handles the three ISO-BMFF size
+/// encodings: a normal 32-bit size, `size == 0` ("to end of data"), and
+/// `size == 1` (64-bit extended size in the 8 bytes after the type).
+/// Returns `None` only when the header itself is malformed/truncated so
+/// the *whole* walk should stop — a single oversized or extended box is
+/// reported with its real `box_end` so the caller can **skip** it and
+/// keep scanning later siblings (e.g. a 64-bit `mdat` preceding `moov`).
+#[cfg(feature = "native")]
+fn parse_box_header(data: &[u8], offset: usize) -> Option<BoxSpan> {
+    let size = u32::from_be_bytes(data.get(offset..offset + 4)?.try_into().ok()?) as usize;
+    let kind: [u8; 4] = data.get(offset + 4..offset + 8)?.try_into().ok()?;
+    let (header_len, box_size) = if size == 1 {
+        // 64-bit extended size occupies bytes offset+8..offset+16.
+        let large = u64::from_be_bytes(data.get(offset + 8..offset + 16)?.try_into().ok()?);
+        (16usize, usize::try_from(large).ok()?)
+    } else {
+        (8usize, size)
+    };
+    let body_start = offset.checked_add(header_len)?;
+    let box_end = if size == 0 {
+        data.len()
+    } else {
+        offset.checked_add(box_size)?
+    };
+    if box_end < body_start || box_end > data.len() {
+        return None;
+    }
+    Some(BoxSpan {
+        kind,
+        body_start,
+        box_end,
+    })
+}
+
 /// Walk the immediate child boxes of an ISO-BMFF box body, returning the
 /// **body** (header stripped) of the first child whose 4-byte type
 /// matches `want`. Boxes are `[u32 size][u8;4 type][body]`, big-endian.
+/// A box using the 64-bit extended size (`size == 1`, common on large
+/// `mdat`) is skipped rather than aborting the scan, so a later `moov`
+/// sibling is still found.
 #[cfg(feature = "native")]
 fn find_box(data: &[u8], want: [u8; 4]) -> Option<&[u8]> {
     let mut offset = 0usize;
     while offset + 8 <= data.len() {
-        let size = u32::from_be_bytes(data.get(offset..offset + 4)?.try_into().ok()?) as usize;
-        let kind = data.get(offset + 4..offset + 8)?;
-        // size == 0 means "to end of file"; size == 1 means 64-bit
-        // extended size (unsupported here — these fixtures never use it).
-        let box_end = if size == 0 { data.len() } else { offset + size };
-        if box_end <= offset + 8 || box_end > data.len() {
-            return None;
+        let span = parse_box_header(data, offset)?;
+        if span.kind == want {
+            return data.get(span.body_start..span.box_end);
         }
-        if kind == want {
-            return data.get(offset + 8..box_end);
-        }
-        offset = box_end;
+        offset = span.box_end;
     }
     None
 }
@@ -582,19 +622,14 @@ fn find_box(data: &[u8], want: [u8; 4]) -> Option<&[u8]> {
 fn find_video_trak(moov: &[u8]) -> Option<&[u8]> {
     let mut offset = 0usize;
     while offset + 8 <= moov.len() {
-        let size = u32::from_be_bytes(moov.get(offset..offset + 4)?.try_into().ok()?) as usize;
-        let kind = moov.get(offset + 4..offset + 8)?;
-        let box_end = if size == 0 { moov.len() } else { offset + size };
-        if box_end <= offset + 8 || box_end > moov.len() {
-            return None;
-        }
-        if kind == b"trak"
-            && let Some(trak) = moov.get(offset + 8..box_end)
+        let span = parse_box_header(moov, offset)?;
+        if span.kind == *b"trak"
+            && let Some(trak) = moov.get(span.body_start..span.box_end)
             && trak_is_video(trak)
         {
             return Some(trak);
         }
-        offset = box_end;
+        offset = span.box_end;
     }
     None
 }
