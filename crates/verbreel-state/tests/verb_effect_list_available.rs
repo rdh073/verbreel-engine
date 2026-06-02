@@ -37,7 +37,7 @@ fn compute_patch_without_filter_returns_all_effects() {
 
     assert_eq!(patch, json!([]));
     assert!(warnings.is_empty());
-    assert_eq!(data.effects.len(), 14);
+    assert_eq!(data.effects.len(), 16);
 }
 
 #[test]
@@ -54,7 +54,15 @@ fn compute_patch_with_video_filter() {
     let kinds: Vec<&str> = data.effects.iter().map(|e| e.kind.as_str()).collect();
     assert_eq!(
         kinds,
-        vec!["blur", "chroma_key", "color_correct", "crop", "lut"]
+        vec![
+            "blur",
+            "chroma_key",
+            "color_correct",
+            "crop",
+            "curves",
+            "hsl",
+            "lut"
+        ]
     );
 }
 
@@ -273,7 +281,7 @@ fn verb_routes_through_mutate_via_verb() {
 
     let data: EffectListAvailableData =
         serde_json::from_value(data).expect("effect.list_available data deserializes");
-    assert_eq!(data.effects.len(), 14);
+    assert_eq!(data.effects.len(), 16);
 }
 
 #[test]

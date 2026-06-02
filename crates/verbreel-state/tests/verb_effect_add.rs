@@ -553,6 +553,105 @@ fn reconstructor_round_trip() {
     assert_eq!(report.verbs_checked, vec!["effect.add"]);
 }
 
+fn curves_identity_params() -> Map<String, Value> {
+    let ramp = json!([[0.0, 0.0], [1.0, 1.0]]);
+    map(&[
+        ("luma", ramp.clone()),
+        ("r", ramp.clone()),
+        ("g", ramp.clone()),
+        ("b", ramp),
+    ])
+}
+
+fn hsl_identity_params() -> Map<String, Value> {
+    let zero_band = json!({ "hue": 0.0, "saturation": 0.0, "lightness": 0.0 });
+    map(&[
+        ("red", zero_band.clone()),
+        ("orange", zero_band.clone()),
+        ("yellow", zero_band.clone()),
+        ("green", zero_band.clone()),
+        ("cyan", zero_band.clone()),
+        ("blue", zero_band.clone()),
+        ("purple", zero_band.clone()),
+        ("magenta", zero_band),
+    ])
+}
+
+fn round_trip_kind(kind: &str, params: Map<String, Value>) {
+    let prior = project_with_text_clip(false, false, Vec::new());
+    let args = EffectAddArgs {
+        params: Some(params),
+        ..args(kind)
+    };
+
+    let (patch, warnings, data) = compute_patch(&prior, &args).expect("identity params accepted");
+    let post = apply_patch(&prior, patch.clone());
+    let effect = &post.tracks[0].clips[0].effects[0];
+    assert_eq!(effect.id, data.effect_id);
+    assert_eq!(effect.kind.to_string(), kind);
+
+    let expected_data = serde_json::to_value(
+        data_envelope_from_args_warnings(&args, &warnings).expect("warning envelope"),
+    )
+    .expect("data serializes");
+    let recorded = RecordedEvent {
+        verb: "effect.add".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch,
+        warnings,
+        post_state: post,
+        expected_data,
+    };
+
+    let mut registry = VerbRegistry::new();
+    registry
+        .register(Arc::new(EffectAddVerb))
+        .expect("register effect.add");
+    let report = validate_reconstructors(&registry, &[recorded]).expect("round trip");
+    assert_eq!(report.verbs_checked, vec!["effect.add"]);
+}
+
+#[test]
+fn compute_patch_adds_curves_identity_and_round_trips() {
+    let prior = project_with_text_clip(false, false, Vec::new());
+    let params = curves_identity_params();
+    let args = EffectAddArgs {
+        params: Some(params.clone()),
+        ..args("curves")
+    };
+
+    let (patch, _warnings, data) = compute_patch(&prior, &args).expect("curves params accepted");
+    let post = apply_patch(&prior, patch);
+    let effect = &post.tracks[0].clips[0].effects[0];
+    assert_eq!(effect.id, data.effect_id);
+    assert_eq!(effect.kind.to_string(), "curves");
+    assert_eq!(effect.params["luma"], json!([[0.0, 0.0], [1.0, 1.0]]));
+
+    round_trip_kind("curves", params);
+}
+
+#[test]
+fn compute_patch_adds_hsl_identity_and_round_trips() {
+    let prior = project_with_text_clip(false, false, Vec::new());
+    let params = hsl_identity_params();
+    let args = EffectAddArgs {
+        params: Some(params.clone()),
+        ..args("hsl")
+    };
+
+    let (patch, _warnings, data) = compute_patch(&prior, &args).expect("hsl params accepted");
+    let post = apply_patch(&prior, patch);
+    let effect = &post.tracks[0].clips[0].effects[0];
+    assert_eq!(effect.id, data.effect_id);
+    assert_eq!(effect.kind.to_string(), "hsl");
+    assert_eq!(
+        effect.params["red"],
+        json!({ "hue": 0.0, "saturation": 0.0, "lightness": 0.0 })
+    );
+
+    round_trip_kind("hsl", params);
+}
+
 #[test]
 fn reconstruct_from_default_fixture() {
     let fixture = default_fixtures()
