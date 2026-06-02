@@ -212,6 +212,9 @@ def main():
         _fail(f"face_mouth sidecar: unexpected op {request.get('op')!r}")
 
     params = request.get("params", {})
+    # `analysis_id` is intentionally unused here: caching is the engine's job
+    # (it keys the frozen trace by analysis_id), the reference script just
+    # computes the trace. Not reading it is not a wiring bug.
     video_path = params.get("video_path")
     if not video_path:
         _fail("face_mouth sidecar: missing params.video_path")

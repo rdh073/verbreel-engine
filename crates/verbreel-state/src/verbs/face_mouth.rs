@@ -114,9 +114,10 @@ mod tests {
     fn serde_round_trip_preserves_struct() {
         let trace = sample_trace();
         let json = serde_json::to_string(&trace).unwrap();
-        // Compare via PartialEq on the deserialized struct, not re-serialized
-        // bytes: `mar` is f64 and float formatting is not byte-stable, while
-        // the perception pass is the explicit non-deterministic seam.
+        // Assert the value round-trips, not the bytes: this test guards
+        // serde semantics (deserialize(serialize(x)) == x) independently of
+        // float formatting. `wire_key_order_matches_contract` covers the
+        // exact byte layout (serde_json's ryu output is deterministic).
         let back: FaceMouthTrace = serde_json::from_str(&json).unwrap();
         assert_eq!(trace, back);
     }
