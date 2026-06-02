@@ -905,6 +905,29 @@ fn mutate_via_verb_png_import_records_image_asset() {
 
 #[cfg(feature = "native")]
 #[test]
+fn mutate_via_verb_gif_import_records_image_asset() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    // GIF89a header + logical screen descriptor: LE width(2)=12, height(2)=7,
+    // then packed/bg/aspect bytes. gif_dimensions is a production path
+    // (build_asset_for_import → image_dimensions → ...or_else(gif_dimensions))
+    // that previously had no test fixture.
+    let mut gif = b"GIF89a".to_vec();
+    gif.extend_from_slice(&12u16.to_le_bytes());
+    gif.extend_from_slice(&7u16.to_le_bytes());
+    gif.extend_from_slice(&[0u8, 0, 0]); // packed fields, bg color, aspect
+
+    let imported = import_single(dir.path(), "anim.gif", &gif);
+    let obj = imported.as_object().expect("asset object");
+    assert_eq!(obj.get("kind").and_then(Value::as_str), Some("image"));
+    let meta = obj.get("metadata").expect("metadata");
+    assert_eq!(meta.get("width").and_then(Value::as_u64), Some(12));
+    assert_eq!(meta.get("height").and_then(Value::as_u64), Some(7));
+}
+
+#[cfg(feature = "native")]
+#[test]
 fn mutate_via_verb_srt_import_still_records_subtitle_asset() {
     use tempfile::TempDir;
 
