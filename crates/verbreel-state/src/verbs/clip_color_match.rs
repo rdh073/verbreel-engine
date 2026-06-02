@@ -58,9 +58,16 @@ pub struct FrameStats {
     /// Standard deviation of the blue channel in `[0, 1]`.
     pub std_b: f64,
     /// Low luma percentile in `[0, 1]`.
+    ///
+    /// Reserved: accepted and range-validated for shape-parity with
+    /// `clip.auto_color`'s stats, but the Reinhard mean/std transfer in
+    /// [`crate::color_dsp::color_match_grade`] consumes only the means and
+    /// stds — the percentiles do not influence the emitted grade.
     #[serde(default)]
     pub black_point: f64,
     /// High luma percentile in `[0, 1]`.
+    ///
+    /// Reserved — see [`FrameStats::black_point`]; unused by the transfer.
     #[serde(default = "default_white_point")]
     pub white_point: f64,
 }
@@ -259,7 +266,15 @@ fn qualified_field(prefix: &str, field: &str) -> &'static str {
         ("target", "std_g") => "target_stats.std_g",
         ("target", "std_b") => "target_stats.std_b",
         ("target", "black_point") => "target_stats.black_point",
-        _ => "target_stats.white_point",
+        ("target", "white_point") => "target_stats.white_point",
+        // `prefix` is a compile-time-fixed "reference" | "target" and
+        // `field` ranges over the eight stat names in `validate_frame`;
+        // the 16 arms above are exhaustive over that product. Any other
+        // pair signals a new caller passing an unmapped prefix/field —
+        // surface it loudly rather than mislabel the error field.
+        (other_prefix, other_field) => unreachable!(
+            "qualified_field: unmapped (prefix, field) = ({other_prefix}, {other_field})"
+        ),
     }
 }
 
@@ -391,6 +406,11 @@ impl Verb for ClipColorMatchVerb {
             })?;
         drop(post_state);
 
+        // Intentional round-trip: `_data` is discarded and rebuilt from
+        // the recorded warning so the write path exercises the exact
+        // envelope decode that `reconstruct` (replay) relies on. A drift
+        // between the in-memory `data` and the serialized warning surfaces
+        // here at write time instead of silently at replay.
         let envelope = data_envelope_from_warnings(&warnings).map_err(|err| {
             VerbError::Custom(format!(
                 "clip.color_match: data envelope reconstruction failed: {err}"

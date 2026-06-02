@@ -335,6 +335,11 @@ impl Verb for ClipAutoColorVerb {
             })?;
         drop(post_state);
 
+        // Intentional round-trip: `_data` is discarded and rebuilt from
+        // the recorded warning so the write path exercises the exact
+        // envelope decode that `reconstruct` (replay) relies on. A drift
+        // between the in-memory `data` and the serialized warning surfaces
+        // here at write time instead of silently at replay.
         let envelope = data_envelope_from_warnings(&warnings).map_err(|err| {
             VerbError::Custom(format!(
                 "clip.auto_color: data envelope reconstruction failed: {err}"
