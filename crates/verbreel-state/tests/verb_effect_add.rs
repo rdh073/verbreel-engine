@@ -652,6 +652,58 @@ fn compute_patch_adds_hsl_identity_and_round_trips() {
     round_trip_kind("hsl", params);
 }
 
+fn relight_directional_params() -> Map<String, Value> {
+    map(&[
+        ("mode", json!("directional")),
+        ("intensity", json!(0.75)),
+        ("color", json!([1.0, 0.9, 0.8])),
+        ("direction", json!([0.5, -0.5, 1.0])),
+        ("blend", json!("add")),
+    ])
+}
+
+#[test]
+fn compute_patch_adds_relight_and_round_trips() {
+    let prior = project_with_text_clip(false, false, Vec::new());
+    let params = relight_directional_params();
+    let args = EffectAddArgs {
+        params: Some(params.clone()),
+        ..args("relight")
+    };
+
+    let (patch, _warnings, data) = compute_patch(&prior, &args).expect("relight params accepted");
+    let post = apply_patch(&prior, patch);
+    let effect = &post.tracks[0].clips[0].effects[0];
+    assert_eq!(effect.id, data.effect_id);
+    assert_eq!(effect.kind.to_string(), "relight");
+    assert_eq!(effect.params["mode"], json!("directional"));
+    assert_eq!(effect.params["intensity"], json!(0.75));
+
+    round_trip_kind("relight", params);
+}
+
+#[test]
+fn compute_patch_adds_relight_neutral_default_is_no_op() {
+    // Identity/neutral default: intensity 0 (an effective no-op render).
+    // The params bag is stored opaquely and must survive byte-stable.
+    let prior = project_with_text_clip(false, false, Vec::new());
+    let params = map(&[("intensity", json!(0.0))]);
+    let args = EffectAddArgs {
+        params: Some(params.clone()),
+        ..args("relight")
+    };
+
+    let (patch, _warnings, data) = compute_patch(&prior, &args).expect("neutral relight accepted");
+    let post = apply_patch(&prior, patch);
+    let effect = &post.tracks[0].clips[0].effects[0];
+    assert_eq!(effect.id, data.effect_id);
+    assert_eq!(effect.kind.to_string(), "relight");
+    assert_eq!(effect.params["intensity"], json!(0.0));
+    assert_eq!(effect.params, params);
+
+    round_trip_kind("relight", params);
+}
+
 #[test]
 fn reconstruct_from_default_fixture() {
     let fixture = default_fixtures()
