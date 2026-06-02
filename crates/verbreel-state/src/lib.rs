@@ -67,6 +67,7 @@ pub mod asset;
 pub mod asset_meta;
 pub mod canvas;
 pub mod clip;
+pub mod color_dsp;
 pub mod effect;
 #[cfg(feature = "native")]
 pub mod engine;
@@ -203,6 +204,14 @@ pub use verbs::caption_translate::{
 pub use verbs::clip_add::{
     ClipAddArgs, ClipAddData, ClipAddError, ClipAddVerb, DEFAULT_IMAGE_DURATION_TK,
     W_CLIP_ADD_ENVELOPE_CODE,
+};
+pub use verbs::clip_auto_color::{
+    ClipAutoColorArgs, ClipAutoColorData, ClipAutoColorError, ClipAutoColorVerb,
+    W_AUTO_COLOR_ENVELOPE_CODE,
+};
+pub use verbs::clip_color_match::{
+    ClipColorMatchArgs, ClipColorMatchData, ClipColorMatchError, ClipColorMatchVerb, FrameStats,
+    W_COLOR_MATCH_ENVELOPE_CODE,
 };
 pub use verbs::clip_duplicate::{
     ClipDuplicateArgs, ClipDuplicateData, ClipDuplicateError, ClipDuplicateVerb, SiblingDuplicate,
