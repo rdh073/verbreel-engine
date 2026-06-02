@@ -219,7 +219,7 @@ def main():
             "face_mouth sidecar: mediapipe/opencv not installed "
             f"(operator-install required): {err}"
         )
-    except Exception as err:  # noqa: BLE0 — surface any analysis error loudly
+    except Exception as err:  # noqa: BLE001 — surface any analysis error loudly
         _fail(f"face_mouth sidecar: analysis failed: {err}")
 
     sys.stdout.write(json.dumps({"op": "face_mouth", "result": result}))
