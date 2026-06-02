@@ -13,11 +13,12 @@
 //!
 //! ## Engine-additive kinds beyond the spec's v1.0 set.
 //!
-//! This engine build curates two additional video color kinds not in the
-//! spec's verbatim v1.0 list above: `curves` and `hsl` (issue #478). They
-//! are addable via `effect.add` and settable via `effect.set_param` like
-//! any other unmanaged kind. The §6.5 list is a build-curated catalog, not
-//! a frozen spec constant, so growing it is in-bounds.
+//! This engine build curates additional video kinds not in the spec's
+//! verbatim v1.0 list above: `curves` and `hsl` (issue #478), and `relight`
+//! (issue #480). They are addable via `effect.add` and settable via
+//! `effect.set_param` like any other unmanaged kind. The §6.5 list is a
+//! build-curated catalog, not a frozen spec constant, so growing it is
+//! in-bounds.
 //!
 //! ## Render-time evaluation is NOT shipped in this slice.
 //!
@@ -66,9 +67,34 @@
 //! - Identity default: every band's `hue`/`saturation`/`lightness` is
 //!   `0.0` (omitted band reads as all-zero deltas).
 //!
-//! Both kinds are keyframable via the existing dotted-path leaf mechanism;
-//! curve control points carry the indexed-path v1 limitation noted in
-//! `keyframe.add` (§0.13), matching every other effect param.
+//! ### `relight` param shape (neutral default) — evaluation deferred
+//!
+//! Free-form params (not schema-validated here — the engine enforces only
+//! the generic §0.13 caps, not per-kind leaf schemas). Shape:
+//!
+//! - `mode`: `"ambient" | "directional" | "creative-preset"`.
+//! - `intensity`: light strength `>= 0.0` (neutral / identity = `0.0`).
+//! - `color`: `[r, g, b]` light tint in `[0.0, 1.0]` (default white).
+//! - `direction`: `[x, y, z]` light direction (directional mode).
+//! - `position`: `[x, y]` screen-space light origin in `[0.0, 1.0]`
+//!   (point/creative modes), with `radius` and `falloff` `>= 0.0`.
+//! - `blend`: blend mode the eventual shader composites the light with
+//!   (e.g. `"add" | "screen" | "soft_light"`).
+//! - Intended evaluation contract (NOT implemented in this slice; lands
+//!   with the Spike S1 shader stage): a screen-space parametric light is
+//!   composited per `blend` over the source, scaled by `intensity` and the
+//!   distance/angle falloff. Deterministic — no ML, no depth/normal sidecar.
+//! - Neutral default: `intensity` `0.0` (or an empty/absent params bag)
+//!   renders as an identity no-op — the source is passed through unchanged.
+//!
+//! Learned (depth/normal-aware) relighting and HDRI / environment-map
+//! relighting are explicit follow-ups (issue #480 Scope-OUT) that need a
+//! geometry sidecar — out of scope for this parametric, native-first kind.
+//!
+//! All three engine-additive kinds are keyframable via the existing
+//! dotted-path leaf mechanism; curve control points carry the indexed-path
+//! v1 limitation noted in `keyframe.add` (§0.13), matching every other
+//! effect param.
 //!
 //! ## Bundle metadata, not project state.
 //!
@@ -158,6 +184,7 @@ pub const V1_EFFECT_KINDS: &[&str] = &[
     "eq",
     "hsl",
     "lut",
+    "relight",
     "reverb",
     "time_stretch",
     "transition.crossfade",
@@ -215,6 +242,12 @@ const BUNDLED_EFFECTS: &[(&str, &str, &str, &str)] = &[
         "video",
         "3D LUT color grading.",
         "EffectParams.lut@1",
+    ),
+    (
+        "relight",
+        "video",
+        "Parametric directional / ambient / creative-preset relight (screen-space; identity = zero intensity no-op).",
+        "EffectParams.relight@1",
     ),
     (
         "reverb",

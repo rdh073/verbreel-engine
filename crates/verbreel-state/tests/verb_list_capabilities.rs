@@ -119,7 +119,7 @@ fn effects_count_matches_bundled_effects() {
 
     let bundled = verbreel_state::verbs::effect_list_available::bundled_effects().len();
     assert_eq!(data.effects.len(), bundled);
-    assert_eq!(data.effects.len(), 16);
+    assert_eq!(data.effects.len(), 17);
 }
 
 #[test]
