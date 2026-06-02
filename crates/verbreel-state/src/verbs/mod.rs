@@ -92,6 +92,7 @@ pub mod caption_translate;
 pub use caption_burn_off::*;
 pub mod clip_add;
 pub mod clip_auto_color;
+pub mod clip_auto_reframe;
 pub mod clip_color_match;
 pub mod clip_delete;
 pub mod clip_duplicate;
@@ -472,6 +473,11 @@ pub fn default_registry() -> VerbRegistry {
         .register(Arc::new(clip_auto_color::ClipAutoColorVerb))
         .expect(
             "ClipAutoColorVerb registration in default_registry() cannot collide with prior verbs",
+        );
+    registry
+        .register(Arc::new(clip_auto_reframe::ClipAutoReframeVerb))
+        .expect(
+            "ClipAutoReframeVerb registration in default_registry() cannot collide with prior verbs",
         );
     registry
         .register(Arc::new(clip_color_match::ClipColorMatchVerb))
@@ -1047,6 +1053,7 @@ pub fn default_fixtures() -> Vec<RecordedEvent> {
         clip_trim_fixture(),
         clip_add_fixture(),
         clip_auto_color_fixture(),
+        clip_auto_reframe_fixture(),
         clip_color_match_fixture(),
         clip_delete_fixture(),
         clip_duplicate_fixture(),
@@ -3681,6 +3688,112 @@ fn clip_auto_color_fixture() -> RecordedEvent {
 
     RecordedEvent {
         verb: "clip.auto_color".to_string(),
+        args: serde_json::to_value(&args).expect("args serialize"),
+        patch: patch_value,
+        warnings,
+        post_state,
+        expected_data,
+    }
+}
+
+/// Build the canonical `clip.auto_reframe` fixture used by
+/// [`default_fixtures`].
+///
+/// Reframes a 16:9 video clip to 9:16 against a straight-line subject
+/// trace, exercising the keyframe-emitting, warning-derived-envelope
+/// reconstruct path.
+fn clip_auto_reframe_fixture() -> RecordedEvent {
+    let project_id = DEFAULT_FIXTURE_PROJECT_ID
+        .parse()
+        .expect("DEFAULT_FIXTURE_PROJECT_ID is a hard-coded valid v7");
+
+    let mut prior = synthetic_empty_project(project_id);
+
+    let clip_id = "01900000-0000-7000-8000-0000000bb481";
+    let track_raw = json!({
+        "id": "01900000-0000-7000-8000-0000000aa481",
+        "kind": "video",
+        "name": "Video R",
+        "locked": false,
+        "clips": [{
+            "id": clip_id,
+            "name": "Clip R",
+            "asset_id": "01900000-0000-7000-8000-0000000cc481",
+            "track_position_tk": 0,
+            "source_in_tk": 0,
+            "source_out_tk": 480_000,
+            "locked": false,
+        }],
+    });
+    let track: crate::track::Track =
+        serde_json::from_value(track_raw).expect("manual track fixture parses");
+    prior.tracks.push(track);
+    prior.duration_tk = Tick::new(480_000);
+    prior.assets.push(
+        serde_json::from_value(json!({
+            "id": "01900000-0000-7000-8000-0000000cc481",
+            "kind": "video",
+            "hash": "9f1c0b8a7d6e5f4c3b2a190817263544536271809a0b1c2d3e4f50617283940a",
+            "path": "assets/9f/9f1c0b8a7d6e5f4c3b2a190817263544536271809a0b1c2d3e4f50617283940a.mp4",
+            "original_filename": "video-auto-reframe.mp4",
+            "imported_at": "2026-06-02T00:00:00Z",
+            "metadata": {
+                "duration_tk": 480_000,
+                "width": 1920,
+                "height": 1080,
+                "fps_num": 30,
+                "fps_den": 1,
+                "video_codec": "h264",
+                "container": "mp4",
+                "fingerprint": {
+                    "mtime_ms": 1_700_000_000_000_i64,
+                    "size_bytes": 2048,
+                }
+            }
+        }))
+        .expect("clip.auto_reframe fixture asset parses"),
+    );
+
+    let args = clip_auto_reframe::ClipAutoReframeArgs {
+        project_id,
+        target: format!("clip:{clip_id}"),
+        target_aspect: clip_auto_reframe::TargetAspect { num: 9, den: 16 },
+        subject_trace: vec![
+            clip_auto_reframe::SubjectSample {
+                time_tk: 0,
+                cx: 960.0,
+                cy: 540.0,
+            },
+            clip_auto_reframe::SubjectSample {
+                time_tk: 240_000,
+                cx: 1100.0,
+                cy: 540.0,
+            },
+            clip_auto_reframe::SubjectSample {
+                time_tk: 480_000,
+                cx: 1240.0,
+                cy: 540.0,
+            },
+        ],
+        smoothing: clip_auto_reframe::ReframeSmoothing::default(),
+    };
+
+    let (patch_value, warnings, _data) = clip_auto_reframe::compute_patch(&prior, &args)
+        .expect("default fixture must produce a valid clip.auto_reframe patch");
+    let patch: json_patch::Patch = serde_json::from_value(patch_value.clone())
+        .expect("clip.auto_reframe fixture patch is valid RFC 6902");
+    let post_state = prior
+        .apply(&patch)
+        .expect("clip.auto_reframe fixture patch must apply cleanly");
+
+    let expected_data = serde_json::to_value(
+        clip_auto_reframe::data_envelope_from_warnings(&warnings)
+            .expect("clip.auto_reframe fixture expected_data"),
+    )
+    .expect("clip.auto_reframe fixture expected_data serializes to Value");
+
+    RecordedEvent {
+        verb: "clip.auto_reframe".to_string(),
         args: serde_json::to_value(&args).expect("args serialize"),
         patch: patch_value,
         warnings,
@@ -7959,6 +8072,7 @@ mod tests {
                 "caption.translate",
                 "clip.add",
                 "clip.auto_color",
+                "clip.auto_reframe",
                 "clip.color_match",
                 "clip.delete",
                 "clip.duplicate",
