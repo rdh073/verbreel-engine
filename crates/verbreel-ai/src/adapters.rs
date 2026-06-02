@@ -293,7 +293,11 @@ pub fn run_segment(
 /// `asset.import` path (the CAS write stays in `verbreel-state`; this adapter
 /// only returns the handle). `seed` is the explicit reproducibility knob —
 /// same prompt + params + seed → identical image bytes → identical CAS hash
-/// (the engine's existing `seed` rule for particle/glitch effects).
+/// (the engine's existing `seed` rule for particle/glitch effects). The
+/// adapter enforces the echo at this seam: the returned `seed` / `width` /
+/// `height` must equal the request, else a misbehaving sidecar surfaces as a
+/// loud [`AiError::SidecarProtocol`] rather than a mismatched handle frozen
+/// into CAS under the wrong identity.
 ///
 /// The `ort` arm is a loud, gated error path — no diffusion `ort` backbone
 /// ships, so it never fabricates an image.
@@ -335,7 +339,22 @@ pub fn run_gen_image(
             );
             let argv: Vec<&str> = args.iter().map(String::as_str).collect();
             let response = run_sidecar(program, &argv, &request)?;
-            decode_gen_image(&response.result)
+            let data = decode_gen_image(&response.result)?;
+            // No-silent-fallback at the seam: the echoed seed/dims are the
+            // reproducibility contract. A sidecar that ignored the seed (or
+            // produced off-spec dimensions) must surface loudly here, not
+            // pass a mismatched handle through to CAS-freeze under the wrong
+            // identity. Catch the misbehavior at the adapter boundary.
+            if data.seed != seed || data.width != width || data.height != height {
+                return Err(AiError::SidecarProtocol {
+                    detail: format!(
+                        "gen_image sidecar echo mismatch: requested seed={seed} {width}x{height}, \
+                         got seed={} {}x{}",
+                        data.seed, data.width, data.height
+                    ),
+                });
+            }
+            Ok(data)
         }
     }
 }
@@ -831,6 +850,73 @@ print(json.dumps({"op": "gen_image", "result": {
         let second = run_gen_image(&key, &backend, "a misty forest at dawn", 7, 512, 512).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.seed, 7);
+    }
+
+    #[test]
+    fn gen_image_seed_echo_mismatch_surfaces_protocol_error() {
+        // No-silent-fallback: a sidecar that ignores the requested seed (or
+        // returns off-spec dims) must surface a loud SidecarProtocol at the
+        // adapter seam, not pass a mismatched handle through to CAS-freeze
+        // under the wrong reproducibility identity.
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("bad_seed_gen_image.py");
+        let mut f = std::fs::File::create(&script).unwrap();
+        // Echoes a constant seed=999 regardless of the request.
+        f.write_all(
+            br#"import sys, json
+req = json.loads(sys.stdin.readline())
+print(json.dumps({"op": "gen_image", "result": {
+    "image_path": "/tmp/vr-gen/x.png",
+    "width": req["params"]["width"],
+    "height": req["params"]["height"],
+    "seed": 999
+}}))
+"#,
+        )
+        .unwrap();
+
+        let key = cache_key("gen_image");
+        let backend = Backend::Sidecar {
+            program: "/usr/bin/python3".to_string(),
+            args: vec![script.to_str().unwrap().to_string()],
+        };
+        let err = run_gen_image(&key, &backend, "p", 7, 64, 64).unwrap_err();
+        assert!(
+            matches!(err, AiError::SidecarProtocol { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn gen_image_dimension_echo_mismatch_surfaces_protocol_error() {
+        // Same seam guard for off-spec dimensions: the sidecar honors the
+        // seed but returns wrong width/height.
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("bad_dims_gen_image.py");
+        let mut f = std::fs::File::create(&script).unwrap();
+        f.write_all(
+            br#"import sys, json
+req = json.loads(sys.stdin.readline())
+print(json.dumps({"op": "gen_image", "result": {
+    "image_path": "/tmp/vr-gen/x.png",
+    "width": 128,
+    "height": 128,
+    "seed": req["params"]["seed"]
+}}))
+"#,
+        )
+        .unwrap();
+
+        let key = cache_key("gen_image");
+        let backend = Backend::Sidecar {
+            program: "/usr/bin/python3".to_string(),
+            args: vec![script.to_str().unwrap().to_string()],
+        };
+        let err = run_gen_image(&key, &backend, "p", 7, 64, 64).unwrap_err();
+        assert!(
+            matches!(err, AiError::SidecarProtocol { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
