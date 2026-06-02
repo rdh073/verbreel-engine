@@ -939,3 +939,146 @@ fn verb_routes_through_mutate_via_verb() {
     assert_eq!(warnings.len(), 1);
     assert_eq!(warnings[0]["code"], W_CLIP_ADD_ENVELOPE_CODE);
 }
+
+/// Build the same minimal single-video-track ISO-BMFF fixture the
+/// `asset.import` tests use, kept local so this test compiles standalone.
+/// 640x360, timescale 24000, duration 48000 (2.0s) → duration_tk 480000.
+#[cfg(feature = "native")]
+fn minimal_mp4_fixture() -> Vec<u8> {
+    fn iso_box(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let size = u32::try_from(8 + body.len()).expect("box fits u32");
+        let mut out = size.to_be_bytes().to_vec();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(body);
+        out
+    }
+    let ftyp = iso_box(b"ftyp", b"isom\x00\x00\x00\x00isom");
+
+    let mut hdlr_body = vec![0u8; 8];
+    hdlr_body.extend_from_slice(b"vide");
+    hdlr_body.extend_from_slice(&[0u8; 12]);
+    hdlr_body.push(0);
+    let hdlr = iso_box(b"hdlr", &hdlr_body);
+
+    let mut mdhd_body = vec![0u8; 4];
+    mdhd_body.extend_from_slice(&0u32.to_be_bytes());
+    mdhd_body.extend_from_slice(&0u32.to_be_bytes());
+    mdhd_body.extend_from_slice(&24_000u32.to_be_bytes());
+    mdhd_body.extend_from_slice(&48_000u32.to_be_bytes());
+    mdhd_body.extend_from_slice(&[0u8; 4]);
+    let mdhd = iso_box(b"mdhd", &mdhd_body);
+
+    let mut avc1_body = vec![0u8; 6 + 2 + 16];
+    avc1_body.extend_from_slice(&640u16.to_be_bytes());
+    avc1_body.extend_from_slice(&360u16.to_be_bytes());
+    let avc1 = iso_box(b"avc1", &avc1_body);
+    let mut stsd_body = vec![0u8; 4];
+    stsd_body.extend_from_slice(&1u32.to_be_bytes());
+    stsd_body.extend_from_slice(&avc1);
+    let stsd = iso_box(b"stsd", &stsd_body);
+
+    let mut stsz_body = vec![0u8; 4];
+    stsz_body.extend_from_slice(&0u32.to_be_bytes());
+    stsz_body.extend_from_slice(&48u32.to_be_bytes());
+    let stsz = iso_box(b"stsz", &stsz_body);
+
+    let mut stbl_body = Vec::new();
+    stbl_body.extend_from_slice(&stsd);
+    stbl_body.extend_from_slice(&stsz);
+    let stbl = iso_box(b"stbl", &stbl_body);
+    let minf = iso_box(b"minf", &stbl);
+
+    let mut mdia_body = Vec::new();
+    mdia_body.extend_from_slice(&hdlr);
+    mdia_body.extend_from_slice(&mdhd);
+    mdia_body.extend_from_slice(&minf);
+    let mdia = iso_box(b"mdia", &mdia_body);
+    let trak = iso_box(b"trak", &mdia);
+    let moov = iso_box(b"moov", &trak);
+
+    let mut out = ftyp;
+    out.extend_from_slice(&moov);
+    out
+}
+
+/// Integration regression: importing an `.mp4` then `clip.add`-ing it
+/// onto a video track succeeds. Before the classifier fix the mp4
+/// imported as a `SubtitleAsset` and `clip.add` rejected it with
+/// `E_ASSET_KIND_UNROUTABLE` (§5.1). The clip's `source_out_tk` defaults
+/// to the asset's probed `duration_tk`.
+#[cfg(feature = "native")]
+#[test]
+fn import_mp4_then_clip_add_succeeds() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().expect("tempdir");
+    let source = dir.path().join("clip.mp4");
+    std::fs::write(&source, minimal_mp4_fixture()).expect("write mp4 fixture");
+
+    let prior = project_with(
+        vec![video_track(TRACK_VIDEO_A, "Video 1", false, vec![])],
+        vec![],
+        0,
+    );
+    let mut store = ProjectStore::create_with_registry(
+        dir.path(),
+        prior,
+        &default_registry(),
+        &default_fixtures(),
+    )
+    .expect("create_with_registry clears gate");
+
+    // Step 1: import the mp4 — must classify as video.
+    let import_outcome = store
+        .mutate_via_verb(
+            "asset.import",
+            json!({"project_id": FIXTURE_PROJECT_ID, "paths": [source.to_string_lossy()]}),
+            None,
+        )
+        .expect("asset.import succeeds");
+    let MutateOutcome::Applied { data, .. } = import_outcome else {
+        panic!("expected Applied outcome for mp4 import");
+    };
+    let import_data: verbreel_state::AssetImportData =
+        serde_json::from_value(data).expect("asset.import data");
+    let imported = import_data.assets[0].as_object().expect("asset object");
+    assert_eq!(
+        imported.get("kind").and_then(Value::as_str),
+        Some("video"),
+        "imported mp4 must be a video asset for clip.add to route it"
+    );
+    let asset_id = imported
+        .get("id")
+        .and_then(Value::as_str)
+        .expect("imported asset id")
+        .to_string();
+    let asset_duration_tk = imported
+        .get("metadata")
+        .and_then(|m| m.get("duration_tk"))
+        .and_then(Value::as_i64)
+        .expect("video asset duration_tk");
+
+    // Step 2: clip.add the imported video onto the video track.
+    let clip_outcome = store
+        .mutate_via_verb(
+            "clip.add",
+            json!({
+                "project_id": FIXTURE_PROJECT_ID,
+                "asset_id": asset_id,
+                "track": TRACK_VIDEO_A,
+                "track_position_tk": 0,
+            }),
+            None,
+        )
+        .expect("clip.add against imported mp4 must succeed (no E_ASSET_KIND_UNROUTABLE)");
+    let MutateOutcome::Applied { data, .. } = clip_outcome else {
+        panic!("clip.add against imported mp4 must return Applied, got an error/no-op");
+    };
+    let clip_data: ClipAddData = serde_json::from_value(data).expect("clip.add data");
+    assert_eq!(clip_data.track_id.to_string(), TRACK_VIDEO_A);
+
+    let clip = &store.project().tracks[0].clips[0];
+    assert_eq!(clip.id, clip_data.clip_id);
+    // source_out_tk defaults to the asset's probed duration.
+    assert_eq!(clip.source_out_tk.get(), asset_duration_tk);
+}
