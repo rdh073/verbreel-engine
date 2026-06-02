@@ -35,6 +35,7 @@ engine runs this ONCE and freezes the traces in the cache keyed by
 """
 
 import json
+import math
 import sys
 
 # Inner-lip landmark indices for MAR (MediaPipe Face Mesh, refined lips).
@@ -93,8 +94,13 @@ def _bbox(landmarks, width, height):
     """Pixel-integer (x, y, w, h) bounding box over all landmarks."""
     xs = [lm.x * width for lm in landmarks]
     ys = [lm.y * height for lm in landmarks]
-    x0, y0 = int(min(xs)), int(min(ys))
-    x1, y1 = int(max(xs)), int(max(ys))
+    # MediaPipe normalized coords can fall slightly outside [0, 1] when a
+    # landmark sits just past the frame edge, so the pixel values can be
+    # negative. floor the min corner and ceil the max corner so the integer
+    # box still fully covers the landmarks; int() would truncate toward zero
+    # and pull a negative edge inward, shrinking the box (it feeds reframe).
+    x0, y0 = math.floor(min(xs)), math.floor(min(ys))
+    x1, y1 = math.ceil(max(xs)), math.ceil(max(ys))
     return (x0, y0, x1 - x0, y1 - y0)
 
 
