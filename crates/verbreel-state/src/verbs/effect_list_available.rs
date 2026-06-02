@@ -167,7 +167,8 @@ pub enum EffectListAvailableError {
 /// Static bundled effect kinds.
 ///
 /// Holds the spec's verbatim §6.5 v1.0 set plus this engine build's
-/// additive video color kinds (`curves`, `hsl`); see the module header.
+/// additive video kinds (`curves`, `hsl`, `relight`); see the module
+/// header.
 ///
 /// ## Returns
 ///
