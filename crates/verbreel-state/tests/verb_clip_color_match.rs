@@ -236,6 +236,30 @@ fn out_of_range_reference_stat_is_bad_range() {
 }
 
 #[test]
+fn out_of_range_target_stat_is_bad_range() {
+    // Mirror of the reference-side test: a bad `target_stats` value must
+    // be rejected via `validate_frame("target", …)` and labelled with the
+    // `target_stats.*` prefix — exercising the `("target", …)` arms of
+    // `qualified_field` that the reference-side test never reaches.
+    let prior = project_with_clip(false, false);
+    let a = ClipColorMatchArgs {
+        target_stats: stats(1.5, 0.5, 0.35, 0.22, 0.20, 0.16),
+        ..args(&format!("clip:{CLIP_A}"))
+    };
+    let err = compute_patch(&prior, &a).expect_err("reject");
+    assert!(
+        matches!(
+            err,
+            ClipColorMatchError::BadRange {
+                field: "target_stats.mean_r",
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
 fn default_fixtures_round_trip_through_reconstructors() {
     validate_reconstructors(&default_registry(), &default_fixtures())
         .expect("default fixtures (incl. clip.color_match) round-trip");

@@ -79,12 +79,23 @@ pub fn grade_params_map(grade: GradeParams) -> Map<String, Value> {
     params
 }
 
-/// Serialize a finite `f64` as a JSON number. The grade math never
-/// produces a non-finite value (every divisor is guarded), so the
-/// `unwrap_or` branch is unreachable in practice but keeps the function
-/// total rather than panicking.
+/// Serialize a finite `f64` as a JSON number.
+///
+/// # Panics
+///
+/// Panics if `value` is non-finite (NaN/±inf). The grade math never
+/// produces a non-finite value — every divisor is guarded
+/// (`channel_gain`, `reinhard_channel`, `ratio_or_one`, the levels
+/// `span > EPSILON` branch) and `GradeParams::rounded` leaves finite
+/// inputs finite — so this is unreachable in practice. We panic rather
+/// than zero-fill: baking a silent `0.0` into a persisted grade is
+/// exactly the fail-quiet behavior these verbs reject. A break in the
+/// finiteness invariant must surface loudly at write time.
 fn number(value: f64) -> Value {
-    serde_json::Number::from_f64(value).map_or(json!(0.0), Value::Number)
+    Value::Number(
+        serde_json::Number::from_f64(value)
+            .expect("grade params are guaranteed finite by the guarded grade math"),
+    )
 }
 
 /// Build the RFC-6902 patch that appends a freshly minted `color_correct`
