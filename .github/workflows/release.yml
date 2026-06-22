@@ -18,7 +18,7 @@ jobs:
     name: release verify
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@master
@@ -44,7 +44,7 @@ jobs:
     # FFmpeg 6.1.1 (libavcodec 60) via plain apt, satisfying `ffmpeg6`.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.92"
@@ -93,7 +93,7 @@ jobs:
         # 58), an ABI mismatch; 24.04 ships FFmpeg 6.1.1 (libavcodec 60).
         os: [ubuntu-24.04, macos-14]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.92"
@@ -161,7 +161,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Verify annotated tag
