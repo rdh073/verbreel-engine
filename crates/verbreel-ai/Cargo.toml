@@ -43,7 +43,7 @@ sha2.workspace = true
 # pin; without it `ort` lowers the requested API and a VitisAI EP path fails
 # to compile against the older `OrtApi` struct. rc.12 exposes `api-20` as its
 # highest API-version feature.
-ort = { version = "=2.0.0-rc.12", optional = true, default-features = false, features = [
+ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, features = [
     "std",
     "api-20",
     "load-dynamic",
